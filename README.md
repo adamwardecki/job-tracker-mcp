@@ -76,6 +76,17 @@ plugin/scripts/hermes-install.sh
 Restart Hermes and type `/job-tracker:setup`. Details and the differences from Claude Code are in
 [`docs/hermes.md`](docs/hermes.md).
 
+### DeepSeek Harness (experimental)
+
+From the same checkout:
+
+```bash
+node --no-warnings plugin/scripts/dsh-install.ts
+```
+
+Restart dsh and type `/job-tracker-setup` (dsh skill names use a hyphen, not a colon). Details and the
+differences from Claude Code are in [`docs/dsh.md`](docs/dsh.md).
+
 ### Just the tracker MCP server
 
 The tracker is also listed in the [MCP Registry](https://registry.modelcontextprotocol.io/) as
@@ -218,7 +229,7 @@ board gate apply everywhere.
 so the submit gate cannot classify it; the skills require ref-based clicks for submits and the auditor
 checks every applied role for captured confirmation text. Pressing Enter in a field is not gated. The board gate knows the board by its link and port, so desktop
 computer use, which sees only the screen, is not stopped from clicking on it.
-Hooks require a host that runs plugin hooks (Claude Code, Claude Desktop, Hermes); if approval notes
+Hooks require a host that runs plugin hooks (Claude Code, Claude Desktop, Hermes, DeepSeek Harness); if approval notes
 never appear, the `approve` command tells the model not to submit.
 If Node.js is missing, or the gate cannot start or times out, mail, LinkedIn and browser tools are blocked
 (`onFailure: "block"`); other MCP tools still run, and the prompt hook stays fail open so you can still ask
@@ -248,7 +259,7 @@ install at runtime. `npm run typecheck` runs `tsc` on its own; `npm run test:nod
 Node tests cover tracker logic, migrations and locking, the MCP protocol, every hook gate, the triage
 guard run against a synthetic board in headless Chrome (skipped when Chrome is not installed), the hook
 config and matcher partition, the Node.js installer scripts, the runtime instructions in setup and the
-commands, the Hermes host adapter, the `tools/list` schemas, and the shared helpers. Python tests cover
+commands, the Hermes and DeepSeek Harness host adapters and installer, the `tools/list` schemas, and the shared helpers. Python tests cover
 the native Hermes plugin wiring, including fail-closed rules and the Windows Node path.
 
 <details>

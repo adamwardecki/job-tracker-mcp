@@ -42,7 +42,7 @@ them on Ubuntu and macOS with Node 22.18 and 24.
 | `servers/tracker/src/tools.ts` | every tool's input schema (`SCHEMAS`) and handler |
 | `servers/tracker/src/tracker.ts` | domain logic; status machine (`STATUSES`, `transition`) |
 | `servers/tracker/src/db.ts` | SQLite schema and append-only `MIGRATIONS` (`PRAGMA user_version`) |
-| `hooks/` | `PreToolUse` / `UserPromptSubmit` / `Stop` gates (`hooks.json`, `gates.ts`); `hermes.ts` for Hermes |
+| `hooks/` | `PreToolUse` / `UserPromptSubmit` / `Stop` gates (`hooks.json`, `gates.ts`); `hermes.ts` for Hermes; `dsh.ts` + `dsh-hooks.json` for DeepSeek Harness |
 | `skills/`, `commands/`, `agents/` | the prompts the plugin ships |
 | `plugin.yaml`, `__init__.py` | the Hermes plugin manifest and wiring |
 | | **Repo root (not shipped):** |

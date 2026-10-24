@@ -14,5 +14,5 @@
     "allowImportingTsExtensions": true,
     "skipLibCheck": true
   },
-  "include": ["plugin/hooks/**/*.ts", "plugin/servers/tracker/src/**/*.ts", "tests/**/*.ts", "registry/**/*.ts", "dev/*.ts"]
+  "include": ["plugin/hooks/**/*.ts", "plugin/servers/tracker/src/**/*.ts", "plugin/scripts/**/*.ts", "tests/**/*.ts", "registry/**/*.ts", "dev/*.ts"]
 }
