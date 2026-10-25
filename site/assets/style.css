@@ -2452,6 +2452,7 @@ mark {
   padding: 64px 0 80px;
 }
 .docs-toc {
+  grid-column: 2;
   position: sticky;
   top: 24px;
   align-self: start;
@@ -2483,6 +2484,9 @@ mark {
   color: var(--ink);
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+.docs-content {
+  grid-column: 1;
 }
 .docs-content h1 {
   font-size: clamp(34px, 4vw, 48px);
