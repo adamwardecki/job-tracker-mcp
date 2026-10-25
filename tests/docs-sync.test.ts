@@ -69,3 +69,11 @@ test('docs page links to developer docs on GitHub', () => {
     'docs links to CONTRIBUTING on GitHub',
   );
 });
+
+test('docs page has the install steps for every host installer', () => {
+  for (const script of ['hermes-install.sh', 'dsh-install.ts']) {
+    assert.ok(readdirSync(join(REPO, 'plugin', 'scripts')).includes(script), `plugin/scripts/${script} exists`);
+    assert.ok(docs.includes(`plugin/scripts/${script}`), `docs mentions plugin/scripts/${script}`);
+  }
+  assert.ok(docs.includes('job-tracker-mcp/blob/main/docs/dsh.md'), 'docs links to the DeepSeek Harness guide');
+});
