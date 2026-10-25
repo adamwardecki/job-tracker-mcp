@@ -9,8 +9,9 @@ import { errorText } from '../servers/tracker/src/util.ts';
 import { handlers, setOutput } from './gates.ts';
 import { isBrowser, isSendTool, splitToolName } from './lib/classify.ts';
 import type { HermesPayload } from './lib/hosts/hermes.ts';
-import { appendStep, normalizeToolName, stepsPath, unwrapSkillInvocation, userText } from './lib/hosts/hermes.ts';
+import { appendStep, normalizeToolName, unwrapSkillInvocation, userText } from './lib/hosts/hermes.ts';
 import { loadSession, saveSession } from './lib/session.ts';
+import { stepsPath } from './lib/steps.ts';
 import type { HookOutput } from './lib/types.ts';
 
 const event = process.argv[2];

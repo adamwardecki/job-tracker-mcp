@@ -111,7 +111,7 @@ Show the defaults and confirm them:
 Explain that hooks enforce the second list regardless of this config. `save_config` with `section: "autonomy"`.
 
 ### 10. Schedule (`schedule`)
-- Ask when the computer is usually on with Claude open. Create a weekday **local** scheduled task inside that window that runs `/job-tracker:sweep`, using the host's local scheduling (a Claude Desktop or Claude Code local scheduled task, or a Hermes cron job created with the `cronjob` tool with skill `job-tracker:sweep` attached and the prompt "Run today's job-hunt sweep."). Do not schedule it in the cloud: it cannot reach the browser or the local tracker. If no scheduling tool is available, give the user the exact steps and the prompt text.
+- Ask when the computer is usually on with Claude open. Create a weekday **local** scheduled task inside that window that runs `/job-tracker:sweep`, using the host's local scheduling (a Claude Desktop or Claude Code local scheduled task, or a Hermes cron job created with the `cronjob` tool with skill `job-tracker:sweep` attached and the prompt "Run today's job-hunt sweep.", or on DeepSeek Harness a launchd or cron job that runs `dsh headless "/job-tracker:sweep"`). Do not schedule it in the cloud: it cannot reach the browser or the local tracker. If no scheduling tool is available, give the user the exact steps and the prompt text.
 - Say plainly that the task only runs while the machine is awake and the app is open, and save the window as `desktop_usually_on`.
 - Ask how the daily report should arrive: as the run's output (`artifact`), a file in the local folder (`file`, desktop runs only), or a Gmail draft to themselves (`email_draft`). Save it as `report_delivery`.
 - `save_config` with `section: "schedule"`.

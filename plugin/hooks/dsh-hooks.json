@@ -1,0 +1,31 @@
+{
+  "description": "job-tracker gates for DeepSeek Harness, run by @deepseek-ai/dsh-hooks-claude-code (see docs/dsh.md). Same matchers as hooks.json. The bridge lets a hook that fails or times out pass, so the browser and mail group turns any failure into exit 2, which blocks.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__.*(?:[Bb]rowser|[Cc]hrome|[Pp]laywright|[Pp]uppeteer|[Cc]omputer|[Mm]ail|[Oo]utlook|[Ll]inked[Ii]n).*$",
+        "hooks": [{ "type": "command", "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/dsh.ts\" pre-tool || { echo '[job-hunt] The gate could not run, so this browser or mail action is blocked. Tell the user.' >&2; exit 2; }", "timeout": 30 }]
+      },
+      {
+        "matcher": "^mcp__(?!.*(?:[Bb]rowser|[Cc]hrome|[Pp]laywright|[Pp]uppeteer|[Cc]omputer|[Mm]ail|[Oo]utlook|[Ll]inked[Ii]n)).*$",
+        "hooks": [{ "type": "command", "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/dsh.ts\" pre-tool", "timeout": 30 }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__.*$",
+        "hooks": [{ "type": "command", "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/dsh.ts\" post-tool", "timeout": 15 }]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{ "type": "command", "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/dsh.ts\" prompt", "timeout": 15 }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/dsh.ts\" stop", "timeout": 15 }]
+      }
+    ]
+  }
+}

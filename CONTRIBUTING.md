@@ -44,8 +44,8 @@ Google Chrome and are skipped without it.
   reproducible) against the committed hash; after the merge it creates the `v<version>` GitHub release with
   the bundle and publishes `server.json` to the registry over GitHub OIDC. A failed run can be re-run; steps
   already done are skipped. `tests/registry.test.ts` runs the bundle the way Claude Desktop does.
-- **Hermes.** Changes to hooks or skill wiring should keep both hosts working. See
-  [`docs/hermes.md`](docs/hermes.md).
+- **Hermes and DeepSeek Harness.** Changes to hooks or skill wiring should keep every host working. See
+  [`docs/hermes.md`](docs/hermes.md) and [`docs/dsh.md`](docs/dsh.md).
 
 ## Source adapters
 

@@ -57,6 +57,15 @@ plugin/scripts/hermes-install.sh
 Restart Hermes and type `/job-tracker:setup`. Details:
 [docs/hermes.md](docs/hermes.md).
 
+DeepSeek Harness (experimental), from the same checkout:
+
+```bash
+node --no-warnings plugin/scripts/dsh-install.ts
+```
+
+Restart dsh and type `/job-tracker-setup` (dsh skill names use a hyphen, not a colon). Details:
+[docs/dsh.md](docs/dsh.md).
+
 The tracker is also in the [MCP Registry](https://registry.modelcontextprotocol.io/) as
 `io.github.adamwardecki/job-tracker`, packaged as an MCPB bundle attached to each
 [GitHub release](https://github.com/adamwardecki/job-tracker-mcp/releases).

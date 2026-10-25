@@ -46,7 +46,8 @@ test('Hermes browser actions and @refs are understood', () => {
 
 // --- Steps log ---
 
-import { appendStep, stepsPath, unwrapSkillInvocation, userText } from '../plugin/hooks/lib/hosts/hermes.ts';
+import { appendStep, unwrapSkillInvocation, userText } from '../plugin/hooks/lib/hosts/hermes.ts';
+import { stepsPath } from '../plugin/hooks/lib/steps.ts';
 import { currentUrl, readTranscript, toolSteps } from '../plugin/hooks/lib/transcript.ts';
 
 const FIXTURE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'hermes-skill-invocation.txt'), 'utf8');
