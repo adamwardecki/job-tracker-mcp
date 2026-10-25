@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { beforeEach, test } from 'node:test';
@@ -212,4 +212,60 @@ test('the marketplace ships plugin/ only, with no tests or dev files in it', () 
   const shipped = readdirSync(PLUGIN, { recursive: true, encoding: 'utf8' });
   const stray = shipped.filter((f) => /(^|\/)(test|tests|fixtures|dev|node_modules)(\/|$)|\.test\.ts$|(^|\/)test_[^/]*\.py$/.test(f));
   assert.deepEqual(stray, []);
+});
+
+// A stand-in for the hermes CLI: `mcp add` asks "Enable all N tools? [Y/n/select]" on stdin, saves the server on
+// Y or Enter, and cancels on anything else or on end of input, exiting 0 either way (as hermes 0.22 does).
+// `config get` prints the whole config, which is enough for the installer's check.
+function fakeHermes(answerEverything = true): { bin: string; home: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'jh-hermes-install-'));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  const save = answerEverything
+    ? 'for last; do :; done; case "$answer" in ""|y|Y) printf "mcp_servers:\\n  job_hunt_tracker:\\n    args:\\n      - %s\\n" "$last" >> "$HERMES_HOME/config.yaml"; exit 0;; esac'
+    : '';
+  writeFileSync(
+    join(bin, 'hermes'),
+    `#!/usr/bin/env bash
+if [ "$1 $2" = "mcp add" ]; then
+  printf 'Enable all 33 tools? [Y/n/select]: '
+  if IFS= read -r answer; then
+    ${save}
+    :
+  fi
+  echo 'Cancelled.'
+fi
+if [ "$1 $2" = "config get" ]; then cat "$HERMES_HOME/config.yaml" 2>/dev/null; fi
+exit 0
+`,
+  );
+  chmodSync(join(bin, 'hermes'), 0o755);
+  return { bin, home: join(dir, 'hermes-home') };
+}
+
+function runHermesInstall(fake: { bin: string; home: string }) {
+  return spawnSync('bash', [join(PLUGIN, 'scripts', 'hermes-install.sh')], {
+    encoding: 'utf8',
+    input: '',
+    env: { ...process.env, PATH: `${fake.bin}:${process.env.PATH}`, HERMES_HOME: fake.home },
+  });
+}
+
+test('hermes-install.sh registers the tracker without anyone answering the tool prompt', () => {
+  // `hermes mcp add` asks whether to enable the tools and cancels on end of input, so an installer run from a
+  // script, or by an agent, used to print "Done" with no tracker registered.
+  const fake = fakeHermes();
+  const r = runHermesInstall(fake);
+  assert.equal(r.status, 0, r.stderr);
+  const config = readFileSync(join(fake.home, 'config.yaml'), 'utf8');
+  assert.ok(config.includes(`- ${join(PLUGIN, 'servers', 'tracker', 'src', 'index.ts')}`), config);
+  assert.match(r.stdout, /Done\. Restart Hermes/);
+});
+
+test('hermes-install.sh fails, without saying Done, when the tracker did not get registered', () => {
+  const fake = fakeHermes(false);
+  const r = runHermesInstall(fake);
+  assert.notEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /Done\./);
+  assert.match(r.stderr, /job_hunt_tracker/);
 });
