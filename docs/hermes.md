@@ -11,9 +11,11 @@ Restart Hermes, then run `/job-tracker:setup`.
 **Installed before the plugin moved into `plugin/`?** After `git pull`, run `plugin/scripts/hermes-install.sh`
 again. It repoints the Hermes plugin link and the tracker MCP server at `plugin/`.
 
-To enable the 32 tracker tools when the `hermes mcp add` prompt asks, type `Y`.
+The installer answers `Y` when `hermes mcp add` asks to enable the tracker tools, then checks that Hermes saved
+the `job_hunt_tracker` server. If it did not, the installer exits with an error and prints the command to run
+by hand.
 
-**Uninstall:** `hermes plugins disable job-hunt && hermes mcp remove job_hunt_tracker && rm ~/.hermes/plugins/job-hunt`
+**Uninstall:** `hermes plugins disable job-tracker && hermes mcp remove job_hunt_tracker && rm ~/.hermes/plugins/job-tracker`
 
 ## How it maps
 

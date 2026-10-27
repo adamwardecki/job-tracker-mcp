@@ -17,6 +17,12 @@ for old in job-hunt j-hunt; do if [ -L "$HERMES_DIR/plugins/$old" ]; then rm "$H
 ln -sfn "$ROOT" "$HERMES_DIR/plugins/job-tracker"
 hermes plugins enable job-tracker
 
-hermes mcp add job_hunt_tracker --command "$NODE" --args --no-warnings "$ROOT/servers/tracker/src/index.ts"
+TRACKER="$ROOT/servers/tracker/src/index.ts"
+# `hermes mcp add` asks "Enable all N tools? [Y/n/select]" and cancels (exit 0) on end of input, so answer Y:
+# the skills call every tracker tool. Then check the config, since a cancel still exits 0.
+printf 'Y\n' | hermes mcp add job_hunt_tracker --command "$NODE" --args --no-warnings "$TRACKER"
+hermes config get mcp_servers.job_hunt_tracker.args 2>/dev/null | grep -qF -- "$TRACKER" \
+  || { echo "hermes mcp add did not save the job_hunt_tracker server; run it again by hand and answer Y:" >&2
+       echo "  hermes mcp add job_hunt_tracker --command \"$NODE\" --args --no-warnings \"$TRACKER\"" >&2; exit 1; }
 
 echo "Done. Restart Hermes, then run /job-tracker:setup"
