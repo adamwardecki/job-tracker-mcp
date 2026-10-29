@@ -240,6 +240,12 @@ test('AC8: board deletes need a fresh, passing guard and no stray clicks since',
   const escaped: Call = [`${CHROME}javascript_tool`, { text: 'guard' }, JSON.stringify({ result: 'JOBHUNT_TRIAGE_GUARD {"ok":true,"problems":[]} JOBHUNT_END' })];
   await del(transcript([board, tree, escaped]));
   assert.equal(denied(), undefined, 'escaped guard output');
+
+  // Escaped backslashes in a failing guard come back once, not doubled (CodeQL js/double-escaping).
+  outputs = [];
+  const escapedBad: Call = [`${CHROME}javascript_tool`, { text: 'guard' }, JSON.stringify({ result: `JOBHUNT_TRIAGE_GUARD ${JSON.stringify({ ok: false, problems: ['card C:\\dir is checked'] })} JOBHUNT_END` })];
+  await del(transcript([board, tree, escapedBad]));
+  assert.match(reason(), /the last triage guard failed: card C:\\dir is checked\./);
 });
 
 test('"Remove" inside an application form is not a board delete', async () => {

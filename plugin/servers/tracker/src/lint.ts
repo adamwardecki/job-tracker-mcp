@@ -51,7 +51,7 @@ const ERROR_PATTERNS: Pattern[] = [
 
 const WARN_PATTERNS: Pattern[] = [
   { kind: 'stock_phrase', re: /\b(?:delve|tapestry|testament to|thrilled|passionate about|in today's fast-paced|leverag(?:e|ing) my|synerg\w*|i am excited to apply|i'm excited to apply|dynamic team|perfect fit|resonates? (?:deeply )?with me|look no further)\b/gi, hint: 'Stock phrase. Use a plain, specific verb.' },
-  { kind: 'bare_url_signature', re: /\n\s*(?:https?:\/\/\S+\s*){1,}$/gi, hint: 'Signature should be the name only, no bare URLs.' },
+  { kind: 'bare_url_signature', re: /\n\s*https?:\/\/\S+(?:\s+https?:\/\/\S+)*\s*$/gi, hint: 'Signature should be the name only, no bare URLs.' },
 ];
 
 export function wordCount(text: string | null | undefined): number {
