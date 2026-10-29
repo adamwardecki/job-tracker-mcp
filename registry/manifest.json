@@ -3,7 +3,7 @@
   "name": "job-tracker",
   "display_name": "Job Tracker",
   "version": "0.3.3",
-  "description": "Local tracker for a low-volume job search: companies, roles, a status machine with evidence, rules, interviews and a daily report.",
+  "description": "Local tracker for a job search: companies, roles, a status machine with evidence, rules, interviews and a daily report.",
   "long_description": "The tracker MCP server from the Job Tracker plugin, on its own. It keeps one SQLite database on your machine and is the single source of truth for companies, roles, events, rules and config. Roles move only through a status machine (found, verified, scored, queued, applied, interviewing, offer; dropped; closed), and every move needs a reason; drops need a verbatim employer quote or a rule. It dedupes leads against everything you have touched, checks pay floors, lints outbound prose and renders a short daily report. It has no network listener and sends nothing. The full plugin (sourcing, scoring and apply skills, plus the safety hooks) is at https://github.com/adamwardecki/job-tracker-mcp.",
   "author": { "name": "Adam Wardecki", "url": "https://github.com/adamwardecki" },
   "repository": { "type": "git", "url": "https://github.com/adamwardecki/job-tracker-mcp" },

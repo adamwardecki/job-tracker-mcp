@@ -1,6 +1,6 @@
 {
   "name": "job-tracker-mcp",
-  "description": "A disciplined, low-volume job search plugin with a tracker, hard gates and a daily report.",
+  "description": "A disciplined job search plugin with a tracker, hard gates and a daily report.",
   "owner": {
     "name": "Adam Wardecki"
   },
@@ -8,7 +8,7 @@
     {
       "name": "job-tracker",
       "source": "./plugin",
-      "description": "Low-volume, high-precision job search with a tracker, hard gates and a daily report."
+      "description": "High-precision job search with a tracker, hard gates and a daily report."
     }
   ],
   "renames": {

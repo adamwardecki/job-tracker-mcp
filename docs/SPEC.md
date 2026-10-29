@@ -10,7 +10,7 @@ Source: distilled from about five weeks of running this workflow by hand in Clau
 
 ## 1. Goal
 
-A Claude plugin that runs a disciplined, low-volume job search for one person:
+A Claude plugin that runs a disciplined job search for one person:
 
 1. Finds new roles that fit the user's hard filters, every weekday, unattended.
 2. Verifies each role against the **employer's own posting** before scoring it.

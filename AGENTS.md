@@ -3,7 +3,7 @@
 Instructions for coding agents working on this repo. Humans: see [CONTRIBUTING.md](CONTRIBUTING.md) and
 [README.md](README.md).
 
-This repo is a Claude Code (and Hermes Agent) plugin for a low-volume job search: a hand-rolled MCP server
+This repo is a Claude Code (and Hermes Agent) plugin for a job search: a hand-rolled MCP server
 over stdio backed by `node:sqlite` (`plugin/servers/tracker/`), safety hooks (`plugin/hooks/`), and markdown
 skills, commands and subagents. Node runs the TypeScript directly. There is no build step and no runtime npm
 dependency. Everything the plugin ships lives in `plugin/` (the marketplace's `source`); tests, docs and dev
@@ -88,7 +88,7 @@ In practice:
 
 ## Hooks and safety gates
 
-The hooks enforce the promises in [README: What it will never do](README.md#what-it-will-never-do).
+The hooks enforce the promises in [README: What it won't do](README.md#what-it-wont-do).
 
 - Never weaken a gate (sending, submitting without approval, consent boxes, personal-data fields, guarded
   deletes, draft read-back). If a change needs one relaxed, stop and ask.

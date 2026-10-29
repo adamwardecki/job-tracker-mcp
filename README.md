@@ -1,6 +1,6 @@
 # Job Tracker
 
-A Claude Code (and Hermes Agent) plugin that runs a disciplined, low-volume job search for one person.
+A Claude Code (and Hermes Agent) plugin that runs a disciplined job search for one person.
 Every weekday it finds roles that fit your hard filters, verifies each one on the employer's own posting,
 dedupes against everything you have touched, and prepares tailored applications. It submits only through
 the employer's official apply flow, and only after you approve. It tracks replies and interviews and
@@ -12,11 +12,10 @@ Website: [jobtrackermcp.com](https://jobtrackermcp.com/)
 
 Setup and usage docs: [jobtrackermcp.com/docs.html](https://jobtrackermcp.com/docs.html)
 
-> **Status: early (v0.1).** It grew out of one person's real job search and is used daily by that one
-> person. Expect rough edges, and expect the source adapters to break when job sites change. Issues and
-> pull requests are welcome.
+> **Status: early, and in active development.** Expect rough edges, and expect the source adapters to
+> break when job sites change. Issues and pull requests are welcome.
 
-## What it will never do
+## What it won't do
 
 - Send email or LinkedIn messages. It writes drafts only, and a hook blocks every send tool.
 - Submit an application without your `/job-tracker:approve <role_id>` in the same session.
