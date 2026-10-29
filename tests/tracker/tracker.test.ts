@@ -189,6 +189,17 @@ test('lint reports a gap once when several gap patterns match the same words', (
   assert.equal(two.length, 2, 'separate gaps are still reported separately');
 });
 
+test('lint flags bare URLs in a signature without catastrophic backtracking', () => {
+  const urls = (text: string) => lintProse(text).issues.filter((i) => i.kind === 'bare_url_signature').length;
+  assert.equal(urls('Thanks,\nAda\nhttps://ada.example https://github.com/ada'), 1);
+  assert.equal(urls('Thanks,\nAda\n  https://ada.example\n'), 1);
+  assert.equal(urls('See https://ada.example for the write-up.\nThanks,\nAda'), 0);
+  // CodeQL js/redos: \S+ and the repeated group used to split "!http://" runs every possible way.
+  const started = performance.now();
+  urls(`\nhttp://${'!http://'.repeat(28)} x`);
+  assert.ok(performance.now() - started < 250, 'bare URL check backtracks');
+});
+
 test('stale queue keys off the last event, not edits to the role row', () => {
   const t = fresh();
   const { role } = t.upsertRole({ company: 'Acme', title: 'Eng', source: 'x', url: 'https://jobs.ashbyhq.com/acme/1' });

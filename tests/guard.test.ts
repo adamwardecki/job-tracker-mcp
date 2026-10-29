@@ -62,7 +62,8 @@ async function runGuard(input: Record<string, unknown>, check: [string, string][
   });
   const m = dom.match(/<pre id="out">JOBHUNT_TRIAGE_GUARD (\{.*?\}) JOBHUNT_END<\/pre>/s);
   assert.ok(m, `guard produced no output: ${(dom.match(/<pre id="err">[^<]*/) || [dom.slice(-300)])[0]}`);
-  return JSON.parse(m[1]!.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"'));
+  // &amp; goes last, so a title containing "&lt;" is not decoded twice.
+  return JSON.parse(m[1]!.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
 }
 
 const base = { column: 'Saved', protectedColumns: ['Applied'], allColumns: ['Applied', 'Saved', 'Interviewing', 'Offer', 'Rejected'] };

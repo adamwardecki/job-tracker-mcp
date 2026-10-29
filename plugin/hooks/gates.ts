@@ -226,9 +226,10 @@ function deleteGate(payload: HookPayload, session: SessionState, steps: ToolStep
   }
 }
 
-// The guard prints one line of JSON; a tool may hand it back JSON-escaped.
+// The guard prints one line of JSON; a tool may hand it back JSON-escaped. Unescape \" and \\ in one pass:
+// unescaping \\ first would turn an escaped backslash before a quote into a second escape.
 function parseGuard(raw: string): GuardResult {
-  for (const attempt of [raw, raw.replace(/\\"/g, '"'), raw.replace(/\\\\/g, '\\').replace(/\\"/g, '"')]) {
+  for (const attempt of [raw, raw.replace(/\\(["\\])/g, '$1')]) {
     try {
       return JSON.parse(attempt) as GuardResult;
     } catch {}
