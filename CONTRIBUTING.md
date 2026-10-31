@@ -5,7 +5,7 @@ Thanks for helping. This is a small project, so the process is light.
 ## Before you start
 
 - For anything bigger than a fix, open an issue first so we can agree on the shape.
-- Read the hard rules in the [README](README.md#what-it-will-never-do). Changes that weaken a gate
+- Read the hard rules in the [README](README.md#what-it-wont-do). Changes that weaken a gate
   (sending, submitting without approval, consent, personal data, guarded deletes) will not be merged.
 - **Never commit personal data.** No real CVs, application logs, recruiter emails, company names from
   your own search, or tracker databases. Test fixtures use made-up companies.

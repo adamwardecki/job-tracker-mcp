@@ -1,6 +1,6 @@
 name: job-tracker
 version: "0.3.3"
-description: "A disciplined, low-volume job search: daily sourcing against hard filters, verification on the employer's own posting, dedupe, tailored applications submitted only with your approval, and one short daily report. Drafts only; never sends. Requires Node >= 22.18 and the tracker MCP server (scripts/hermes-install.sh)."
+description: "A disciplined job search: daily sourcing against hard filters, verification on the employer's own posting, dedupe, tailored applications submitted only with your approval, and one short daily report. Drafts only; never sends. Requires Node >= 22.18 and the tracker MCP server (scripts/hermes-install.sh)."
 author: "Adam Wardecki"
 provides_hooks:
   - pre_tool_call

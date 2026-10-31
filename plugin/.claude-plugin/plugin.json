@@ -2,7 +2,7 @@
   "name": "job-tracker",
   "version": "0.3.3",
   "displayName": "Job Tracker",
-  "description": "A disciplined, low-volume job search: daily sourcing against hard filters, verification on the employer's own posting, dedupe against everything you have touched, tailored applications submitted only with your approval, and one short daily report. Drafts only; never sends.",
+  "description": "A disciplined job search: daily sourcing against hard filters, verification on the employer's own posting, dedupe against everything you have touched, tailored applications submitted only with your approval, and one short daily report. Drafts only; never sends.",
   "author": { "name": "Adam Wardecki" },
   "homepage": "https://jobtrackermcp.com/",
   "privacyPolicyUrl": "https://jobtrackermcp.com/privacy.html",

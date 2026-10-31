@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Claude plugin for a disciplined, low-volume job search. Development workspace; the plugin itself is plugin/, and the development tools live in dev/.",
+  "description": "Claude plugin for a disciplined job search. Development workspace; the plugin itself is plugin/, and the development tools live in dev/.",
   "engines": {
     "node": ">=22.18"
   },
