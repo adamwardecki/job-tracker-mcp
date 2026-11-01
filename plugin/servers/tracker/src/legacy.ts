@@ -186,7 +186,9 @@ export function importLegacy(t: Tracker, args: ArgsFor<'import_legacy'>) {
   const newRole = (company: Company, title: string, url: string | null | undefined, source: string, ts: string) => {
     const r = t.run(`INSERT INTO roles(company_id, title, url, source, first_seen, updated_at, status) VALUES(?, ?, ?, ?, ?, ?, NULL)`, company.id, title || '(unspecified)', url || null, source || 'legacy', ts, ts);
     stats.roles++;
-    return t.mustRole(Number(r.lastInsertRowid));
+    const id = Number(r.lastInsertRowid);
+    if (url) t.indexRoleUrls(id, [url]);
+    return t.mustRole(id);
   };
   const event = (role: RoleRow, ts: string, mapped: Mapped, reason: string, evidence: string | null | undefined) => {
     t.insertEvent({ role_id: role.id, ts, status: mapped.status, outcome: mapped.outcome ?? null, actor: 'import', reason, evidence: evidence?.slice(0, 2000) ?? null });
@@ -292,7 +294,10 @@ export function importLegacy(t: Tracker, args: ArgsFor<'import_legacy'>) {
         // to its most recent role instead of creating a second one.
         role ||= roles.sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
         role ||= newRole(company, title, url, 'legacy queue', ts);
-        if (url && !role.url) t.run('UPDATE roles SET url = ? WHERE id = ?', url, role.id);
+        if (url && !role.url) {
+          t.run('UPDATE roles SET url = ? WHERE id = ?', url, role.id);
+          t.indexRoleUrls(role.id, [url]);
+        }
         const mapped: Mapped = prefix === 'DROPPED' ? { status: 'dropped' } : prefix === 'DONE' ? { status: 'applied' } : prefix === 'EXPIRED' ? { status: 'closed', outcome: 'role_closed' } : { status: 'queued' };
         const current = t.mustRole(role.id).status;
         if (!current || current === 'queued' || current === 'found' || (current === 'dropped' && mapped.status === 'dropped')) {

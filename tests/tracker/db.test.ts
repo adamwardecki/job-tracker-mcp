@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { openDb, SCHEMA_V1, SCHEMA_VERSION, tx } from '../../plugin/servers/tracker/src/db.ts';
 import { secureDir, secureFile } from '../../plugin/servers/tracker/src/fsperm.ts';
+import { importLegacy } from '../../plugin/servers/tracker/src/legacy.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
 
 const tempDb = () => join(mkdtempSync(join(tmpdir(), 'jh-db-')), 'tracker.db');
@@ -104,6 +105,141 @@ test('a pre-versioning database is marked v1 and migrated to the current version
   const again = openDb(path);
   assert.equal(userVersion(again), SCHEMA_VERSION);
   again.close();
+});
+
+const ROLE_ONE = 'https://jobs.ashbyhq.com/acme/one?utm_source=mail';
+
+// A database as the previous release left it: two rows for one posting, a same-title row that is another
+// posting, a role without a URL, and history on each.
+function v2Database(path: string): void {
+  const raw = new DatabaseSync(path);
+  raw.exec(SCHEMA_V1);
+  raw.exec('ALTER TABLE artifacts ADD COLUMN run_id INTEGER; PRAGMA user_version = 2;');
+  const role = raw.prepare("INSERT INTO roles(id, company_id, title, url, first_seen, updated_at, status) VALUES(?, 1, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?)");
+  raw.exec("INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z')");
+  role.run(1, 'Engineer', ROLE_ONE, 'applied');
+  role.run(2, 'Engineer', 'https://jobs.ashbyhq.com/acme/one', 'closed');
+  role.run(3, 'Engineer', 'https://jobs.ashbyhq.com/acme/two', 'found');
+  role.run(4, 'Designer', null, 'found');
+  raw.exec(`
+    INSERT INTO events(id, role_id, ts, status, actor, reason, evidence) VALUES(7, 1, '2026-01-02T00:00:00Z', 'applied', 'user', 'Sent', 'Thanks for applying');
+    INSERT INTO events(id, role_id, ts, status, outcome, actor, reason, evidence) VALUES(8, 2, '2026-01-03T00:00:00Z', 'closed', 'rejected', 'employer', 'No', 'Not moving forward');
+    INSERT INTO artifacts(id, role_id, kind, content, created_at) VALUES(5, 2, 'note', 'Prep', '2026-01-02T00:00:00Z');
+    INSERT INTO interviews(id, role_id, stage, created_at) VALUES(6, 1, 'screen', '2026-01-02T00:00:00Z');
+  `);
+  raw.close();
+}
+
+test('migrating keeps every row and indexes every URL, and duplicates become a lookup conflict', () => {
+  const path = tempDb();
+  v2Database(path);
+  // Reopening must not run the backfill twice.
+  for (let i = 0; i < 2; i++) openDb(path).close();
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.deepEqual(db.prepare('SELECT id, title, url, status FROM roles ORDER BY id').all().map((r) => ({ ...r })), [
+      { id: 1, title: 'Engineer', url: ROLE_ONE, status: 'applied' },
+      { id: 2, title: 'Engineer', url: 'https://jobs.ashbyhq.com/acme/one', status: 'closed' },
+      { id: 3, title: 'Engineer', url: 'https://jobs.ashbyhq.com/acme/two', status: 'found' },
+      { id: 4, title: 'Designer', url: null, status: 'found' },
+    ]);
+    assert.deepEqual(db.prepare('SELECT id, role_id, evidence FROM events ORDER BY id').all().map((r) => ({ ...r })), [
+      { id: 7, role_id: 1, evidence: 'Thanks for applying' },
+      { id: 8, role_id: 2, evidence: 'Not moving forward' },
+    ]);
+    assert.deepEqual({ ...db.prepare('SELECT id, role_id, content FROM artifacts').get() }, { id: 5, role_id: 2, content: 'Prep' });
+    assert.deepEqual({ ...db.prepare('SELECT id, role_id FROM interviews').get() }, { id: 6, role_id: 1 });
+    assert.deepEqual(db.prepare('SELECT role_id, url, normalized_url, evidence FROM role_urls ORDER BY role_id').all().map((r) => ({ ...r })), [
+      { role_id: 1, url: ROLE_ONE, normalized_url: 'https://jobs.ashbyhq.com/acme/one', evidence: null },
+      { role_id: 2, url: 'https://jobs.ashbyhq.com/acme/one', normalized_url: 'https://jobs.ashbyhq.com/acme/one', evidence: null },
+      { role_id: 3, url: 'https://jobs.ashbyhq.com/acme/two', normalized_url: 'https://jobs.ashbyhq.com/acme/two', evidence: null },
+    ]);
+    assert.deepEqual(db.prepare('SELECT role_id, provider, employer_key, posting_id FROM role_postings ORDER BY role_id').all().map((r) => ({ ...r })), [
+      { role_id: 1, provider: 'ashby', employer_key: 'acme', posting_id: 'one' },
+      { role_id: 2, provider: 'ashby', employer_key: 'acme', posting_id: 'one' },
+      { role_id: 3, provider: 'ashby', employer_key: 'acme', posting_id: 'two' },
+    ]);
+    const t = new Tracker(db);
+    const looked = t.findCompany({ url: 'https://jobs.ashbyhq.com/acme/one' });
+    assert.equal(looked.verdict, 'skip');
+    assert.deepEqual(looked.exact_role_ids, [1, 2]);
+    assert.throws(() => t.upsertRole({ company: 'Acme', title: 'Engineer', url: 'https://jobs.ashbyhq.com/acme/one' }), /roles 1, 2/);
+    assert.equal(t.one<{ n: number }>('SELECT COUNT(*) AS n FROM roles')?.n, 4, 'a conflict creates nothing');
+    assert.equal(t.mustRole(1).url, ROLE_ONE, 'a conflict overwrites nothing');
+    assert.deepEqual(t.findCompany({ url: 'https://jobs.ashbyhq.com/acme/two' }).exact_role_ids, [3]);
+  } finally {
+    db.close();
+  }
+});
+
+test('a historical URL the parser rejects survives as a raw alias and stays findable', () => {
+  const path = tempDb();
+  const urls = ['https://user:secret@careers.example/job', 'mailto:jobs@acme.example', 'see the careers page'];
+  const raw = new DatabaseSync(path);
+  raw.exec(SCHEMA_V1);
+  raw.exec('ALTER TABLE artifacts ADD COLUMN run_id INTEGER; PRAGMA user_version = 2;');
+  raw.exec("INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z')");
+  const role = raw.prepare("INSERT INTO roles(company_id, title, url, first_seen, updated_at, status) VALUES(1, 'Engineer', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'found')");
+  for (const url of [...urls, '', '   ', new Uint8Array([1, 2])]) role.run(url);
+  raw.close();
+  // A throw here would stop the server from starting at all.
+  const db = openDb(path);
+  try {
+    const t = new Tracker(db);
+    assert.deepEqual(db.prepare('SELECT url, normalized_url FROM role_urls ORDER BY role_id').all().map((r) => ({ ...r })), urls.map((url) => ({ url, normalized_url: url })));
+    urls.forEach((url, i) => {
+      assert.deepEqual(t.findCompany({ url }).exact_role_ids, [i + 1]);
+      assert.equal(t.findCompany({ url }).verdict, 'skip');
+    });
+    // Updating such a role by id must not re-parse the URL it already holds.
+    assert.equal(t.upsertRole({ id: 1, title: 'Engineer', stack: 'TypeScript' }).role.url, urls[0]);
+    assert.deepEqual(t.roleDetail({ role_id: 2 }).urls.map((u) => u.url), [urls[1]]);
+    assert.deepEqual(t.roleDetail({ role_id: 2 }).postings, []);
+    // The next real link replaces the stored junk without losing it.
+    const posting = 'https://jobs.ashbyhq.com/acme/one';
+    assert.equal(t.upsertRole({ id: 3, title: 'Engineer', url: posting }).role.url, posting);
+    assert.deepEqual(t.findCompany({ url: urls[2]! }).exact_role_ids, [3]); // urls has three entries
+  } finally {
+    db.close();
+  }
+});
+
+test('URLs from importLegacy on an upgraded database are indexed like any other', () => {
+  const path = tempDb();
+  v2Database(path);
+  const db = openDb(path);
+  try {
+    const t = new Tracker(db);
+    const unusual = 'https://user:secret@careers.zenith.example/1';
+    importLegacy(t, {
+      queue: [
+        { filename: 'zenith-engineer.md', content: '# Zenith · Engineer (queued 2026-10-01)\n\n- **Posting:** https://jobs.ashbyhq.com/zenith/9?utm_source=old\n' },
+        { filename: 'orbit-engineer.md', content: `# Orbit · Engineer (queued 2026-10-01)\n\n- **Posting:** ${unusual}\n` },
+      ],
+    });
+    const zenith = t.findCompany({ url: 'https://jobs.ashbyhq.com/zenith/9' });
+    assert.equal(zenith.verdict, 'skip');
+    assert.equal(zenith.exact_role_ids.length, 1);
+    assert.deepEqual(t.roleDetail({ role_id: zenith.exact_role_ids[0]! }).postings.map((p) => ({ ...p })), [{ provider: 'ashby', employer_key: 'zenith', posting_id: '9' }]); // length checked above
+    assert.equal(t.findCompany({ url: unusual }).exact_role_ids.length, 1, 'one odd line must not abort the import');
+    assert.deepEqual(t.findCompany({ url: 'https://jobs.ashbyhq.com/acme/one' }).exact_role_ids, [1, 2], 'the backfill still stands');
+  } finally {
+    db.close();
+  }
+});
+
+test('a legacy note that gives a URL-less role its URL indexes it', () => {
+  const db = openDb(':memory:');
+  try {
+    const t = new Tracker(db);
+    const { role } = t.upsertRole({ company: 'Zenith', title: 'Engineer' });
+    importLegacy(t, { queue: [{ filename: 'zenith-note.md', content: '# Zenith · Engineer\n\n- **Posting:** https://jobs.ashbyhq.com/zenith/9\n' }] });
+    assert.equal(t.mustRole(role.id).url, 'https://jobs.ashbyhq.com/zenith/9');
+    assert.deepEqual(t.findCompany({ url: 'https://jobs.ashbyhq.com/zenith/9' }).exact_role_ids, [role.id]);
+  } finally {
+    db.close();
+  }
 });
 
 test('a database from a newer plugin is refused, read-write and read-only', () => {

@@ -81,7 +81,12 @@ function identify(u: URL): PostingKey | null {
   return null;
 }
 
-export function parsePostingUrl(raw: string): { normalized_url: string; posting: PostingKey | null } {
+export interface PostingIdentity {
+  normalized_url: string;
+  posting: PostingKey | null;
+}
+
+export function parsePostingUrl(raw: string): PostingIdentity {
   let u: URL;
   try {
     u = new URL(raw.trim());
@@ -97,4 +102,14 @@ export function parsePostingUrl(raw: string): { normalized_url: string; posting:
   // A hash route (#/jobs/1, #!/jobs/1) can select the posting on a single-page careers site; other fragments are page anchors.
   if (posting || !/^#[/!]/.test(u.hash)) u.hash = '';
   return { normalized_url: u.href, posting };
+}
+
+// For URLs already stored or only being looked up. An old row may hold anything, and it must stay findable as
+// written rather than stop a migration or an import. New URLs from callers go through parsePostingUrl instead.
+export function urlIdentity(raw: string): PostingIdentity {
+  try {
+    return parsePostingUrl(raw);
+  } catch {
+    return { normalized_url: raw.trim(), posting: null };
+  }
 }

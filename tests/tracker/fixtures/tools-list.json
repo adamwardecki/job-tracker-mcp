@@ -147,7 +147,7 @@
   },
   {
     "name": "find_company",
-    "description": "Dedupe check. Fuzzy match on name, aliases, domain and ATS slug. verdict: new | seen | skip (live application, same posting, or no_cold_apply).",
+    "description": "Dedupe check. Pass url when you have one: an exact URL or ATS posting, under any company and any recorded alias, is checked first and listed in exact_role_ids. Then fuzzy match on name, aliases, domain and ATS slug. verdict: new | seen | skip (live application, same posting, or no_cold_apply).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -217,7 +217,7 @@
   },
   {
     "name": "upsert_role",
-    "description": "Create or update a role (creates the company if needed). New roles start as found. Returns the dedupe result for new roles.",
+    "description": "Create or update a role (creates the company if needed). Pass id to update a known role. Otherwise a role is matched on its exact URL or ATS posting, never on title: with no match a new role starts as found, and possible_role_ids lists same-title roles at the company to rule out before scoring. A URL matching several roles returns an error naming them and writes nothing. Returns the dedupe result for new roles.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -247,6 +247,17 @@
         "url": {
           "type": "string",
           "description": "Posting URL (employer ATS preferred)"
+        },
+        "url_aliases": {
+          "type": "array",
+          "description": "Other URLs for this same posting, e.g. the LinkedIn card of an Ashby job. Needs identity_evidence",
+          "items": {
+            "type": "string"
+          }
+        },
+        "identity_evidence": {
+          "type": "string",
+          "description": "Required with url_aliases: how you confirmed the listings are one posting"
         },
         "ats": {
           "type": "string",
@@ -305,7 +316,7 @@
   },
   {
     "name": "get_role",
-    "description": "Role with its company, full event history, artifacts and interviews.",
+    "description": "Role with its company, full event history, artifacts, interviews, and the urls and ATS postings it is known by.",
     "inputSchema": {
       "type": "object",
       "properties": {

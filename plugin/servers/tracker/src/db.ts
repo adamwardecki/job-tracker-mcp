@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { secureDir, secureFile } from './fsperm.ts';
+import { urlIdentity } from './posting.ts';
 import { isValidTimeZone, toUtcIso } from './time.ts';
 
 export function jobTrackerHome(): string {
@@ -156,6 +157,20 @@ export interface RoleRow {
   updated_at: string;
 }
 
+export interface RoleUrlRow {
+  role_id: number;
+  url: string;
+  normalized_url: string;
+  evidence: string | null;
+}
+
+export interface RolePostingRow {
+  role_id: number;
+  provider: string;
+  employer_key: string;
+  posting_id: string;
+}
+
 export interface EventRow {
   id: number;
   role_id: number;
@@ -307,7 +322,17 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-export const SCHEMA_VERSION = 2;
+// Records that a role answers to this URL, and to the ATS posting behind it if there is one. Evidence is kept if
+// the URL is seen again. Whether the identity may join this role is for the caller to decide.
+export function indexRoleUrl(db: DatabaseSync, role_id: number, url: string, evidence: string | null = null): void {
+  const { normalized_url, posting } = urlIdentity(url);
+  if (!normalized_url) return;
+  db.prepare(`INSERT INTO role_urls(role_id, url, normalized_url, evidence) VALUES(?, ?, ?, ?)
+    ON CONFLICT(role_id, normalized_url) DO UPDATE SET evidence = COALESCE(role_urls.evidence, excluded.evidence)`).run(role_id, url, normalized_url, evidence);
+  if (posting) db.prepare('INSERT OR IGNORE INTO role_postings(role_id, provider, employer_key, posting_id) VALUES(?, ?, ?, ?)').run(role_id, posting.provider, posting.employer_key, posting.posting_id);
+}
+
+export const SCHEMA_VERSION = 3;
 
 // MIGRATIONS[i] takes the schema from version i + 1 to i + 2. Append only; never edit a shipped one.
 const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
@@ -332,6 +357,30 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
         // Not a parseable time: leave it for the user to see.
       }
     }
+  },
+  // 3: every URL and ATS posting a role answers to. Keys are per role, not global: rows that already share a
+  // posting must survive the migration and show up as a lookup conflict, since which one is right is not ours to guess.
+  (db) => {
+    db.exec(`
+      CREATE TABLE role_urls (
+        role_id INTEGER NOT NULL REFERENCES roles(id),
+        url TEXT NOT NULL,
+        normalized_url TEXT NOT NULL,
+        evidence TEXT,
+        PRIMARY KEY (role_id, normalized_url)
+      );
+      CREATE INDEX role_urls_lookup ON role_urls(normalized_url);
+      CREATE TABLE role_postings (
+        role_id INTEGER NOT NULL REFERENCES roles(id),
+        provider TEXT NOT NULL,
+        employer_key TEXT NOT NULL,
+        posting_id TEXT NOT NULL,
+        PRIMARY KEY (role_id, provider, employer_key, posting_id)
+      );
+      CREATE INDEX role_postings_lookup ON role_postings(provider, employer_key, posting_id);
+    `);
+    const rows = db.prepare("SELECT id, url FROM roles WHERE typeof(url) = 'text' ORDER BY id").all() as { id: number; url: string }[];
+    for (const r of rows) indexRoleUrl(db, r.id, r.url);
   },
 ];
 
