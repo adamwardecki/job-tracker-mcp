@@ -163,3 +163,72 @@ test('credentials throw ToolError, including a bare username', () => {
   assert.throws(() => parsePostingUrl('https://user:secret@example.test/job'), ToolError);
   assert.throws(() => parsePostingUrl('https://token@jobs.lever.co/acme/x'), /credentials/i);
 });
+
+test('a reserved suffix word is never read as the posting id', () => {
+  for (const url of [
+    'https://jobs.ashbyhq.com/acme/application',
+    'https://jobs.ashbyhq.com/acme/Application',
+    'https://jobs.ashbyhq.com/acme/embed',
+    'https://jobs.ashbyhq.com/acme/jobs',
+    'https://jobs.lever.co/acme/apply',
+    'https://jobs.eu.lever.co/acme/APPLY',
+    'https://apply.workable.com/acme/j/apply',
+    'https://apply.workable.com/acme/j/Apply',
+  ]) {
+    assert.equal(parsePostingUrl(url).posting, null, url);
+  }
+});
+
+test('greenhouse embed: a duplicated or undecodable for/token gives no identity but keeps the URL', () => {
+  for (const q of ['for=%FF&token=1', 'for=%ZZ&token=1', 'for=%20&token=1', 'for=acme&for=globex&token=123', 'for=acme&token=123&token=456']) {
+    const r = parsePostingUrl(`https://boards.greenhouse.io/embed/job_app?${q}`);
+    assert.equal(r.posting, null, q);
+    assert.equal(r.normalized_url, `https://boards.greenhouse.io/embed/job_app?${q}`, q);
+  }
+});
+
+test('a query piece containing a semicolon is not a tracking parameter', () => {
+  assert.equal(parsePostingUrl('https://careers.example/job?utm_source=x;id=1').normalized_url, 'https://careers.example/job?utm_source=x;id=1');
+  assert.notEqual(parsePostingUrl('https://careers.example/job?utm_source=x;id=1').normalized_url,
+    parsePostingUrl('https://careers.example/job?utm_source=x;id=2').normalized_url);
+});
+
+test('tracking names match exactly as listed, not case-insensitively', () => {
+  assert.equal(parsePostingUrl('https://careers.example/job?TRK=a').normalized_url, 'https://careers.example/job?TRK=a');
+  assert.notEqual(parsePostingUrl('https://careers.example/job?TRK=a').normalized_url, parsePostingUrl('https://careers.example/job?TRK=b').normalized_url);
+  assert.equal(parsePostingUrl('https://careers.example/job?UTM_source=a&Gh_Src=b&trackingid=c&Lever-Source=d').normalized_url,
+    'https://careers.example/job?UTM_source=a&Gh_Src=b&trackingid=c&Lever-Source=d');
+  assert.equal(parsePostingUrl('https://careers.example/job?utm_source=a&gh_src=b&trk=c&trackingId=d&lever-source=e&lever-origin=f&id=1').normalized_url,
+    'https://careers.example/job?id=1');
+});
+
+test('lever: the same posting id under two employers is two identities', () => {
+  const id = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+  assert.equal(parsePostingUrl(`https://jobs.lever.co/acme/${id}`).posting?.employer_key, 'acme');
+  assert.equal(parsePostingUrl(`https://jobs.lever.co/globex/${id}`).posting?.employer_key, 'globex');
+});
+
+test('greenhouse: the same job id under two employers is two identities', () => {
+  assert.deepEqual(parsePostingUrl('https://boards.greenhouse.io/acme/jobs/123').posting, { provider: 'greenhouse', employer_key: 'acme', posting_id: '123' });
+  assert.deepEqual(parsePostingUrl('https://boards.greenhouse.io/globex/jobs/123').posting, { provider: 'greenhouse', employer_key: 'globex', posting_id: '123' });
+  assert.deepEqual(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=globex&token=123').posting, { provider: 'greenhouse', employer_key: 'globex', posting_id: '123' });
+});
+
+test('workable: the same shortcode under two employers is two identities', () => {
+  assert.deepEqual(parsePostingUrl('https://apply.workable.com/acme/j/ABC123DEF4').posting, { provider: 'workable', employer_key: 'acme', posting_id: 'ABC123DEF4' });
+  assert.deepEqual(parsePostingUrl('https://apply.workable.com/globex/j/ABC123DEF4').posting, { provider: 'workable', employer_key: 'globex', posting_id: 'ABC123DEF4' });
+});
+
+test('unknown URL: a hash-route fragment (#/ or #!) is kept, other fragments are dropped', () => {
+  assert.equal(parsePostingUrl('https://careers.example/#/jobs/1').normalized_url, 'https://careers.example/#/jobs/1');
+  assert.equal(parsePostingUrl('https://careers.example/#!/jobs/2').normalized_url, 'https://careers.example/#!/jobs/2');
+  assert.notEqual(parsePostingUrl('https://careers.example/#/jobs/1').normalized_url, parsePostingUrl('https://careers.example/#/jobs/2').normalized_url);
+  assert.equal(parsePostingUrl('https://careers.example/job?id=1#apply').normalized_url, 'https://careers.example/job?id=1');
+  assert.equal(parsePostingUrl('https://careers.example/job#').normalized_url, 'https://careers.example/job');
+});
+
+test('known ATS posting: every fragment is dropped, even a hash route', () => {
+  assert.equal(parsePostingUrl('https://jobs.ashbyhq.com/acme/job-1#/apply').normalized_url, 'https://jobs.ashbyhq.com/acme/job-1');
+  assert.equal(parsePostingUrl('https://jobs.lever.co/acme/3fa85f64-5717-4562-b3fc-2c963f66afa6#!x').normalized_url,
+    'https://jobs.lever.co/acme/3fa85f64-5717-4562-b3fc-2c963f66afa6');
+});

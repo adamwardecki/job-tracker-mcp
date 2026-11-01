@@ -5,7 +5,11 @@ import { ToolError } from './errors.ts';
 export type PostingKey = { provider: string; employer_key: string; posting_id: string };
 
 // Query parameters that only record where a click came from. Anything else may select the posting, so it stays.
-const TRACKING_PARAMS = new Set(['gh_src', 'lever-source', 'lever-origin', 'trk', 'trackingid']);
+// Names match exactly as listed (case-sensitive): a differently-cased name is an unknown parameter and may matter.
+const TRACKING_PARAMS = new Set(['gh_src', 'lever-source', 'lever-origin', 'trk', 'trackingId']);
+
+// Path words that follow a posting ID; reading one as the ID would give every board the same bogus posting.
+const RESERVED_IDS = new Set(['application', 'apply', 'embed', 'jobs']);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -18,8 +22,10 @@ function safeDecode(s: string): string | null {
 }
 
 function isTracking(piece: string): boolean {
+  // A ';' may be a legacy parameter separator, so the piece can hide a second, significant parameter.
+  if (piece.includes(';')) return false;
   const rawKey = piece.split('=', 1)[0] ?? '';
-  const key = (safeDecode(rawKey) ?? rawKey).toLowerCase();
+  const key = safeDecode(rawKey) ?? rawKey;
   return key.startsWith('utm_') || TRACKING_PARAMS.has(key);
 }
 
@@ -28,6 +34,7 @@ const postingId = (id: string): string => (UUID.test(id) ? id.toLowerCase() : id
 
 function key(provider: string, employer: string | null | undefined, id: string | null | undefined): PostingKey | null {
   if (!employer || !id) return null;
+  if (/\s/.test(employer) || /\s/.test(id) || RESERVED_IDS.has(id.toLowerCase())) return null;
   return { provider, employer_key: employer.toLowerCase(), posting_id: postingId(id) };
 }
 
@@ -43,10 +50,25 @@ function identify(u: URL): PostingKey | null {
   if (host === 'apply.workable.com') return s[1] === 'j' && only(3, 'apply') ? key('workable', s[0], s[2]) : null;
   if (host === 'boards-api.greenhouse.io') return s.length === 5 && s[0] === 'v1' && s[1] === 'boards' && s[3] === 'jobs' ? greenhouse(s[2], s[4]) : null;
   if (/^(job-)?boards(\.eu)?\.greenhouse\.io$/.test(host)) {
-    if (s[0] === 'embed') return s.length === 2 && s[1] === 'job_app' ? greenhouse(u.searchParams.get('for'), u.searchParams.get('token')) : null;
+    if (s[0] === 'embed') return s.length === 2 && s[1] === 'job_app' ? greenhouse(single(u, 'for'), single(u, 'token')) : null;
     return s.length === 3 && s[1] === 'jobs' ? greenhouse(s[0], s[2]) : null;
   }
   return null;
+}
+
+// The value of a query parameter that appears exactly once and decodes cleanly, else null. Read from the raw query
+// because URLSearchParams silently turns bad escapes into U+FFFD and returns only the first of a repeated name.
+function single(u: URL, name: string): string | null {
+  const values: string[] = [];
+  for (const piece of u.search.slice(1).split('&')) {
+    const eq = piece.indexOf('=');
+    if ((safeDecode(eq < 0 ? piece : piece.slice(0, eq)) ?? '') !== name) continue;
+    if (eq < 0) return null;
+    const v = safeDecode(piece.slice(eq + 1));
+    if (v === null) return null;
+    values.push(v);
+  }
+  return values.length === 1 ? (values[0] as string) : null; // length checked
 }
 
 // Greenhouse job IDs are numeric; anything else (a slug, a board page) is not a posting we can name.
@@ -61,9 +83,11 @@ export function parsePostingUrl(raw: string): { normalized_url: string; posting:
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new ToolError('Only http(s) URLs are accepted.');
   if (u.username || u.password) throw new ToolError('URL must not contain credentials (user:password@). Remove them and pass the plain link.');
-  u.hash = '';
   // Filter the raw query pieces instead of round-tripping URLSearchParams, which would re-encode values we must not touch.
   const pieces = u.search.slice(1).split('&').filter((p) => p && !isTracking(p));
   u.search = pieces.join('&');
-  return { normalized_url: u.href, posting: identify(u) };
+  const posting = identify(u);
+  // A hash route (#/jobs/1, #!/jobs/1) can select the posting on a single-page careers site; other fragments are page anchors.
+  if (posting || !/^#[/!]/.test(u.hash)) u.hash = '';
+  return { normalized_url: u.href, posting };
 }
