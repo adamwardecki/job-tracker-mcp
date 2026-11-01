@@ -232,3 +232,29 @@ test('known ATS posting: every fragment is dropped, even a hash route', () => {
   assert.equal(parsePostingUrl('https://jobs.lever.co/acme/3fa85f64-5717-4562-b3fc-2c963f66afa6#!x').normalized_url,
     'https://jobs.lever.co/acme/3fa85f64-5717-4562-b3fc-2c963f66afa6');
 });
+
+test('greenhouse embed: + is a space, so a blank or spaced for/token gives no identity and a+b is not a%2Bb', () => {
+  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=+&token=1').posting, null);
+  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=a+b&token=1').posting, null);
+  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=acme&token=+').posting, null);
+  assert.deepEqual(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=a%2Bb&token=1').posting,
+    { provider: 'greenhouse', employer_key: 'a+b', posting_id: '1' });
+});
+
+test('path slugs containing spaces keep their identity', () => {
+  assert.deepEqual(parsePostingUrl('https://jobs.ashbyhq.com/Acme%20Corp/job-1').posting,
+    { provider: 'ashby', employer_key: 'acme corp', posting_id: 'job-1' });
+  assert.deepEqual(parsePostingUrl('https://boards.greenhouse.io/a%20b/jobs/1').posting,
+    { provider: 'greenhouse', employer_key: 'a b', posting_id: '1' });
+});
+
+test('greenhouse embed: a for/token value containing a semicolon gives no identity', () => {
+  for (const q of ['for=acme;for=globex&token=1', 'for=acme&token=1;token=2', 'for=acme&token=1;x', 'x=1;for=globex&for=acme&token=1']) {
+    assert.equal(parsePostingUrl(`https://boards.greenhouse.io/embed/job_app?${q}`).posting, null, q);
+  }
+});
+
+test('known ATS host with no posting identity keeps a hash-route fragment', () => {
+  assert.equal(parsePostingUrl('https://jobs.ashbyhq.com/acme#/jobs/1').normalized_url, 'https://jobs.ashbyhq.com/acme#/jobs/1');
+  assert.equal(parsePostingUrl('https://jobs.ashbyhq.com/acme#apply').normalized_url, 'https://jobs.ashbyhq.com/acme');
+});

@@ -34,7 +34,7 @@ const postingId = (id: string): string => (UUID.test(id) ? id.toLowerCase() : id
 
 function key(provider: string, employer: string | null | undefined, id: string | null | undefined): PostingKey | null {
   if (!employer || !id) return null;
-  if (/\s/.test(employer) || /\s/.test(id) || RESERVED_IDS.has(id.toLowerCase())) return null;
+  if (!employer.trim() || !id.trim() || RESERVED_IDS.has(id.toLowerCase())) return null;
   return { provider, employer_key: employer.toLowerCase(), posting_id: postingId(id) };
 }
 
@@ -58,14 +58,20 @@ function identify(u: URL): PostingKey | null {
 
 // The value of a query parameter that appears exactly once and decodes cleanly, else null. Read from the raw query
 // because URLSearchParams silently turns bad escapes into U+FFFD and returns only the first of a repeated name.
+// Stricter than a path slug: whitespace (including a decoded '+') or a ';' means the value is ambiguous.
 function single(u: URL, name: string): string | null {
   const values: string[] = [];
   for (const piece of u.search.slice(1).split('&')) {
     const eq = piece.indexOf('=');
-    if ((safeDecode(eq < 0 ? piece : piece.slice(0, eq)) ?? '') !== name) continue;
-    if (eq < 0) return null;
-    const v = safeDecode(piece.slice(eq + 1));
-    if (v === null) return null;
+    const rawKey = eq < 0 ? piece : piece.slice(0, eq);
+    if ((safeDecode(rawKey.replace(/\+/g, ' ')) ?? '') !== name) {
+      // ';' may separate a second parameter inside this piece: a legacy parser could see this one twice.
+      if (piece.includes(';') && piece.split(';').some((sub) => (safeDecode(sub.split('=', 1)[0] ?? '') ?? '') === name)) return null;
+      continue;
+    }
+    if (eq < 0 || piece.includes(';')) return null;
+    const v = safeDecode(piece.slice(eq + 1).replace(/\+/g, ' '));
+    if (v === null || !v.trim() || /\s/.test(v)) return null;
     values.push(v);
   }
   return values.length === 1 ? (values[0] as string) : null; // length checked
