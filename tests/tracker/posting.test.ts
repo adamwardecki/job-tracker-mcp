@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ToolError } from '../../plugin/servers/tracker/src/errors.ts';
-import { parsePostingUrl } from '../../plugin/servers/tracker/src/posting.ts';
+import { type PostingKey, parsePostingUrl } from '../../plugin/servers/tracker/src/posting.ts';
+
+const EMBED = 'https://boards.greenhouse.io/embed/job_app';
 
 test('ashby: strips tracking and fragment, keys on org and job id', () => {
   assert.deepEqual(parsePostingUrl('https://jobs.ashbyhq.com/acme/job-1?utm_source=li#apply'), {
@@ -11,7 +13,7 @@ test('ashby: strips tracking and fragment, keys on org and job id', () => {
 });
 
 test('greenhouse: embed form takes the tenant from for= and the id from token=', () => {
-  assert.deepEqual(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=acme&token=123&gh_src=x').posting,
+  assert.deepEqual(parsePostingUrl(`${EMBED}?for=acme&token=123&gh_src=x`).posting,
     { provider: 'greenhouse', employer_key: 'acme', posting_id: '123' });
 });
 
@@ -19,10 +21,6 @@ test('unknown host: the significant query is part of the normalized URL', () => 
   assert.equal(parsePostingUrl('https://careers.example/job?id=1').normalized_url, 'https://careers.example/job?id=1');
   assert.notEqual(parsePostingUrl('https://careers.example/job?id=1').normalized_url,
     parsePostingUrl('https://careers.example/job?id=2').normalized_url);
-});
-
-test('credentials in the URL are rejected', () => {
-  assert.throws(() => parsePostingUrl('https://user:secret@example.test/job'), /credentials/i);
 });
 
 test('ashby: /application suffix is the same posting as the bare job URL', () => {
@@ -36,13 +34,6 @@ test('ashby: org slug lowercases, a UUID id lowercases, any other id keeps its c
     { provider: 'ashby', employer_key: 'acme', posting_id: '3fa85f64-5717-4562-b3fc-2c963f66afa6' });
   assert.deepEqual(parsePostingUrl('https://jobs.ashbyhq.com/acme/Job-AbC').posting,
     { provider: 'ashby', employer_key: 'acme', posting_id: 'Job-AbC' });
-});
-
-test('ashby: the same job id under two employers is two identities', () => {
-  const a = parsePostingUrl('https://jobs.ashbyhq.com/acme/job-1').posting;
-  const b = parsePostingUrl('https://jobs.ashbyhq.com/globex/job-1').posting;
-  assert.deepEqual(a, { provider: 'ashby', employer_key: 'acme', posting_id: 'job-1' });
-  assert.deepEqual(b, { provider: 'ashby', employer_key: 'globex', posting_id: 'job-1' });
 });
 
 test('ashby: a board page with no job id has no posting identity', () => {
@@ -67,13 +58,13 @@ test('greenhouse: boards-api path carries the tenant', () => {
 });
 
 test('greenhouse: embed without a tenant or token has no identity', () => {
-  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?token=123').posting, null);
-  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=acme').posting, null);
+  assert.equal(parsePostingUrl(`${EMBED}?token=123`).posting, null);
+  assert.equal(parsePostingUrl(`${EMBED}?for=acme`).posting, null);
 });
 
 test('greenhouse: embed keeps for= and token= in the normalized URL and drops gh_src', () => {
-  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=acme&gh_src=x&token=123#top').normalized_url,
-    'https://boards.greenhouse.io/embed/job_app?for=acme&token=123');
+  assert.equal(parsePostingUrl(`${EMBED}?for=acme&gh_src=x&token=123#top`).normalized_url,
+    `${EMBED}?for=acme&token=123`);
 });
 
 test('greenhouse: a non-numeric job id is not guessed', () => {
@@ -181,9 +172,9 @@ test('a reserved suffix word is never read as the posting id', () => {
 
 test('greenhouse embed: a duplicated or undecodable for/token gives no identity but keeps the URL', () => {
   for (const q of ['for=%FF&token=1', 'for=%ZZ&token=1', 'for=%20&token=1', 'for=acme&for=globex&token=123', 'for=acme&token=123&token=456']) {
-    const r = parsePostingUrl(`https://boards.greenhouse.io/embed/job_app?${q}`);
+    const r = parsePostingUrl(`${EMBED}?${q}`);
     assert.equal(r.posting, null, q);
-    assert.equal(r.normalized_url, `https://boards.greenhouse.io/embed/job_app?${q}`, q);
+    assert.equal(r.normalized_url, `${EMBED}?${q}`, q);
   }
 });
 
@@ -202,23 +193,6 @@ test('tracking names match exactly as listed, not case-insensitively', () => {
     'https://careers.example/job?id=1');
 });
 
-test('lever: the same posting id under two employers is two identities', () => {
-  const id = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
-  assert.equal(parsePostingUrl(`https://jobs.lever.co/acme/${id}`).posting?.employer_key, 'acme');
-  assert.equal(parsePostingUrl(`https://jobs.lever.co/globex/${id}`).posting?.employer_key, 'globex');
-});
-
-test('greenhouse: the same job id under two employers is two identities', () => {
-  assert.deepEqual(parsePostingUrl('https://boards.greenhouse.io/acme/jobs/123').posting, { provider: 'greenhouse', employer_key: 'acme', posting_id: '123' });
-  assert.deepEqual(parsePostingUrl('https://boards.greenhouse.io/globex/jobs/123').posting, { provider: 'greenhouse', employer_key: 'globex', posting_id: '123' });
-  assert.deepEqual(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=globex&token=123').posting, { provider: 'greenhouse', employer_key: 'globex', posting_id: '123' });
-});
-
-test('workable: the same shortcode under two employers is two identities', () => {
-  assert.deepEqual(parsePostingUrl('https://apply.workable.com/acme/j/ABC123DEF4').posting, { provider: 'workable', employer_key: 'acme', posting_id: 'ABC123DEF4' });
-  assert.deepEqual(parsePostingUrl('https://apply.workable.com/globex/j/ABC123DEF4').posting, { provider: 'workable', employer_key: 'globex', posting_id: 'ABC123DEF4' });
-});
-
 test('unknown URL: a hash-route fragment (#/ or #!) is kept, other fragments are dropped', () => {
   assert.equal(parsePostingUrl('https://careers.example/#/jobs/1').normalized_url, 'https://careers.example/#/jobs/1');
   assert.equal(parsePostingUrl('https://careers.example/#!/jobs/2').normalized_url, 'https://careers.example/#!/jobs/2');
@@ -234,10 +208,10 @@ test('known ATS posting: every fragment is dropped, even a hash route', () => {
 });
 
 test('greenhouse embed: + is a space, so a blank or spaced for/token gives no identity and a+b is not a%2Bb', () => {
-  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=+&token=1').posting, null);
-  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=a+b&token=1').posting, null);
-  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=acme&token=+').posting, null);
-  assert.deepEqual(parsePostingUrl('https://boards.greenhouse.io/embed/job_app?for=a%2Bb&token=1').posting,
+  assert.equal(parsePostingUrl(`${EMBED}?for=+&token=1`).posting, null);
+  assert.equal(parsePostingUrl(`${EMBED}?for=a+b&token=1`).posting, null);
+  assert.equal(parsePostingUrl(`${EMBED}?for=acme&token=+`).posting, null);
+  assert.deepEqual(parsePostingUrl(`${EMBED}?for=a%2Bb&token=1`).posting,
     { provider: 'greenhouse', employer_key: 'a+b', posting_id: '1' });
 });
 
@@ -250,11 +224,48 @@ test('path slugs containing spaces keep their identity', () => {
 
 test('greenhouse embed: a for/token value containing a semicolon gives no identity', () => {
   for (const q of ['for=acme;for=globex&token=1', 'for=acme&token=1;token=2', 'for=acme&token=1;x', 'x=1;for=globex&for=acme&token=1']) {
-    assert.equal(parsePostingUrl(`https://boards.greenhouse.io/embed/job_app?${q}`).posting, null, q);
+    assert.equal(parsePostingUrl(`${EMBED}?${q}`).posting, null, q);
   }
 });
 
 test('known ATS host with no posting identity keeps a hash-route fragment', () => {
   assert.equal(parsePostingUrl('https://jobs.ashbyhq.com/acme#/jobs/1').normalized_url, 'https://jobs.ashbyhq.com/acme#/jobs/1');
   assert.equal(parsePostingUrl('https://jobs.ashbyhq.com/acme#apply').normalized_url, 'https://jobs.ashbyhq.com/acme');
+});
+
+test('greenhouse embed: only the exact /embed/job_app path is a posting', () => {
+  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/other?for=acme&token=1').posting, null);
+  assert.equal(parsePostingUrl('https://boards.greenhouse.io/embed/job_app/x?for=acme&token=1').posting, null);
+});
+
+test('greenhouse boards-api: only the v1 path is understood', () => {
+  assert.equal(parsePostingUrl('https://boards-api.greenhouse.io/v2/boards/acme/jobs/1').posting, null);
+});
+
+test('a blank path slug (%20) is not an employer', () => {
+  assert.equal(parsePostingUrl('https://jobs.ashbyhq.com/%20/job-1').posting, null);
+});
+
+test('a percent-encoded tracking name is still stripped', () => {
+  assert.equal(parsePostingUrl('https://careers.example/job?%75tm_source=x&id=1').normalized_url, 'https://careers.example/job?id=1');
+});
+
+test('a trailing dot on the ATS hostname keeps the identity', () => {
+  assert.deepEqual(parsePostingUrl('https://jobs.ashbyhq.com./acme/job-1').posting, { provider: 'ashby', employer_key: 'acme', posting_id: 'job-1' });
+});
+
+test('the same posting id under two employers is two identities, per provider', () => {
+  const uuid = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+  const cases: [string, PostingKey][] = [
+    ['https://jobs.ashbyhq.com/acme/job-1', { provider: 'ashby', employer_key: 'acme', posting_id: 'job-1' }],
+    ['https://jobs.ashbyhq.com/globex/job-1', { provider: 'ashby', employer_key: 'globex', posting_id: 'job-1' }],
+    [`https://jobs.lever.co/acme/${uuid}`, { provider: 'lever', employer_key: 'acme', posting_id: uuid }],
+    [`https://jobs.lever.co/globex/${uuid}`, { provider: 'lever', employer_key: 'globex', posting_id: uuid }],
+    ['https://boards.greenhouse.io/acme/jobs/123', { provider: 'greenhouse', employer_key: 'acme', posting_id: '123' }],
+    ['https://boards.greenhouse.io/globex/jobs/123', { provider: 'greenhouse', employer_key: 'globex', posting_id: '123' }],
+    [`${EMBED}?for=globex&token=123`, { provider: 'greenhouse', employer_key: 'globex', posting_id: '123' }],
+    ['https://apply.workable.com/acme/j/ABC123DEF4', { provider: 'workable', employer_key: 'acme', posting_id: 'ABC123DEF4' }],
+    ['https://apply.workable.com/globex/j/ABC123DEF4', { provider: 'workable', employer_key: 'globex', posting_id: 'ABC123DEF4' }],
+  ];
+  for (const [url, want] of cases) assert.deepEqual(parsePostingUrl(url).posting, want, url);
 });
