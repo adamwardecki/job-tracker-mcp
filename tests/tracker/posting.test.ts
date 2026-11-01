@@ -60,6 +60,8 @@ test('greenhouse: boards-api path carries the tenant', () => {
 test('greenhouse: embed without a tenant or token has no identity', () => {
   assert.equal(parsePostingUrl(`${EMBED}?token=123`).posting, null);
   assert.equal(parsePostingUrl(`${EMBED}?for=acme`).posting, null);
+  assert.equal(parsePostingUrl(`${EMBED}?for&token=1`).posting, null);
+  assert.equal(parsePostingUrl(`${EMBED}?for=acme&token`).posting, null);
 });
 
 test('greenhouse: embed keeps for= and token= in the normalized URL and drops gh_src', () => {
