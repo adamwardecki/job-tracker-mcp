@@ -223,9 +223,13 @@ test('a posting on another ATS or employer board joins a role only with evidence
   assert.match((await c('upsert_role', { id: role.id, title: 'Engineer', url: moved })).error, /lever acme\/abc is on another ATS or employer board than ashby acme\/one.*identity_evidence/);
   assert.match((await c('upsert_role', { id: role.id, title: 'Engineer', url: 'https://jobs.ashbyhq.com/acme-labs/one' })).error, /identity_evidence/);
   assert.deepEqual(counts(t), before);
-  const ok = await c('upsert_role', { id: role.id, title: 'Engineer', url: moved, identity_evidence: 'Acme moved to Lever; the req number 42 matches' });
+  const evidence = 'Acme moved to Lever; the req number 42 matches';
+  const ok = await c('upsert_role', { id: role.id, title: 'Engineer', url: moved, identity_evidence: evidence });
   assert.equal(ok.error, '');
   assert.equal(t.mustRole(role.id).url, moved);
+  // The evidence that let the posting join is kept with it; the URL the role already had keeps none.
+  const byUrl = Object.fromEntries(t.roleDetail({ role_id: role.id }).urls.map((u) => [u.url, u.evidence]));
+  assert.deepEqual(byUrl, { [ONE]: null, [moved]: evidence });
   assert.deepEqual(t.roleDetail({ role_id: role.id }).postings.map((p) => p.provider).sort(), ['ashby', 'lever']);
   assert.deepEqual(t.findCompany({ url: ONE }).exact_role_ids, [role.id]);
 });

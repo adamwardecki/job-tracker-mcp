@@ -107,8 +107,8 @@ const companyAliases = (aliases: string[] | null | undefined, url: string | null
 };
 
 type ClaimedUrl = PostingIdentity & { url: string };
-// What upsertRole will update: a known role (viaAlias: only an alias, not url, matched it), or a new one at company.
-type Target = { role: RoleRow; viaAlias: boolean } | { role: undefined; company: string };
+// What upsertRole will update: a known role, or a new one at company.
+type Target = { role: RoleRow } | { role: undefined; company: string };
 
 // The role's own URL first, then its aliases, each validated. A lookup tolerates a bad URL but a write must not:
 // what is stored here decides which history a later lead joins.
@@ -448,12 +448,12 @@ export class Tracker {
       // A role keeps what it already holds, so an old duplicate can still be updated. Only a new claim can collide.
       const taken = [...new Set(holders.filter((h) => !h.includes(role.id)).flat())];
       req(!taken.length, `This URL belongs to role ${taken.join(', ')}, so it cannot be added to role ${role.id}. Nothing was written. Check them with get_role.`);
-      return { role, viaAlias: false };
+      return { role };
     }
     const matched = [...new Set(holders.flat())].sort((a, b) => a - b);
     req(matched.length < 2, `This posting matches roles ${matched.join(', ')}. Nothing was written. Check them with get_role, then pass id to update one.`);
     const [hit] = matched;
-    if (hit !== undefined) return { role: this.mustRole(hit), viaAlias: !!f.url && !holders[0]?.includes(hit) };
+    if (hit !== undefined) return { role: this.mustRole(hit) };
     req(f.company, 'company is required for a new role');
     return { role: undefined, company: f.company };
   }
@@ -517,11 +517,12 @@ export class Tracker {
         this.insertEvent({ role_id: roleId, status: 'found', reason: `Found via ${f.source || 'unknown source'}`, evidence: f.url || null, actor: 'pipeline' });
         created = true;
       }
-      // The evidence is about the aliases. Aliases go first, so a main URL also listed as an alias keeps it; the main
-      // URL carries it on its own only when an alias, not the URL, is what tied it to this role.
+      // Evidence is about URLs joining an existing role: aliases, and a url new to the role (an ATS move needs it).
+      // A brand-new role's own url is just where it was found. Aliases go first, so a url also listed as an alias keeps
+      // it, and a URL the role already holds keeps its first row and evidence.
       const evidence = f.identity_evidence ?? undefined;
       this.indexRoleUrls(roleId, f.url_aliases ?? [], evidence);
-      if (f.url) this.indexRoleUrls(roleId, [f.url], target.role && target.viaAlias ? evidence : undefined);
+      if (f.url) this.indexRoleUrls(roleId, [f.url], target.role ? evidence : undefined);
       return { role: this.mustRole(roleId), company, created, dedupe, possible_role_ids };
     });
   }
