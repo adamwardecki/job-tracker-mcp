@@ -27,11 +27,8 @@ function call(t: Tracker) {
   };
 }
 
-const counts = (t: Tracker) => ({
-  roles: t.one<{ n: number }>('SELECT COUNT(*) AS n FROM roles')?.n,
-  companies: t.one<{ n: number }>('SELECT COUNT(*) AS n FROM companies')?.n,
-  urls: t.one<{ n: number }>('SELECT COUNT(*) AS n FROM role_urls')?.n,
-});
+const count = (t: Tracker, table: string) => t.one<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)?.n ?? 0;
+const counts = (t: Tracker) => ({ roles: count(t, 'roles'), companies: count(t, 'companies'), urls: count(t, 'role_urls') });
 
 // node:sqlite rows have a null prototype, which strict deepEqual counts as a difference.
 const rows = (list: readonly object[] | undefined) => list?.map((r) => ({ ...r }));
@@ -174,9 +171,63 @@ test('an ATS link replaces an aggregator URL and keeps the aggregator lookup', (
   assert.equal(updated.role.ats, 'ashby');
   assert.deepEqual(t.findCompany({ url: LINKEDIN }).exact_role_ids, [role.id]);
 
-  const other = t.upsertRole({ company: 'Zenith', title: 'Engineer', url: 'https://www.linkedin.com/jobs/view/5', url_aliases: ['https://jobs.ashbyhq.com/zenith/1'], identity_evidence: 'The card links to the Ashby page' });
-  assert.equal(other.role.url, 'https://www.linkedin.com/jobs/view/5');
-  assert.equal(t.upsertRole({ company: 'Zenith', title: 'Engineer', url: 'https://jobs.ashbyhq.com/zenith/1' }).role.url, 'https://jobs.ashbyhq.com/zenith/1');
+  // The same rule holds for an alias added to a known role.
+  const listed = t.upsertRole({ company: 'Zenith', title: 'Engineer', url: 'https://www.linkedin.com/jobs/view/5' }).role;
+  const upgraded = t.upsertRole({ id: listed.id, title: 'Engineer', url_aliases: ['https://jobs.ashbyhq.com/zenith/1'], identity_evidence: 'The card links to the Ashby page' });
+  assert.equal(upgraded.role.url, 'https://jobs.ashbyhq.com/zenith/1');
+});
+
+test('a new role takes its ATS alias as its URL when the given URL is only a listing', (ctx) => {
+  const t = fresh(ctx);
+  const listing = 'https://www.linkedin.com/jobs/view/5';
+  const ats = 'https://jobs.ashbyhq.com/zenith/1';
+  const made = t.upsertRole({ company: 'Zenith', title: 'Engineer', url: listing, url_aliases: [ats], identity_evidence: 'The card links to the Ashby page' });
+  assert.equal(made.created, true);
+  assert.equal(made.role.url, ats);
+  assert.equal(made.role.ats, 'ashby');
+  assert.deepEqual(t.findCompany({ url: listing }).exact_role_ids, [made.role.id]);
+  assert.deepEqual(t.roleDetail({ role_id: made.role.id }).urls.map((u) => u.url).sort(), [ats, listing].sort());
+  // An ATS URL given as url keeps its place over an ATS alias.
+  const both = t.upsertRole({ company: 'Orbit', title: 'Engineer', url: 'https://jobs.lever.co/orbit/7', url_aliases: [ats.replace('zenith', 'orbit')], identity_evidence: 'Same req number on both pages' });
+  assert.equal(both.role.url, 'https://jobs.lever.co/orbit/7');
+});
+
+test('one role never holds two postings from the same employer board', async (ctx) => {
+  const t = fresh(ctx);
+  const c = call(t);
+  const { role } = t.upsertRole({ company: 'Acme', title: 'Engineer', url: ONE });
+  const after = () => ({ ...counts(t), postings: count(t, 'role_postings') });
+  const before = after();
+  const conflict = /ashby acme\/one and ashby acme\/two are different postings/;
+  const two = 'https://jobs.ashbyhq.com/acme/two';
+  assert.match((await c('upsert_role', { id: role.id, title: 'Engineer', url: two })).error, conflict);
+  assert.match((await c('upsert_role', { id: role.id, title: 'Engineer', url: two, identity_evidence: 'Looks the same' })).error, conflict, 'evidence does not make two reqs one');
+  assert.match((await c('upsert_role', { id: role.id, title: 'Engineer', url_aliases: [two], identity_evidence: 'Looks the same' })).error, conflict);
+  // Without id: a known alias pulls the call onto the role, and the new URL would add the second req.
+  assert.match((await c('upsert_role', { company: 'Acme', title: 'Engineer', url: two, url_aliases: [ONE], identity_evidence: 'Looks the same' })).error, conflict);
+  // A new role cannot start with two either.
+  assert.match((await c('upsert_role', { company: 'Zenith', title: 'Engineer', url: 'https://jobs.ashbyhq.com/zenith/1', url_aliases: ['https://jobs.ashbyhq.com/zenith/2'], identity_evidence: 'x' })).error, /ashby zenith\/1 and ashby zenith\/2 are different postings/);
+  assert.deepEqual(after(), before);
+  assert.equal(t.mustRole(role.id).url, ONE);
+  // The same posting again, under any link to it, is fine.
+  for (const url of [`${ONE}?utm_source=x`, 'https://jobs.ashbyhq.com/ACME/one/application']) assert.equal((await c('upsert_role', { id: role.id, title: 'Engineer', url })).error, '');
+  assert.deepEqual(after(), { ...before, urls: before.urls + 1 });
+});
+
+test('a posting on another ATS or employer board joins a role only with evidence', async (ctx) => {
+  const t = fresh(ctx);
+  const c = call(t);
+  const { role } = t.upsertRole({ company: 'Acme', title: 'Engineer', url: ONE });
+  const moved = 'https://jobs.lever.co/acme/abc';
+  const before = counts(t);
+  assert.match((await c('upsert_role', { id: role.id, title: 'Engineer', url: moved })).error, /lever acme\/abc is on another ATS or employer board than ashby acme\/one.*identity_evidence/);
+  assert.match((await c('upsert_role', { id: role.id, title: 'Engineer', url: 'https://jobs.ashbyhq.com/acme-labs/one' })).error, /identity_evidence/);
+  assert.deepEqual(counts(t), before);
+  const ok = await c('upsert_role', { id: role.id, title: 'Engineer', url: moved, identity_evidence: 'Acme moved to Lever; the req number 42 matches' });
+  assert.equal(ok.error, '');
+  assert.equal(t.mustRole(role.id).url, moved);
+  assert.deepEqual(t.roleDetail({ role_id: role.id }).postings.map((p) => p.provider).sort(), ['ashby', 'lever']);
+  assert.deepEqual(t.findCompany({ url: ONE }).exact_role_ids, [role.id]);
 });
 
 test('upsert_role and get_role expose aliases, evidence and postings', async (ctx) => {

@@ -10,7 +10,7 @@ import { atsFromUrl, nameScore, normalizeDomain, normalizeName } from './fuzzy.t
 import type { LintResult } from './lint.ts';
 import { lintProse } from './lint.ts';
 import { checkPay } from './pay.ts';
-import type { PostingIdentity } from './posting.ts';
+import type { PostingIdentity, PostingKey } from './posting.ts';
 import { parsePostingUrl, urlIdentity } from './posting.ts';
 import { dayBounds, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
 import type { ArgsFor } from './tools.ts';
@@ -113,6 +113,22 @@ function claimedUrls(f: ArgsFor<'upsert_role'>): (PostingIdentity & { url: strin
   for (const [i, a] of aliases.entries()) req(typeof a === 'string' && a.trim(), `url_aliases[${i}] must be a URL string.`);
   req(!aliases.length || f.identity_evidence?.trim(), 'url_aliases need identity_evidence: say how you confirmed the listings are one posting, e.g. the card links to the ATS page.');
   return [...(f.url ? [f.url] : []), ...(f.url_aliases ?? [])].map((url) => ({ url, ...parsePostingUrl(url) }));
+}
+
+const keyLabel = (k: PostingKey) => `${k.provider} ${k.employer_key}/${k.posting_id}`;
+
+// Two posting IDs on one employer's board are two requisitions, whatever the titles say, so no role may hold both.
+// A key on another ATS or board can be the same job after an employer moves ATS, which only evidence can show.
+function checkPostingKeys(held: readonly PostingKey[], claimed: readonly PostingKey[], evidenced: boolean): void {
+  const known = [...held];
+  for (const k of claimed) {
+    if (known.some((h) => keyLabel(h) === keyLabel(k))) continue;
+    for (const h of known) {
+      req(h.provider !== k.provider || h.employer_key !== k.employer_key, `${keyLabel(h)} and ${keyLabel(k)} are different postings, so one role cannot hold both. Nothing was written. Track the other one as its own role (upsert_role without id).`);
+      req(evidenced, `${keyLabel(k)} is on another ATS or employer board than ${keyLabel(h)}. Nothing was written. If the employer moved the posting, pass identity_evidence saying how you confirmed it is the same job; otherwise track it as its own role.`);
+    }
+    known.push(k);
+  }
 }
 
 // Whether a URL seen for a known role becomes its main one. gate_check returns that URL and the submit gate binds
@@ -448,15 +464,24 @@ export class Tracker {
           if (f.company && nameScore(f.company, [company.name, ...company.aliases]) >= 1) company = this.mergeCompany(company, companyAliases(f.company_aliases, lookup.url), f.company_domain);
         }
       }
+      const held = role ? this.q<PostingKey>('SELECT provider, employer_key, posting_id FROM role_postings WHERE role_id = ?', role.id) : [];
+      checkPostingKeys(held, claims.flatMap((c) => (c.posting ? [c.posting] : [])), !!f.identity_evidence?.trim());
       const vals: Record<string, SQLInputValue> = {};
       for (const k of ROLE_FIELDS) {
         const v = f[k];
         if (v !== undefined) vals[k] = v;
       }
-      const incoming = f.url ? claims[0] : undefined;
-      if (!incoming || (role && !takesPrimary(role.url, incoming, !!f.id))) delete vals.url;
-      if (!vals.ats && vals.url) {
-        const ats = atsFromUrl(f.url).ats;
+      // url is offered first (an update by id may refresh it), then aliases, which can only upgrade a listing to an ATS link.
+      let primary = role?.url ?? null;
+      let chosen: string | undefined;
+      for (const [i, c] of claims.entries()) {
+        const isUrl = i === 0 && !!f.url;
+        if ((isUrl || primary) && takesPrimary(primary, c, isUrl && !!f.id)) [primary, chosen] = [c.url, c.url];
+      }
+      if (chosen) vals.url = chosen;
+      else delete vals.url;
+      if (!vals.ats && chosen) {
+        const ats = atsFromUrl(chosen).ats;
         if (ats) vals.ats = ats;
         else delete vals.ats;
       }
