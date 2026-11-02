@@ -86,6 +86,9 @@ export interface PostingIdentity {
   posting: PostingKey | null;
 }
 
+// What this returns is stored: role_urls.normalized_url and role_postings are written from it and later lookups
+// compare against it. Any change to normalisation or to the posting keys needs a migration that reindexes both
+// tables, or old rows stop matching new lookups. tests/tracker/posting.test.ts pins examples for that reason.
 export function parsePostingUrl(raw: string): PostingIdentity {
   let u: URL;
   try {

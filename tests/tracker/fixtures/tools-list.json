@@ -217,7 +217,7 @@
   },
   {
     "name": "upsert_role",
-    "description": "Create or update a role (creates the company if needed). Pass id to update a known role. Otherwise a role is matched on its exact URL or ATS posting, never on title: with no match a new role starts as found, and possible_role_ids lists same-title roles at the company to rule out before scoring. A URL matching several roles, or a second posting ID from the same employer board, returns an error and writes nothing. Returns the dedupe result for new roles.",
+    "description": "Create or update a role (creates the company if needed). Pass id to update a known role. Otherwise a role is matched on its exact URL or ATS posting, never on title: with no match a new role starts as found, and possible_role_ids lists same-title roles at the company to rule out before scoring. A URL matching several roles, or a second posting ID from the same employer board, returns an error and writes nothing. Returns the find_company dedupe result unless id is given.",
     "inputSchema": {
       "type": "object",
       "properties": {

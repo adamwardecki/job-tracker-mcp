@@ -239,8 +239,9 @@ test('upsert_role and get_role expose aliases, evidence and postings', async (ct
   assert.deepEqual(made.data?.possible_role_ids, []);
   const role = made.data?.role as unknown as { id: number };
   const detail = await c('get_role', { role_id: role.id });
+  // The evidence is about the alias. The main URL was given, not inferred, so it carries none.
   assert.deepEqual(rows(detail.data?.urls), [
-    { url: `${ONE}?utm_source=mail`, normalized_url: ONE, evidence },
+    { url: `${ONE}?utm_source=mail`, normalized_url: ONE, evidence: null },
     { url: LINKEDIN, normalized_url: LINKEDIN, evidence },
   ]);
   assert.deepEqual(rows(detail.data?.postings), [{ provider: 'ashby', employer_key: 'acme', posting_id: 'one' }]);
@@ -335,4 +336,30 @@ test('two connections upserting one posting create one role', { timeout: 30_000 
   const db = openDb(path);
   ctx.after(() => db.close());
   assert.deepEqual(counts(new Tracker(db)), { roles: 1, companies: 1, urls: 1 });
+});
+
+test('a main URL that joins a role only through a known alias keeps the evidence', (ctx) => {
+  const t = fresh(ctx);
+  const { role } = t.upsertRole({ company: 'Acme', title: 'Engineer', url: ONE });
+  const evidence = 'The LinkedIn card links to the Ashby page';
+  assert.equal(t.upsertRole({ company: 'Acme', title: 'Engineer', url: LINKEDIN, url_aliases: [ONE], identity_evidence: evidence }).role.id, role.id);
+  const byUrl = Object.fromEntries(t.roleDetail({ role_id: role.id }).urls.map((u) => [u.url, u.evidence]));
+  assert.deepEqual(byUrl, { [ONE]: null, [LINKEDIN]: evidence });
+});
+
+test('an ATS alias gives a URL-less new role its main URL', (ctx) => {
+  const t = fresh(ctx);
+  const made = t.upsertRole({ company: 'Acme', title: 'Engineer', url_aliases: [ONE], identity_evidence: 'Recruiter mail names the Ashby req' });
+  assert.equal(made.role.url, ONE);
+  assert.equal(made.role.ats, 'ashby');
+  // A listing alone is still no main URL: approval would bind to a page that is not the form.
+  assert.equal(t.upsertRole({ company: 'Zenith', title: 'Engineer', url_aliases: [LINKEDIN], identity_evidence: 'x' }).role.url, null);
+});
+
+test('an ATS alias gives a URL-less role its main URL on an update by id', (ctx) => {
+  const t = fresh(ctx);
+  const { role } = t.upsertRole({ company: 'Acme', title: 'Engineer' });
+  const updated = t.upsertRole({ id: role.id, title: 'Engineer', url_aliases: [ONE], identity_evidence: 'Recruiter mail names the Ashby req' });
+  assert.equal(updated.role.url, ONE);
+  assert.equal(updated.role.ats, 'ashby');
 });

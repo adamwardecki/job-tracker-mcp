@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue, StatementResultingChanges } from 'nod
 import type { ConfigSections, Profile, SectionName } from './config.ts';
 import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './config.ts';
 import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RunRow, SourceRow } from './db.ts';
-import { indexRoleUrl, now, tx } from './db.ts';
+import { now, tx } from './db.ts';
 import { ToolError } from './errors.ts';
 import { atsFromUrl, nameScore, normalizeDomain, normalizeName } from './fuzzy.ts';
 import type { LintResult } from './lint.ts';
@@ -106,9 +106,13 @@ const companyAliases = (aliases: string[] | null | undefined, url: string | null
   return [...(aliases ?? []), ...(slug ? [slug] : [])];
 };
 
+type ClaimedUrl = PostingIdentity & { url: string };
+// What upsertRole will update: a known role (viaAlias: only an alias, not url, matched it), or a new one at company.
+type Target = { role: RoleRow; viaAlias: boolean } | { role: undefined; company: string };
+
 // The role's own URL first, then its aliases, each validated. A lookup tolerates a bad URL but a write must not:
 // what is stored here decides which history a later lead joins.
-function claimedUrls(f: ArgsFor<'upsert_role'>): (PostingIdentity & { url: string })[] {
+function claimedUrls(f: ArgsFor<'upsert_role'>): ClaimedUrl[] {
   const aliases: readonly unknown[] = f.url_aliases ?? [];
   for (const [i, a] of aliases.entries()) req(typeof a === 'string' && a.trim(), `url_aliases[${i}] must be a URL string.`);
   req(!aliases.length || f.identity_evidence?.trim(), 'url_aliases need identity_evidence: say how you confirmed the listings are one posting, e.g. the card links to the ATS page.');
@@ -422,10 +426,36 @@ export class Tracker {
     ).map((r) => r.role_id);
   }
 
-  // Internal, inside the caller's transaction. Accepts whatever is already stored or imported; upsertRole
-  // validates what callers send and refuses collisions before it gets here.
+  // Internal, inside the caller's transaction. Records that a role answers to these URLs and the ATS postings
+  // behind them. Accepts whatever is already stored or imported; upsertRole validates what callers send and refuses
+  // collisions before it gets here. A URL the role already has keeps its first row, evidence included.
   indexRoleUrls(role_id: number, urls: readonly string[], evidence?: string): void {
-    for (const url of urls) indexRoleUrl(this.db, role_id, url, evidence ?? null);
+    for (const url of urls) {
+      const { normalized_url, posting } = urlIdentity(url);
+      if (!normalized_url) continue;
+      this.run('INSERT OR IGNORE INTO role_urls(role_id, url, normalized_url, evidence) VALUES(?, ?, ?, ?)', role_id, url, normalized_url, evidence ?? null);
+      if (posting) this.run('INSERT OR IGNORE INTO role_postings(role_id, provider, employer_key, posting_id) VALUES(?, ?, ?, ?)', role_id, posting.provider, posting.employer_key, posting.posting_id);
+    }
+  }
+
+  // Which existing role this call is about, or none for a new one. Reads only: everything that can refuse the call
+  // is checked here or in checkPostingKeys, before anything is written.
+  resolveTarget(f: ArgsFor<'upsert_role'>, claims: readonly ClaimedUrl[]): Target {
+    const holders = claims.map((c) => this.exactRoleIds(c));
+    if (f.id) {
+      const role = this.roleRow(f.id);
+      req(role, `No role ${f.id}`);
+      // A role keeps what it already holds, so an old duplicate can still be updated. Only a new claim can collide.
+      const taken = [...new Set(holders.filter((h) => !h.includes(role.id)).flat())];
+      req(!taken.length, `This URL belongs to role ${taken.join(', ')}, so it cannot be added to role ${role.id}. Nothing was written. Check them with get_role.`);
+      return { role, viaAlias: false };
+    }
+    const matched = [...new Set(holders.flat())].sort((a, b) => a - b);
+    req(matched.length < 2, `This posting matches roles ${matched.join(', ')}. Nothing was written. Check them with get_role, then pass id to update one.`);
+    const [hit] = matched;
+    if (hit !== undefined) return { role: this.mustRole(hit), viaAlias: !!f.url && !holders[0]?.includes(hit) };
+    req(f.company, 'company is required for a new role');
+    return { role: undefined, company: f.company };
   }
 
   upsertRole(f: ArgsFor<'upsert_role'>) {
@@ -433,50 +463,36 @@ export class Tracker {
     const title = f.title;
     const claims = claimedUrls(f);
     return tx(this.db, () => {
-      let role = f.id ? this.roleRow(f.id) : undefined;
-      req(!f.id || role, `No role ${f.id}`);
-      const holders = claims.map((c) => this.exactRoleIds(c));
-      let company: Company;
-      let dedupe: ReturnType<Tracker['findCompany']> | undefined;
-      let possible_role_ids: number[] = [];
-      if (role) {
-        // A role keeps what it already holds, so an old duplicate can still be updated. Only a new claim can collide.
-        const id = role.id;
-        const taken = [...new Set(holders.filter((h) => !h.includes(id)).flat())];
-        req(!taken.length, `This URL belongs to role ${taken.join(', ')}, so it cannot be added to role ${id}. Nothing was written. Check them with get_role.`);
-        company = this.mustCompany(role.company_id);
-      } else {
-        const matched = [...new Set(holders.flat())].sort((a, b) => a - b);
-        req(matched.length < 2, `This posting matches roles ${matched.join(', ')}. Nothing was written. Check them with get_role, then pass id to update one.`);
-        const [hit] = matched;
-        const lookup = { name: f.company, domain: f.company_domain, url: claims[0]?.url };
-        if (hit === undefined) {
-          req(f.company, 'company is required for a new role');
-          dedupe = this.findCompany(lookup);
-          company = this.upsertCompany({ ...lookup, name: f.company, aliases: f.company_aliases }).company;
-          const nt = normalizeName(title);
-          possible_role_ids = this.q<Pick<RoleRow, 'id' | 'title'>>('SELECT id, title FROM roles WHERE company_id = ?', company.id).filter((r) => normalizeName(r.title) === nt).map((r) => r.id);
-        } else {
-          dedupe = this.findCompany(lookup);
-          role = this.mustRole(hit);
-          company = this.mustCompany(role.company_id);
-          // The posting says which company this is. A name that disagrees is a label from the listing, not a move.
-          if (f.company && nameScore(f.company, [company.name, ...company.aliases]) >= 1) company = this.mergeCompany(company, companyAliases(f.company_aliases, lookup.url), f.company_domain);
-        }
-      }
+      const target = this.resolveTarget(f, claims);
+      const { role } = target;
       const held = role ? this.q<PostingKey>('SELECT provider, employer_key, posting_id FROM role_postings WHERE role_id = ?', role.id) : [];
       checkPostingKeys(held, claims.flatMap((c) => (c.posting ? [c.posting] : [])), !!f.identity_evidence?.trim());
+
+      const lookup = { name: f.company, domain: f.company_domain, url: claims[0]?.url };
+      const dedupe = f.id ? undefined : this.findCompany(lookup);
+      let company: Company;
+      let possible_role_ids: number[] = [];
+      if (target.role) {
+        company = this.mustCompany(target.role.company_id);
+        // The posting says which company this is. A name that disagrees is a label from the listing, not a move.
+        if (!f.id && f.company && nameScore(f.company, [company.name, ...company.aliases]) >= 1) company = this.mergeCompany(company, companyAliases(f.company_aliases, lookup.url), f.company_domain);
+      } else {
+        company = this.upsertCompany({ ...lookup, name: target.company, aliases: f.company_aliases }).company;
+        const nt = normalizeName(title);
+        possible_role_ids = this.q<Pick<RoleRow, 'id' | 'title'>>('SELECT id, title FROM roles WHERE company_id = ?', company.id).filter((r) => normalizeName(r.title) === nt).map((r) => r.id);
+      }
       const vals: Record<string, SQLInputValue> = {};
       for (const k of ROLE_FIELDS) {
         const v = f[k];
         if (v !== undefined) vals[k] = v;
       }
-      // url is offered first (an update by id may refresh it), then aliases, which can only upgrade a listing to an ATS link.
+      // url is offered first (an update by id may refresh it), then aliases. An alias can upgrade a listing to an
+      // ATS link, or give a role with no URL its ATS link; a listing alias never becomes the URL approval binds to.
       let primary = role?.url ?? null;
       let chosen: string | undefined;
       for (const [i, c] of claims.entries()) {
         const isUrl = i === 0 && !!f.url;
-        if ((isUrl || primary) && takesPrimary(primary, c, isUrl && !!f.id)) [primary, chosen] = [c.url, c.url];
+        if ((isUrl || primary || c.posting) && takesPrimary(primary, c, isUrl && !!f.id)) [primary, chosen] = [c.url, c.url];
       }
       if (chosen) vals.url = chosen;
       else delete vals.url;
@@ -501,7 +517,11 @@ export class Tracker {
         this.insertEvent({ role_id: roleId, status: 'found', reason: `Found via ${f.source || 'unknown source'}`, evidence: f.url || null, actor: 'pipeline' });
         created = true;
       }
-      this.indexRoleUrls(roleId, claims.map((c) => c.url), f.identity_evidence ?? undefined);
+      // The evidence is about the aliases. Aliases go first, so a main URL also listed as an alias keeps it; the main
+      // URL carries it on its own only when an alias, not the URL, is what tied it to this role.
+      const evidence = f.identity_evidence ?? undefined;
+      this.indexRoleUrls(roleId, f.url_aliases ?? [], evidence);
+      if (f.url) this.indexRoleUrls(roleId, [f.url], target.role && target.viaAlias ? evidence : undefined);
       return { role: this.mustRole(roleId), company, created, dedupe, possible_role_ids };
     });
   }

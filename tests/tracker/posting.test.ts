@@ -271,3 +271,17 @@ test('the same posting id under two employers is two identities, per provider', 
   ];
   for (const [url, want] of cases) assert.deepEqual(parsePostingUrl(url).posting, want, url);
 });
+
+// role_urls and role_postings store these outputs, and migration 3 wrote them for existing roles. If one of these
+// has to change, add a migration that reindexes both tables in the same commit; then update the expectation.
+test('stored identities are pinned: a change to normalisation or keys needs a reindex migration', () => {
+  const cases: [string, string, PostingKey | null][] = [
+    ['https://jobs.ashbyhq.com/Acme/6F1A2B3C-0000-4000-8000-ABCDEFABCDEF/application?utm_source=li#apply', 'https://jobs.ashbyhq.com/Acme/6F1A2B3C-0000-4000-8000-ABCDEFABCDEF/application', { provider: 'ashby', employer_key: 'acme', posting_id: '6f1a2b3c-0000-4000-8000-abcdefabcdef' }],
+    ['https://job-boards.greenhouse.io/acme/jobs/4012345?gh_src=x', 'https://job-boards.greenhouse.io/acme/jobs/4012345', { provider: 'greenhouse', employer_key: 'acme', posting_id: '4012345' }],
+    [`${EMBED}?for=Acme&token=4012345`, `${EMBED}?for=Acme&token=4012345`, { provider: 'greenhouse', employer_key: 'acme', posting_id: '4012345' }],
+    ['https://jobs.eu.lever.co/acme/AbC-123/apply?lever-source=x', 'https://jobs.eu.lever.co/acme/AbC-123/apply', { provider: 'lever', employer_key: 'acme', posting_id: 'AbC-123' }],
+    ['https://apply.workable.com/acme/j/A1B2C3D4E5/', 'https://apply.workable.com/acme/j/A1B2C3D4E5/', { provider: 'workable', employer_key: 'acme', posting_id: 'A1B2C3D4E5' }],
+    ['https://Careers.Example.com/jobs/42?ref=board&utm_medium=email&trk=x#top', 'https://careers.example.com/jobs/42?ref=board', null],
+  ];
+  for (const [raw, normalized_url, posting] of cases) assert.deepEqual(parsePostingUrl(raw), { normalized_url, posting }, raw);
+});

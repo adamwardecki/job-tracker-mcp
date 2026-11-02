@@ -322,16 +322,6 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-// Records that a role answers to this URL, and to the ATS posting behind it if there is one. Evidence is kept if
-// the URL is seen again. Whether the identity may join this role is for the caller to decide.
-export function indexRoleUrl(db: DatabaseSync, role_id: number, url: string, evidence: string | null = null): void {
-  const { normalized_url, posting } = urlIdentity(url);
-  if (!normalized_url) return;
-  db.prepare(`INSERT INTO role_urls(role_id, url, normalized_url, evidence) VALUES(?, ?, ?, ?)
-    ON CONFLICT(role_id, normalized_url) DO UPDATE SET evidence = COALESCE(role_urls.evidence, excluded.evidence)`).run(role_id, url, normalized_url, evidence);
-  if (posting) db.prepare('INSERT OR IGNORE INTO role_postings(role_id, provider, employer_key, posting_id) VALUES(?, ?, ?, ?)').run(role_id, posting.provider, posting.employer_key, posting.posting_id);
-}
-
 export const SCHEMA_VERSION = 3;
 
 // MIGRATIONS[i] takes the schema from version i + 1 to i + 2. Append only; never edit a shipped one.
@@ -379,8 +369,16 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       );
       CREATE INDEX role_postings_lookup ON role_postings(provider, employer_key, posting_id);
     `);
+    // The SQL is written out here, not shared with the tracker, so this step stays what it was when it shipped.
+    const addUrl = db.prepare('INSERT OR IGNORE INTO role_urls(role_id, url, normalized_url, evidence) VALUES(?, ?, ?, NULL)');
+    const addKey = db.prepare('INSERT OR IGNORE INTO role_postings(role_id, provider, employer_key, posting_id) VALUES(?, ?, ?, ?)');
     const rows = db.prepare("SELECT id, url FROM roles WHERE typeof(url) = 'text' ORDER BY id").all() as { id: number; url: string }[];
-    for (const r of rows) indexRoleUrl(db, r.id, r.url);
+    for (const r of rows) {
+      const { normalized_url, posting } = urlIdentity(r.url);
+      if (!normalized_url) continue;
+      addUrl.run(r.id, r.url, normalized_url);
+      if (posting) addKey.run(r.id, posting.provider, posting.employer_key, posting.posting_id);
+    }
   },
 ];
 
