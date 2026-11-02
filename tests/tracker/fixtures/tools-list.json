@@ -333,13 +333,13 @@
   },
   {
     "name": "link_duplicate_role",
-    "description": "Link a historical duplicate row to the canonical role for the same posting. Nothing is deleted: the duplicate's events, artifacts and interviews show under the canonical role, and its id resolves to that role in every tool. Same company only. Refuses two posting IDs from one employer board, and histories that disagree: the canonical role must already hold the latest state, including any applied, interviewing, offer or closed outcome (fix it with transition or record first). A duplicate already linked to another role is refused. A canonical role's own duplicates move along when it is linked. Linking the same pair again returns the group.",
+    "description": "Link a historical duplicate row to the canonical role for the same posting. Nothing is deleted: the duplicate's events, artifacts and interviews show under the canonical role, and its id resolves to that role in every tool. Same company only. Refuses two posting IDs from one employer board, and histories that disagree. A duplicate with only preparatory states links under a role with an application history, or under a preparatory role that moved last. A duplicate with an application history needs the same latest status and outcome on the canonical role, no older (fix it with transition or record first). A duplicate already linked to another role is refused. A canonical role's own duplicates move along when it is linked. Linking the same pair again returns the group.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "canonical_role_id": {
           "type": "integer",
-          "description": "The role to keep as the card. It must already hold the latest state. A linked duplicate's id stands for its canonical role"
+          "description": "The role to keep as the card. A linked duplicate's id stands for its canonical role"
         },
         "duplicate_role_id": {
           "type": "integer",

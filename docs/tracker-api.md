@@ -76,7 +76,7 @@ closed (from queued | applied | interviewing | offer), with outcome: rejected | 
 | `audit` | `run_id?` or `date?` (one is required) | Post-run rule check: excluded industries touched, drops without evidence, applied without confirmation, prose lint failures in artifacts, unverified drafts. `{ok, failures[]}` |
 | `pipeline_summary` | `stale_after_days?` (14) | Counts by status, live processes (interviewing, offer), awaiting reply, rejections, fresh and stale queue |
 | `open_board` | `open?` (bool, default false: also open the default browser) | `{reused, opened, url?}`. With `open: true` and the browser opened, no `url`: the token stays out of the model's context. Otherwise `url`, and the text result is `Board: <url>`. Starts the local board for this database, or reuses the running one. See [Board](#board). |
-| `import_legacy` | `applied_log?` (markdown), `preferences?` (markdown), `queue?` (`[{filename, content}]`), `documents?` (`{profile, stories, reusable-answers}`), `path?` (local only: a `pipeline/` folder) | Import counts and unparsed rows |
+| `import_legacy` | `applied_log?` (markdown), `preferences?` (markdown), `queue?` (`[{filename, content}]`), `documents?` (`{profile, stories, reusable-answers}`), `path?` (local only: a `pipeline/` folder) | Import counts and unparsed rows. If a queue note's URL matches two roles that are not linked, the import stops with an error naming them and writes nothing. Check them with `get_role`, link them with `link_duplicate_role` if they are one posting, then import again. |
 
 ## Duplicate roles
 
@@ -89,8 +89,10 @@ the reason and evidence. Nothing is deleted and no event is rewritten.
   agree: a duplicate with only preparatory states (found, verified, scored, queued, or dropped before any
   application) links under a canonical role that has an applied, interviewing, offer or closed event. When the
   duplicate has such an event, the canonical role needs one too, both latest statuses (and outcomes) must match,
-  and the canonical's must be no older than the duplicate's. Two preparatory rows link when the canonical one
-  moved last. Linking never changes a status: correct the canonical role with `transition` or `record` first.
+  and the canonical's must be no older than the duplicate's. Here "latest" means the latest status event of any
+  kind, so a later move to queued or dropped counts and is refused unless it matches. Two preparatory rows link only
+  when the canonical one moved last; otherwise swap the ids. Linking never changes a status: correct the canonical
+  role with `transition` or `record` first.
 - **Groups stay flat.** Every link points at a root. A `canonical_role_id` that is itself a duplicate stands for
   its root. A `duplicate_role_id` already linked to another root is refused with the root to link instead, and a
   root cannot become a duplicate of its own member. Linking a root that has duplicates moves them to the new root
