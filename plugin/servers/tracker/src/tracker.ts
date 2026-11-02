@@ -3,7 +3,7 @@
 import type { DatabaseSync, SQLInputValue, StatementResultingChanges } from 'node:sqlite';
 import type { ConfigSections, Profile, SectionName } from './config.ts';
 import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './config.ts';
-import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RunRow, SourceRow } from './db.ts';
+import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RunRow, SourceRow } from './db.ts';
 import { now, tx } from './db.ts';
 import { ToolError } from './errors.ts';
 import { atsFromUrl, nameScore, normalizeDomain, normalizeName } from './fuzzy.ts';
@@ -99,6 +99,7 @@ export function userMoves(role: Pick<RoleRow, 'status' | 'verified_at' | 'score'
 function req(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new ToolError(msg);
 }
+const marks = (ids: readonly unknown[]) => ids.map(() => '?').join(', ');
 const day = (iso: string | null | undefined) => String(iso || '').slice(0, 10);
 
 const companyAliases = (aliases: string[] | null | undefined, url: string | null | undefined): string[] => {
@@ -117,6 +118,35 @@ function claimedUrls(f: ArgsFor<'upsert_role'>): ClaimedUrl[] {
   for (const [i, a] of aliases.entries()) req(typeof a === 'string' && a.trim(), `url_aliases[${i}] must be a URL string.`);
   req(!aliases.length || f.identity_evidence?.trim(), 'url_aliases need identity_evidence: say how you confirmed the listings are one posting, e.g. the card links to the ATS page.');
   return [...(f.url ? [f.url] : []), ...(f.url_aliases ?? [])].map((url) => ({ url, ...parsePostingUrl(url) }));
+}
+
+// SQL fragments for consumers that show one card per linked group. col is a role id column.
+// isCard: the role is not a linked duplicate. groupOf: the ids of a canonical role's group, for `x IN groupOf(...)`.
+// canonicalOf: the card a role's rows are attributed to.
+export const isCard = (col: string) => `${col} NOT IN (SELECT duplicate_role_id FROM role_links)`;
+export const groupOf = (col: string) => `(SELECT ${col} UNION ALL SELECT duplicate_role_id FROM role_links WHERE canonical_role_id = ${col})`;
+export const canonicalOf = (col: string) => `COALESCE((SELECT canonical_role_id FROM role_links WHERE duplicate_role_id = ${col}), ${col})`;
+
+// Statuses that record what happened with the employer. Everything before them is the sweep's own preparation,
+// including a drop before any application.
+const AUTHORITATIVE: readonly string[] = ['applied', 'interviewing', 'offer', 'closed'];
+type StatusEvent = Pick<EventRow, 'ts' | 'status' | 'outcome'>;
+const stateLabel = (e: StatusEvent) => (e.status === 'closed' ? `closed (${e.outcome ?? 'no outcome'})` : String(e.status));
+
+// Whether a duplicate's history can sit under the canonical role's card without hiding what happened. Each side is
+// a root id and its group's status events, oldest first. Nothing here ranks states: the canonical role must already
+// show the latest state itself, and the normal evidence-backed workflow corrects it first when it does not.
+function checkHistories(canonical: { id: number; events: StatusEvent[] }, duplicate: { id: number; events: StatusEvent[] }): void {
+  const applied = (evs: StatusEvent[]) => evs.some((e) => AUTHORITATIVE.includes(String(e.status)));
+  const c = canonical.events.at(-1);
+  const d = duplicate.events.at(-1);
+  // Preparation only, under a role that went further: nothing the employer did is hidden.
+  if (!d || (applied(canonical.events) && !applied(duplicate.events))) return;
+  if (applied(duplicate.events)) {
+    req(c && applied(canonical.events), `Role ${duplicate.id} is ${stateLabel(d)}, but role ${canonical.id} has no application history. Nothing was written. Record that state on role ${canonical.id} first (transition or record, with its evidence), or link role ${canonical.id} into role ${duplicate.id}.`);
+    req(c.status === d.status && (c.outcome ?? null) === (d.outcome ?? null), `The histories disagree: role ${canonical.id} is ${stateLabel(c)} and role ${duplicate.id} is ${stateLabel(d)}. Nothing was written. Linking would hide one of them; correct the wrong one with transition or record first.`);
+  }
+  req(c && c.ts >= d.ts, `Role ${duplicate.id} became ${stateLabel(d)} on ${d.ts}, after role ${canonical.id} (${c?.ts ?? 'no status yet'}). Nothing was written. The canonical role must hold the latest state: link role ${canonical.id} into role ${duplicate.id} instead, or record the state on role ${canonical.id} first.`);
 }
 
 const keyLabel = (k: PostingKey) => `${k.provider} ${k.employer_key}/${k.posting_id}`;
@@ -326,7 +356,7 @@ export class Tracker {
     req(name || domain || url, 'Pass name, domain or url');
     const dom = normalizeDomain(domain);
     const slug = atsFromUrl(url).slug;
-    const exact_role_ids = url ? this.exactRoleIds(urlIdentity(url)) : [];
+    const exact_role_ids = url ? this.exactGroups(urlIdentity(url)) : [];
     const exact = exact_role_ids.map((id) => this.mustRole(id));
     const exactCompanies = new Set(exact.map((r) => r.company_id));
     const matches: { c: CompanyRow; score: number }[] = [];
@@ -426,6 +456,11 @@ export class Tracker {
     ).map((r) => r.role_id);
   }
 
+  // The canonical roles behind an exact match: rows of one linked group are one role, independent rows a conflict.
+  exactGroups(identity: PostingIdentity): number[] {
+    return [...new Set(this.exactRoleIds(identity).map((id) => this.canonicalRoleId(id)))].sort((a, b) => a - b);
+  }
+
   // Internal, inside the caller's transaction. Records that a role answers to these URLs and the ATS postings
   // behind them. Accepts whatever is already stored or imported; upsertRole validates what callers send and refuses
   // collisions before it gets here. A URL the role already has keeps its first row, evidence included.
@@ -443,14 +478,15 @@ export class Tracker {
   resolveTarget(f: ArgsFor<'upsert_role'>, claims: readonly ClaimedUrl[]): Target {
     const holders = claims.map((c) => this.exactRoleIds(c));
     if (f.id) {
-      const role = this.roleRow(f.id);
+      const role = this.roleRow(this.canonicalRoleId(f.id));
       req(role, `No role ${f.id}`);
-      // A role keeps what it already holds, so an old duplicate can still be updated. Only a new claim can collide.
-      const taken = [...new Set(holders.filter((h) => !h.includes(role.id)).flat())];
+      // A role keeps what its group already holds, so an old duplicate can still be updated. Only a new claim can collide.
+      const group = this.roleGroupIds(role.id);
+      const taken = [...new Set(holders.filter((h) => !h.some((id) => group.includes(id))).flat())];
       req(!taken.length, `This URL belongs to role ${taken.join(', ')}, so it cannot be added to role ${role.id}. Nothing was written. Check them with get_role.`);
       return { role };
     }
-    const matched = [...new Set(holders.flat())].sort((a, b) => a - b);
+    const matched = [...new Set(holders.flat().map((id) => this.canonicalRoleId(id)))].sort((a, b) => a - b);
     req(matched.length < 2, `This posting matches roles ${matched.join(', ')}. Nothing was written. Check them with get_role, then pass id to update one.`);
     const [hit] = matched;
     if (hit !== undefined) return { role: this.mustRole(hit) };
@@ -465,7 +501,7 @@ export class Tracker {
     return tx(this.db, () => {
       const target = this.resolveTarget(f, claims);
       const { role } = target;
-      const held = role ? this.q<PostingKey>('SELECT provider, employer_key, posting_id FROM role_postings WHERE role_id = ?', role.id) : [];
+      const held = role ? this.groupPostings(this.roleGroupIds(role.id)) : [];
       checkPostingKeys(held, claims.flatMap((c) => (c.posting ? [c.posting] : [])), !!f.identity_evidence?.trim());
 
       const lookup = { name: f.company, domain: f.company_domain, url: claims[0]?.url };
@@ -479,7 +515,7 @@ export class Tracker {
       } else {
         company = this.upsertCompany({ ...lookup, name: target.company, aliases: f.company_aliases }).company;
         const nt = normalizeName(title);
-        possible_role_ids = this.q<Pick<RoleRow, 'id' | 'title'>>('SELECT id, title FROM roles WHERE company_id = ?', company.id).filter((r) => normalizeName(r.title) === nt).map((r) => r.id);
+        possible_role_ids = this.q<Pick<RoleRow, 'id' | 'title'>>(`SELECT id, title FROM roles r WHERE company_id = ? AND ${isCard('r.id')}`, company.id).filter((r) => normalizeName(r.title) === nt).map((r) => r.id);
       }
       const vals: Record<string, SQLInputValue> = {};
       for (const k of ROLE_FIELDS) {
@@ -527,7 +563,9 @@ export class Tracker {
     });
   }
 
-  insertEvent({ role_id, status = null, outcome = null, category = null, question = null, blocked_by = null, actor, reason, evidence = null, run_id = null, ts = now() }: EventInput): void {
+  // Every event lands on the canonical role, so nothing can move a linked duplicate's status after the link.
+  insertEvent({ role_id: requested, status = null, outcome = null, category = null, question = null, blocked_by = null, actor, reason, evidence = null, run_id = null, ts = now() }: EventInput): void {
+    const role_id = this.canonicalRoleId(requested);
     this.run(
       'INSERT INTO events(role_id, ts, status, outcome, category, question, blocked_by, actor, reason, evidence, run_id) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       role_id, ts, status, outcome, category, question, blocked_by, actor, reason, evidence, run_id,
@@ -554,12 +592,14 @@ export class Tracker {
   // MACHINE. The MCP tool's schema has neither and checkArgs rejects unknown arguments, so calls from the
   // model are always the pipeline, forward-only, and always need evidence for applied and dropped. (record
   // takes an actor, but never selfReported.)
-  transition(a: ArgsFor<'transition'>, { actor = 'pipeline', selfReported = false }: { actor?: 'pipeline' | 'user'; selfReported?: boolean } = {}) {
-    req(a.to, 'to is required');
+  transition(input: ArgsFor<'transition'>, { actor = 'pipeline', selfReported = false }: { actor?: 'pipeline' | 'user'; selfReported?: boolean } = {}) {
+    req(input.to, 'to is required');
     req(!selfReported || actor === 'user', 'Only the user can make a self-reported move.');
     return tx(this.db, () => {
-      const role = this.roleRow(a.role_id);
-      req(role, `No role ${a.role_id}`);
+      const role = this.roleRow(this.canonicalRoleId(input.role_id));
+      req(role, `No role ${input.role_id}`);
+      // A linked duplicate's id moves its canonical role: the check, the event and the row update all use that role.
+      const a = { ...input, role_id: role.id };
       const from = role.status || 'found';
       if (selfReported) {
         const { moves, why } = userMoves(role);
@@ -592,30 +632,94 @@ export class Tracker {
     req(oneOf(['user', 'employer', 'pipeline'], a.actor), 'actor: user | employer | pipeline');
     req(a.status !== 'verified', 'Use transition(to: "verified") so verified_at is set with evidence.');
     return tx(this.db, () => {
-      this.validateEvent(a);
-      this.insertEvent(a);
-      return { role: this.roleRow(a.role_id) };
+      const ev = { ...a, role_id: this.canonicalRoleId(a.role_id) };
+      this.validateEvent(ev);
+      this.insertEvent(ev);
+      return { role: this.roleRow(ev.role_id) };
     });
   }
 
+  // Links always point at a root (linkDuplicateRole flattens them), so one lookup finds the canonical role.
+  canonicalRoleId(id: number): number {
+    return this.one<{ id: number }>('SELECT canonical_role_id AS id FROM role_links WHERE duplicate_role_id = ?', id)?.id ?? id;
+  }
+
+  // The canonical role first, then its linked duplicates in id order.
+  roleGroupIds(id: number): number[] {
+    const root = this.canonicalRoleId(id);
+    return [root, ...this.q<{ id: number }>('SELECT duplicate_role_id AS id FROM role_links WHERE canonical_role_id = ? ORDER BY duplicate_role_id', root).map((r) => r.id)];
+  }
+
+  // Every ATS posting a group of roles holds.
+  groupPostings(ids: readonly number[]): PostingKey[] {
+    return this.q<PostingKey>(`SELECT DISTINCT provider, employer_key, posting_id FROM role_postings WHERE role_id IN (${marks(ids)})`, ...ids);
+  }
+
+  // Status events of a group of roles, oldest first.
+  groupStatusEvents(ids: readonly number[]): StatusEvent[] {
+    return this.q<StatusEvent>(`SELECT ts, status, outcome FROM events WHERE status IS NOT NULL AND role_id IN (${marks(ids)}) ORDER BY ts, id`, ...ids);
+  }
+
+  linkDuplicateRole({ canonical_role_id, duplicate_role_id, reason, evidence }: ArgsFor<'link_duplicate_role'>) {
+    req(reason.trim(), 'reason is required: why the two rows are one role.');
+    req(evidence.trim(), 'evidence is required: how you confirmed both rows are the same posting, e.g. the ATS URL both link to.');
+    req(canonical_role_id !== duplicate_role_id, `Role ${duplicate_role_id} cannot be linked to itself. Pass the other row as canonical_role_id.`);
+    return tx(this.db, () => {
+      // A duplicate named as canonical stands for its root, like any old id. The duplicate is taken as named.
+      const canonical = this.mustRole(this.canonicalRoleId(canonical_role_id));
+      const duplicate = this.mustRole(duplicate_role_id);
+      const group = () => ({ canonical_role_id: canonical.id, linked_role_ids: this.roleGroupIds(canonical.id).slice(1) });
+      req(duplicate.id !== canonical.id, `Role ${canonical.id} is the canonical role of this group (linked: ${group().linked_role_ids.join(', ')}). Nothing was written. A group's root cannot become a duplicate of its own members.`);
+      const root = this.canonicalRoleId(duplicate.id);
+      if (root === canonical.id) return group();
+      req(root === duplicate.id, `Role ${duplicate.id} is already linked to role ${root}. Nothing was written. To merge the groups, link role ${root} into role ${canonical.id}.`);
+      const company = this.mustCompany(canonical.company_id);
+      req(duplicate.company_id === company.id, `Role ${duplicate.id} is at ${this.mustCompany(duplicate.company_id).name} and role ${canonical.id} at ${company.name}. Only roles at the same company can be linked. Nothing was written.`);
+      const canonicalGroup = this.roleGroupIds(canonical.id);
+      const duplicateGroup = this.roleGroupIds(duplicate.id);
+      const held = this.groupPostings(canonicalGroup);
+      for (const k of this.groupPostings(duplicateGroup)) {
+        const clash = held.find((h) => h.provider === k.provider && h.employer_key === k.employer_key && h.posting_id !== k.posting_id);
+        if (clash) throw new ToolError(`${keyLabel(clash)} and ${keyLabel(k)} are different postings on one employer board, so roles ${canonical.id} and ${duplicate.id} are different requisitions. Nothing was written.`);
+      }
+      checkHistories({ id: canonical.id, events: this.groupStatusEvents(canonicalGroup) }, { id: duplicate.id, events: this.groupStatusEvents(duplicateGroup) });
+      // A root's own duplicates move with it, so every link still points at a root.
+      this.run('UPDATE role_links SET canonical_role_id = ? WHERE canonical_role_id = ?', canonical.id, duplicate.id);
+      this.run('INSERT INTO role_links(duplicate_role_id, canonical_role_id, reason, evidence, created_at) VALUES(?, ?, ?, ?, ?)', duplicate.id, canonical.id, reason.trim(), evidence.trim(), now());
+      return group();
+    });
+  }
+
+  // A linked duplicate's id shows its canonical role, with the history, artifacts, interviews and URLs of every row
+  // in the group under their original ids.
   roleDetail({ role_id }: ArgsFor<'get_role'>) {
-    const role = this.roleRow(role_id);
+    const role = this.roleRow(this.canonicalRoleId(role_id));
     req(role, `No role ${role_id}`);
-    type ArtifactSummary = Pick<ArtifactRow, 'id' | 'kind' | 'path_or_ref' | 'verified_at' | 'created_at' | 'lint'>;
+    const group = this.roleGroupIds(role.id);
+    const inGroup = `IN (${marks(group)})`;
+    type ArtifactSummary = Pick<ArtifactRow, 'id' | 'role_id' | 'kind' | 'path_or_ref' | 'verified_at' | 'created_at' | 'lint'>;
+    type LinkSummary = Omit<RoleLinkRow, 'canonical_role_id'> & Pick<RoleRow, 'title' | 'url' | 'status'>;
+    const distinct = <T>(rows: T[]) => [...new Map(rows.map((r) => [JSON.stringify(r), r])).values()];
     return {
+      requested_role_id: role_id,
       role,
+      linked_role_ids: group.slice(1),
+      links: this.q<LinkSummary>(`SELECT l.duplicate_role_id, r.title, r.url, r.status, l.reason, l.evidence, l.created_at FROM role_links l JOIN roles r ON r.id = l.duplicate_role_id
+        WHERE l.canonical_role_id = ? ORDER BY l.duplicate_role_id`, role.id),
       company: this.companyRow(role.company_id),
-      events: this.q<EventRow>('SELECT * FROM events WHERE role_id = ? ORDER BY ts, id', role_id),
-      artifacts: this.q<ArtifactSummary>('SELECT id, kind, path_or_ref, verified_at, created_at, lint FROM artifacts WHERE role_id = ?', role_id).map((a) => ({ ...a, lint: parseJson<LintResult | null>(a.lint, null) })),
-      interviews: this.q<InterviewRow>('SELECT * FROM interviews WHERE role_id = ?', role_id),
-      urls: this.q<Omit<RoleUrlRow, 'role_id'>>('SELECT url, normalized_url, evidence FROM role_urls WHERE role_id = ?', role_id),
-      postings: this.q<Omit<RolePostingRow, 'role_id'>>('SELECT provider, employer_key, posting_id FROM role_postings WHERE role_id = ?', role_id),
+      events: this.q<EventRow>(`SELECT * FROM events WHERE role_id ${inGroup} ORDER BY ts, id`, ...group),
+      artifacts: this.q<ArtifactSummary>(`SELECT id, role_id, kind, path_or_ref, verified_at, created_at, lint FROM artifacts WHERE role_id ${inGroup} ORDER BY id`, ...group).map((a) => ({ ...a, lint: parseJson<LintResult | null>(a.lint, null) })),
+      interviews: this.q<InterviewRow>(`SELECT * FROM interviews WHERE role_id ${inGroup} ORDER BY id`, ...group),
+      // A URL both rows hold is listed once.
+      urls: distinct(this.q<Omit<RoleUrlRow, 'role_id'>>(`SELECT url, normalized_url, evidence FROM role_urls WHERE role_id ${inGroup} ORDER BY role_id != ?, role_id, normalized_url`, ...group, role.id)),
+      postings: distinct(this.q<Omit<RolePostingRow, 'role_id'>>(`SELECT provider, employer_key, posting_id FROM role_postings WHERE role_id ${inGroup} ORDER BY role_id != ?, role_id, provider, employer_key, posting_id`, ...group, role.id)),
     };
   }
 
-  gateCheck({ role_id }: ArgsFor<'gate_check'>): GateResult {
+  gateCheck({ role_id: requested }: ArgsFor<'gate_check'>): GateResult {
+    const role_id = this.canonicalRoleId(requested);
     const role = this.roleRow(role_id);
-    if (!role) return { ok: false, problems: [`No role ${role_id}`] };
+    if (!role) return { ok: false, problems: [`No role ${requested}`] };
     const company = this.mustCompany(role.company_id);
     const problems: string[] = [];
     if (!role.verified_at) problems.push('Role not verified on the employer posting (verified_at is empty).');
@@ -644,9 +748,10 @@ export class Tracker {
 
   // ---------- artifacts ----------
 
-  addArtifact({ role_id, kind, ref, content }: ArgsFor<'add_artifact'>) {
+  addArtifact({ role_id: requested, kind, ref, content }: ArgsFor<'add_artifact'>) {
+    const role_id = requested == null ? null : this.canonicalRoleId(requested);
     req(['cover_note', 'cover_letter_pdf', 'gmail_draft', 'form_answers', 'confirmation', 'note'].includes(kind), 'kind: cover_note | cover_letter_pdf | gmail_draft | form_answers | confirmation | note');
-    if (role_id != null) req(this.roleRow(role_id), `No role ${role_id}`);
+    if (role_id != null) req(this.roleRow(role_id), `No role ${requested}`);
     if (kind === 'gmail_draft') req(ref, 'gmail_draft needs ref = the Gmail draft id');
     const maxWords = kind === 'cover_note' ? this.section('writing').max_words_cover_note : undefined;
     const lint = content && PROSE_KINDS.includes(kind) ? lintProse(content, { max_words: maxWords }) : null;
@@ -662,7 +767,12 @@ export class Tracker {
       where.push(cond);
       params.push(...p);
     }
-    if (role_id != null) where.push('a.role_id = ?') && params.push(role_id);
+    // A role's artifacts include those of its linked duplicates, under their original role_id.
+    if (role_id != null) {
+      const group = this.roleGroupIds(role_id);
+      where.push(`a.role_id IN (${marks(group)})`);
+      params.push(...group);
+    }
     if (kind) where.push('a.kind = ?') && params.push(kind);
     type Listed = Pick<ArtifactRow, 'id' | 'role_id' | 'kind' | 'path_or_ref' | 'content' | 'lint' | 'verified_at' | 'created_at'> & { company: string | null };
     const rows = this.q<Listed>(`SELECT a.id, a.role_id, a.kind, a.path_or_ref, a.content, a.lint, a.verified_at, a.created_at, c.name AS company FROM artifacts a
@@ -722,16 +832,16 @@ export class Tracker {
   addInterview(a: ArgsFor<'add_interview'>) {
     req(a.stage, 'stage is required');
     return tx(this.db, () => {
-      const role = this.roleRow(a.role_id);
+      const role = this.roleRow(this.canonicalRoleId(a.role_id));
       req(role, `No role ${a.role_id}`);
       if (a.tz != null && !isValidTimeZone(a.tz)) throw zoneError(a.tz);
       const startsAt = a.starts_at ? toUtcIso(a.starts_at, a.tz || this.timezone()) : null;
       const r = this.run(
         'INSERT INTO interviews(role_id, starts_at, tz, stage, people, link, booked_by, notes, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        a.role_id, startsAt, a.tz || null, a.stage, a.people || null, a.link || null, a.booked_by || null, a.notes || null, now(),
+        role.id, startsAt, a.tz || null, a.stage, a.people || null, a.link || null, a.booked_by || null, a.notes || null, now(),
       );
       if (role.status !== 'interviewing') {
-        this.insertEvent({ role_id: a.role_id, status: 'interviewing', actor: 'employer', reason: `Interview: ${a.stage}`, evidence: a.link || a.notes || null });
+        this.insertEvent({ role_id: role.id, status: 'interviewing', actor: 'employer', reason: `Interview: ${a.stage}`, evidence: a.link || a.notes || null });
       }
       return { interview_id: Number(r.lastInsertRowid) };
     });
@@ -739,45 +849,47 @@ export class Tracker {
 
   // ---------- views ----------
 
+  // Views show one card per linked group: duplicates are left out, and their events, questions and interviews count
+  // toward the canonical role's card, judged by that card's status.
   openItems({ stale_after_days }: ArgsFor<'open_items'> = {}) {
     const cutoff = new Date(Date.now() - (stale_after_days ?? 14) * 864e5).toISOString();
     type Queued = Pick<RoleRow, 'id' | 'title' | 'url' | 'score'> & { company: string; question: string | null; blocked_by: string | null; last_event: string | null };
     type Booking = InterviewRow & { company: string; title: string };
     const all = this.q<Queued>(`
       SELECT r.id, c.name AS company, r.title, r.url, r.score,
-        (SELECT question FROM events e WHERE e.role_id = r.id AND e.status = 'queued' ORDER BY e.ts DESC, e.id DESC LIMIT 1) AS question,
-        (SELECT blocked_by FROM events e WHERE e.role_id = r.id AND e.status = 'queued' ORDER BY e.ts DESC, e.id DESC LIMIT 1) AS blocked_by
-        , (SELECT MAX(ts) FROM events e WHERE e.role_id = r.id) AS last_event
-      FROM roles r JOIN companies c ON c.id = r.company_id WHERE r.status = 'queued' ORDER BY r.score DESC NULLS LAST, r.updated_at`);
+        (SELECT question FROM events e WHERE e.role_id IN ${groupOf('r.id')} AND e.status = 'queued' ORDER BY e.ts DESC, e.id DESC LIMIT 1) AS question,
+        (SELECT blocked_by FROM events e WHERE e.role_id IN ${groupOf('r.id')} AND e.status = 'queued' ORDER BY e.ts DESC, e.id DESC LIMIT 1) AS blocked_by
+        , (SELECT MAX(ts) FROM events e WHERE e.role_id IN ${groupOf('r.id')}) AS last_event
+      FROM roles r JOIN companies c ON c.id = r.company_id WHERE r.status = 'queued' AND ${isCard('r.id')} ORDER BY r.score DESC NULLS LAST, r.updated_at`);
     // A queued role with no events has last_event NULL, which compared false both ways; keep that.
     const queue = all.filter((r) => r.last_event != null && r.last_event >= cutoff);
     const stale_queue = all.filter((r) => r.last_event != null && r.last_event < cutoff).map(({ id, company, title, last_event }) => ({ id, company, title, last_event }));
     const drafts = this.q<{ id: number; role_id: number | null; draft_id: string | null; created_at: string; company: string | null }>(`SELECT a.id, a.role_id, a.path_or_ref AS draft_id, a.created_at, c.name AS company FROM artifacts a
       LEFT JOIN roles r ON r.id = a.role_id LEFT JOIN companies c ON c.id = r.company_id WHERE a.kind = 'gmail_draft' AND a.verified_at IS NULL`);
-    const to_book = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = i.role_id JOIN companies c ON c.id = r.company_id WHERE i.starts_at IS NULL AND r.status NOT IN ('closed', 'dropped')`);
-    const upcoming = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = i.role_id JOIN companies c ON c.id = r.company_id WHERE i.starts_at >= ? AND r.status NOT IN ('closed', 'dropped') ORDER BY i.starts_at`, now());
+    const to_book = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = ${canonicalOf('i.role_id')} JOIN companies c ON c.id = r.company_id WHERE i.starts_at IS NULL AND r.status NOT IN ('closed', 'dropped')`);
+    const upcoming = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = ${canonicalOf('i.role_id')} JOIN companies c ON c.id = r.company_id WHERE i.starts_at >= ? AND r.status NOT IN ('closed', 'dropped') ORDER BY i.starts_at`, now());
     // Questions raised on roles outside the queue (e.g. an applied role that broke a filter).
     const questions = this.q<Pick<RoleRow, 'id' | 'title' | 'status'> & { company: string; question: string; ts: string }>(`SELECT r.id, c.name AS company, r.title, r.status, e.question, e.ts FROM roles r JOIN companies c ON c.id = r.company_id
-      JOIN events e ON e.id = (SELECT id FROM events WHERE role_id = r.id ORDER BY ts DESC, id DESC LIMIT 1)
-      WHERE e.question IS NOT NULL AND r.status NOT IN ('queued', 'dropped', 'closed')`);
+      JOIN events e ON e.id = (SELECT id FROM events WHERE role_id IN ${groupOf('r.id')} ORDER BY ts DESC, id DESC LIMIT 1)
+      WHERE e.question IS NOT NULL AND r.status NOT IN ('queued', 'dropped', 'closed') AND ${isCard('r.id')}`);
     return { queue, stale_queue, questions, unverified_drafts: drafts, interviews_to_book: to_book, upcoming_interviews: upcoming };
   }
 
   pipelineSummary({ stale_after_days }: ArgsFor<'pipeline_summary'> = {}) {
     type Listed = Pick<RoleRow, 'id' | 'title' | 'status' | 'updated_at'> & { company: string };
-    const counts = Object.fromEntries(this.q<{ status: string | null; n: number }>('SELECT status, COUNT(*) AS n FROM roles GROUP BY status').map((r) => [r.status, r.n]));
+    const counts = Object.fromEntries(this.q<{ status: string | null; n: number }>(`SELECT status, COUNT(*) AS n FROM roles r WHERE ${isCard('r.id')} GROUP BY status`).map((r) => [r.status, r.n]));
     const cutoff = new Date(Date.now() - (stale_after_days ?? 14) * 864e5).toISOString();
     const stale = (r: Listed & { last_event: string | null }) => (r.last_event || r.updated_at) < cutoff;
-    const list = (where: string, ...p: SQLInputValue[]) => this.q<Listed>(`SELECT r.id, c.name AS company, r.title, r.status, r.updated_at FROM roles r JOIN companies c ON c.id = r.company_id WHERE ${where} ORDER BY r.updated_at DESC`, ...p);
-    const queue = this.q<Listed & { last_event: string | null }>(`SELECT r.id, c.name AS company, r.title, r.status, r.updated_at, (SELECT MAX(ts) FROM events e WHERE e.role_id = r.id) AS last_event
-      FROM roles r JOIN companies c ON c.id = r.company_id WHERE r.status = 'queued' ORDER BY last_event DESC`);
+    const list = (where: string, ...p: SQLInputValue[]) => this.q<Listed>(`SELECT r.id, c.name AS company, r.title, r.status, r.updated_at FROM roles r JOIN companies c ON c.id = r.company_id WHERE ${where} AND ${isCard('r.id')} ORDER BY r.updated_at DESC`, ...p);
+    const queue = this.q<Listed & { last_event: string | null }>(`SELECT r.id, c.name AS company, r.title, r.status, r.updated_at, (SELECT MAX(ts) FROM events e WHERE e.role_id IN ${groupOf('r.id')}) AS last_event
+      FROM roles r JOIN companies c ON c.id = r.company_id WHERE r.status = 'queued' AND ${isCard('r.id')} ORDER BY last_event DESC`);
     return {
       counts,
       live_processes: list("r.status IN ('interviewing', 'offer')"),
       awaiting_reply: list("r.status = 'applied'").length,
       rejections: this.q<{ id: number; company: string; title: string; ts: string; evidence: string | null }>(`SELECT r.id, c.name AS company, r.title, e.ts, e.evidence FROM roles r JOIN companies c ON c.id = r.company_id
-        JOIN events e ON e.id = (SELECT id FROM events WHERE role_id = r.id AND status = 'closed' ORDER BY ts DESC, id DESC LIMIT 1)
-        WHERE r.status = 'closed' AND e.outcome = 'rejected' ORDER BY e.ts DESC`),
+        JOIN events e ON e.id = (SELECT id FROM events WHERE role_id IN ${groupOf('r.id')} AND status = 'closed' ORDER BY ts DESC, id DESC LIMIT 1)
+        WHERE r.status = 'closed' AND e.outcome = 'rejected' AND ${isCard('r.id')} ORDER BY e.ts DESC`),
       queue: queue.filter((r) => !stale(r)),
       stale_queue: queue.filter(stale).map(({ id, company, title, updated_at, last_event }) => ({ id, company, title, last_activity: last_event || updated_at })),
     };

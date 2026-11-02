@@ -173,6 +173,33 @@ test('migrating keeps every row and indexes every URL, and duplicates become a l
   }
 });
 
+test('an upgraded database links its old duplicates, and the link survives reopening', () => {
+  const path = tempDb();
+  v2Database(path);
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    const t = new Tracker(db);
+    assert.equal(t.one<{ n: number }>('SELECT COUNT(*) AS n FROM role_links')?.n, 0);
+    // Role 2's rejection is newer than role 1's application, so role 1 must hold it before it can be the card.
+    assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, reason: 'Same posting', evidence: 'Both link to acme/one' }), /role 1 is applied and role 2 is closed \(rejected\)/);
+    t.record({ role_id: 1, status: 'closed', outcome: 'rejected', actor: 'employer', reason: 'No', evidence: 'Not moving forward' });
+    t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, reason: 'Same posting', evidence: 'Both link to acme/one' });
+  } finally {
+    db.close();
+  }
+  const again = openDb(path);
+  try {
+    const t = new Tracker(again);
+    assert.deepEqual(t.findCompany({ url: 'https://jobs.ashbyhq.com/acme/one' }).exact_role_ids, [1]);
+    assert.deepEqual(t.roleDetail({ role_id: 2 }).events.map((e) => [e.id, e.role_id]).slice(0, 2), [[7, 1], [8, 2]]);
+    assert.deepEqual(t.roleDetail({ role_id: 2 }).artifacts.map((a) => [a.id, a.role_id]), [[5, 2]]);
+    assert.deepEqual(t.roleDetail({ role_id: 2 }).interviews.map((i) => [i.id, i.role_id]), [[6, 1]]);
+  } finally {
+    again.close();
+  }
+});
+
 test('a historical URL the parser rejects survives as a raw alias and stays findable', () => {
   const path = tempDb();
   const urls = ['https://user:secret@careers.example/job', 'mailto:jobs@acme.example', 'see the careers page'];

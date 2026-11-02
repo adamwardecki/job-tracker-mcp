@@ -53,6 +53,12 @@ export const SCHEMAS = {
   add_alias: obj({ company_id: int('Company id'), alias: str('Alias') }, ['company_id', 'alias']),
   upsert_role: obj(roleFields, ['title']),
   get_role: obj({ role_id: int('Role id') }, ['role_id']),
+  link_duplicate_role: obj({
+    canonical_role_id: int('The role to keep as the card. It must already hold the latest state. A linked duplicate\'s id stands for its canonical role'),
+    duplicate_role_id: int('The other row for the same posting. Its history, artifacts and interviews stay and show under the canonical role'),
+    reason: str('Why the two rows are one role'),
+    evidence: str('How you confirmed they are the same posting, e.g. both link to the same ATS URL'),
+  }, ['canonical_role_id', 'duplicate_role_id', 'reason', 'evidence']),
   transition: obj({
     role_id: int('Role id'),
     to: str(STATUSES.join(' | ')),
@@ -159,7 +165,8 @@ export const TOOLS: Tool[] = [
   defineTool('set_no_cold_apply', 'Mark a company as no_cold_apply (an intro or recruiter process is open), or clear it.', (t, a) => t.setNoColdApply(a)),
   defineTool('add_alias', 'Add an alias to a company (brand, former name, parent) so dedupe catches it.', (t, a) => t.addAlias(a)),
   defineTool('upsert_role', 'Create or update a role (creates the company if needed). Pass id to update a known role. Otherwise a role is matched on its exact URL or ATS posting, never on title: with no match a new role starts as found, and possible_role_ids lists same-title roles at the company to rule out before scoring. A URL matching several roles, or a second posting ID from the same employer board, returns an error and writes nothing. Returns the find_company dedupe result unless id is given.', (t, a) => t.upsertRole(a)),
-  defineTool('get_role', 'Role with its company, full event history, artifacts, interviews, and the urls and ATS postings it is known by.', (t, a) => t.roleDetail(a)),
+  defineTool('get_role', 'Role with its company, full event history, artifacts, interviews, and the urls and ATS postings it is known by. A linked duplicate\'s id returns its canonical role; history, artifacts, interviews and URLs then cover the whole group under their original ids, with requested_role_id, linked_role_ids and links.', (t, a) => t.roleDetail(a)),
+  defineTool('link_duplicate_role', 'Link a historical duplicate row to the canonical role for the same posting. Nothing is deleted: the duplicate\'s events, artifacts and interviews show under the canonical role, and its id resolves to that role in every tool. Same company only. Refuses two posting IDs from one employer board, and histories that disagree: the canonical role must already hold the latest state, including any applied, interviewing, offer or closed outcome (fix it with transition or record first). A duplicate already linked to another role is refused. A canonical role\'s own duplicates move along when it is linked. Linking the same pair again returns the group.', (t, a) => t.linkDuplicateRole(a)),
   defineTool('transition', 'Move a role through found → verified → scored → queued → applied → interviewing → offer (dropped from found/verified/scored/queued; closed from queued/applied/interviewing/offer). Rejects illegal moves. verified needs evidence (URL + verbatim location line), location_line and location_type. dropped needs evidence (quote or rule:<id>). applied needs the confirmation text. closed needs outcome.', (t, a) => t.transition(a)),
   defineTool('record', 'Append a validated event without the state-machine check: outcomes from outside (rejection, invite, user decision) or a note (omit status).', (t, a) => t.record(a)),
   defineTool('check_pay', 'Deterministic pay-floor check. Drops only if the band maximum is below the floor; straddling bands are kept and flagged. Pass fx_rate when the currency differs from the floor (look it up, never guess).', (t, a) => t.checkPay(a)),

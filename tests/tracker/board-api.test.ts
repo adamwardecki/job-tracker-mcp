@@ -162,3 +162,54 @@ test('board drops are listed in the report as the user\'s and do not fail the au
   assert.match(renderReport(s.t, { date: day }).markdown, /- by you on the board: Contoso \(Moved on the board\)/);
   assert.ok(!runAudit(s.t, { date: day }).failures.some((f) => f.check === 'drop_without_evidence'));
 });
+
+// A row an older release left for the same posting as an existing role, written straight to the tables.
+function legacyDuplicate(s: ReturnType<typeof seeded>, of: number, id: number, history: [ts: string, status: string, outcome?: string][]) {
+  const status = history.at(-1)?.[1] ?? null;
+  s.t.run("INSERT INTO roles(id, company_id, title, first_seen, updated_at, status) VALUES(?, ?, 'Staff Engineer', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?)", id, s.t.mustRole(of).company_id, status);
+  for (const [ts, st, outcome] of history) s.t.run("INSERT INTO events(role_id, ts, status, outcome, question, actor, reason) VALUES(?, ?, ?, ?, ?, 'import', 'Legacy row')", id, ts, st, outcome ?? null, st === 'queued' ? 'Old question?' : null);
+  return id;
+}
+const LINK = { reason: 'Same posting tracked twice', evidence: 'Both rows link to https://jobs.ashbyhq.com/fabrikam/3' };
+
+test('a linked duplicate is one card on the board, in open items and in the summary', () => {
+  const s = seeded();
+  const dup = legacyDuplicate(s, s.queued, 100, [['2026-01-01T00:00:00Z', 'found'], ['2026-01-02T00:00:00Z', 'queued']]);
+  s.t.run("INSERT INTO interviews(role_id, stage, created_at) VALUES(?, 'screen', '2026-01-02T00:00:00Z')", dup);
+  s.t.linkDuplicateRole({ canonical_role_id: s.queued, duplicate_role_id: dup, ...LINK });
+  assert.deepEqual(boardView(s.t).roles.map((r) => r.id).sort(), [s.found, s.scored, s.queued].sort());
+  const items = s.t.openItems();
+  assert.deepEqual(items.queue.map((q) => [q.id, q.question]), [[s.queued, 'Is a quarterly week in Lisbon OK?']]);
+  const summary = s.t.pipelineSummary();
+  assert.equal(summary.counts.queued, 1);
+  assert.deepEqual(summary.queue.map((q) => q.id), [s.queued]);
+  // The duplicate's old interview belongs to the card, which is still queued, so the booking stays visible once.
+  assert.deepEqual(items.interviews_to_book.map((i) => [i.role_id, i.title]), [[dup, 'Staff Engineer']]);
+  s.t.transition({ role_id: s.queued, to: 'closed', outcome: 'role_closed', reason: 'Posting gone' });
+  assert.deepEqual(s.t.openItems().interviews_to_book, [], 'the card is closed, whatever the duplicate row says');
+  assert.deepEqual(s.t.openItems().queue, []);
+});
+
+test('rejections and counts show a linked group once', () => {
+  const s = seeded();
+  boardMove(s.t, { role_id: s.queued, to: 'applied' });
+  boardMove(s.t, { role_id: s.queued, to: 'closed', outcome: 'rejected' });
+  legacyDuplicate(s, s.queued, 100, [['2026-01-01T00:00:00Z', 'applied'], ['2026-01-09T00:00:00Z', 'closed', 'rejected']]);
+  s.t.linkDuplicateRole({ canonical_role_id: s.queued, duplicate_role_id: 100, ...LINK });
+  const summary = s.t.pipelineSummary();
+  assert.equal(summary.counts.closed, 1);
+  assert.deepEqual(summary.rejections.map((r) => r.id), [s.queued]);
+});
+
+test('board moves and notes sent with an old id land on the canonical card', () => {
+  const s = seeded();
+  const dup = legacyDuplicate(s, s.queued, 100, [['2026-01-01T00:00:00Z', 'found'], ['2026-01-02T00:00:00Z', 'scored']]);
+  s.t.linkDuplicateRole({ canonical_role_id: s.queued, duplicate_role_id: dup, ...LINK });
+  // The duplicate row says scored, but the card is queued.
+  assert.throws(() => boardMove(s.t, { role_id: dup, to: 'queued' }), /already queued/);
+  boardMove(s.t, { role_id: dup, to: 'applied' });
+  boardNote(s.t, { role_id: dup, reason: 'Applied through a referral' });
+  assert.equal(s.t.mustRole(s.queued).status, 'applied');
+  assert.equal(s.t.mustRole(dup).status, 'scored');
+  assert.deepEqual(s.t.roleDetail({ role_id: s.queued }).events.slice(-2).map((e) => [e.role_id, e.status]), [[s.queued, 'applied'], [s.queued, null]]);
+});

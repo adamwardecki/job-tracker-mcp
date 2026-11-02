@@ -59,7 +59,8 @@ closed (from queued | applied | interviewing | offer), with outcome: rejected | 
 | `add_alias` | `company_id`, `alias` | Add a brand, former name or parent so dedupe catches it. |
 | `upsert_role` | `{id?, company, company_aliases?, company_domain?, title, url, url_aliases?, identity_evidence?, ats?, location_line?, location_type?, comp_min?, comp_max?, comp_currency?, comp_period?, equity?, stack?, industry?, source, posted_at?}` | `{role, company, created, dedupe, possible_role_ids}`. `dedupe` is the `find_company` result, on creates and updates alike, and is omitted when `id` is given. New roles get a `found` event. `id` updates that role. Otherwise an exact URL or ATS posting, under any company, updates the role holding it and leaves its company alone; `company` is then optional. A title never matches: a new role lists same-title roles at the company in `possible_role_ids`, to rule out before scoring. `url` and `url_aliases` must be http(s) without credentials. `url_aliases` need `identity_evidence` saying how the listings were confirmed as one posting; it is stored on the alias rows, and on a `url` that joins an existing role, but not on a new role's own `url`. A URL held by another role, or matching several roles, is a tool error naming them, and nothing is written. A role holds one posting per employer board: a second posting ID from the same ATS and employer is a different requisition and an error, and a posting on another ATS or board (an employer that moved ATS) needs `identity_evidence`. Every URL stays a lookup after it changes; an ATS link wins the role's main `url` over a listing that only points at the job, in either order, including an ATS link given in `url_aliases`, which also gives a role without a URL its main one. |
 | `transition` | `role_id`, `to`, `reason`, `evidence?`, `outcome?`, `category?` (drops), `question?` + `blocked_by?` (queued), `location_line?`, `location_type?`, `score?`, `score_notes?`, `run_id?` | Enforces the machine above. |
-| `get_role` | `role_id` | Role, company, full event history, artifacts, interviews, `urls:[{url, normalized_url, evidence}]`, `postings:[{provider, employer_key, posting_id}]`. |
+| `get_role` | `role_id` | Role, company, full event history, artifacts, interviews, `urls:[{url, normalized_url, evidence}]`, `postings:[{provider, employer_key, posting_id}]`, `requested_role_id`, `linked_role_ids`, `links:[{duplicate_role_id, title, url, status, reason, evidence, created_at}]`. A linked duplicate's id returns its canonical role. Events, artifacts and interviews then cover the whole group, each with its own `role_id`; `urls` and `postings` are the group's, each listed once; `links` keeps each duplicate's own row and why it was linked. See [Duplicate roles](#duplicate-roles). |
+| `link_duplicate_role` | `canonical_role_id`, `duplicate_role_id`, `reason`, `evidence` | `{canonical_role_id, linked_role_ids}`. Links a historical duplicate row to the role kept as its card. See [Duplicate roles](#duplicate-roles). |
 | `record` | `role_id`, `status?`, `reason`, `evidence?`, `outcome?`, `category?`, `question?`, `blocked_by?`, `actor` (`user`\|`employer`\|`pipeline`), `run_id?` | Appends a validated event without the machine check. For outcomes that arrive from outside (rejection, invite, user decision) and for notes (`status` omitted = note). A `question` on the latest event shows under Needs you. |
 | `check_pay` | `comp_min?`, `comp_max`, `currency`, `period` (`year`\|`month`\|`day`\|`hour`), `fx_rate?` (units of floor currency per 1 unit of `currency`), `equity?` | `{verdict: "keep"\|"straddles"\|"drop"\|"unknown", reason}`. Drop only if the band max is below the floor. |
 | `gate_check` | `role_id` | `{ok, role_id, company, title, url, verified, dedupe_clean, no_cold_apply, live_elsewhere, problems[]}`. Hooks call this before a submit click and bind approval to `url`. |
@@ -76,6 +77,32 @@ closed (from queued | applied | interviewing | offer), with outcome: rejected | 
 | `pipeline_summary` | `stale_after_days?` (14) | Counts by status, live processes (interviewing, offer), awaiting reply, rejections, fresh and stale queue |
 | `open_board` | `open?` (bool, default false: also open the default browser) | `{reused, opened, url?}`. With `open: true` and the browser opened, no `url`: the token stays out of the model's context. Otherwise `url`, and the text result is `Board: <url>`. Starts the local board for this database, or reuses the running one. See [Board](#board). |
 | `import_legacy` | `applied_log?` (markdown), `preferences?` (markdown), `queue?` (`[{filename, content}]`), `documents?` (`{profile, stories, reusable-answers}`), `path?` (local only: a `pipeline/` folder) | Import counts and unparsed rows |
+
+## Duplicate roles
+
+Rows that an older release created twice for one posting stay in the database with their events, artifacts and
+interviews. `link_duplicate_role` makes one of them the canonical role and records the other in `role_links` with
+the reason and evidence. Nothing is deleted and no event is rewritten.
+
+- **Checks.** Both roles exist, differ, and belong to the same company; `reason` and `evidence` are non-empty. The
+  two groups may not hold two posting IDs from the same ATS and employer (different requisitions). Histories must
+  agree: a duplicate with only preparatory states (found, verified, scored, queued, or dropped before any
+  application) links under a canonical role that has an applied, interviewing, offer or closed event. When the
+  duplicate has such an event, the canonical role needs one too, both latest statuses (and outcomes) must match,
+  and the canonical's must be no older than the duplicate's. Two preparatory rows link when the canonical one
+  moved last. Linking never changes a status: correct the canonical role with `transition` or `record` first.
+- **Groups stay flat.** Every link points at a root. A `canonical_role_id` that is itself a duplicate stands for
+  its root. A `duplicate_role_id` already linked to another root is refused with the root to link instead, and a
+  root cannot become a duplicate of its own member. Linking a root that has duplicates moves them to the new root
+  in the same transaction. Linking the same pair again returns the current group.
+- **Old ids.** Every tool that takes a `role_id` (`get_role`, `transition`, `record`, `gate_check`,
+  `add_artifact`, `add_interview`, `list_artifacts`, `upsert_role` with `id`, and the board) acts on the canonical
+  role. New events, artifacts and interviews are written there, so a duplicate's status never changes after the
+  link. `find_company`'s `exact_role_ids` and `upsert_role`'s matching count a group once; rows of independent
+  groups are still a conflict.
+- **Views.** The board, `open_items` and `pipeline_summary` show one card per group, judged by the canonical
+  role's status, with the group's latest events and questions. Reports and audits attribute a duplicate's events
+  and artifacts to the canonical card (audit `role_id`); the events keep their own ids and `role_id`.
 
 ## Board
 

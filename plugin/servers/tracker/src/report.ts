@@ -1,4 +1,5 @@
-// Daily report (spec §9) and post-run audit (spec §11). Both are pure reads.
+// Daily report (spec §9) and post-run audit (spec §11). Both are pure reads. Events and artifacts of a linked
+// duplicate are attributed to its canonical role's card, under their own ids.
 
 import type { SQLInputValue } from 'node:sqlite';
 import type { CapabilitiesConfig } from './config.ts';
@@ -7,10 +8,12 @@ import { lintProse } from './lint.ts';
 import { formatLocal, isValidTimeZone } from './time.ts';
 import type { ArgsFor } from './tools.ts';
 import type { Scope, Tracker } from './tracker.ts';
-import { LIVE } from './tracker.ts';
+import { canonicalOf, LIVE } from './tracker.ts';
 import { parseJson } from './util.ts';
 
-type ScopedEvent = EventRow & { title: string; url: string | null; industry: string | null; company_id: number; company: string };
+// card_id is the canonical role an event or artifact is attributed to; role_id stays the row it was written on.
+type ScopedEvent = EventRow & { card_id: number; title: string; url: string | null; industry: string | null; company_id: number; company: string };
+type ScopedArtifact = ArtifactRow & { card_id: number | null; company: string | null };
 
 export interface AuditFailure {
   check: string;
@@ -22,16 +25,16 @@ export interface AuditFailure {
 function eventsIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLInputValue[]): ScopedEvent[] {
   const [cond, p] = scope.rows('e', 'ts');
   return t.q<ScopedEvent>(
-    `SELECT e.*, r.title, r.url, r.industry, r.company_id, c.name AS company FROM events e JOIN roles r ON r.id = e.role_id JOIN companies c ON c.id = r.company_id
+    `SELECT e.*, r.id AS card_id, r.title, r.url, r.industry, r.company_id, c.name AS company FROM events e JOIN roles r ON r.id = ${canonicalOf('e.role_id')} JOIN companies c ON c.id = r.company_id
      WHERE ${cond} AND ${where} ORDER BY e.ts, e.id`,
     ...p, ...params,
   );
 }
 
-function artifactsIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLInputValue[]): (ArtifactRow & { company: string | null })[] {
+function artifactsIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLInputValue[]): ScopedArtifact[] {
   const [cond, p] = scope.rows('a', 'created_at');
-  return t.q<ArtifactRow & { company: string | null }>(
-    `SELECT a.*, c.name AS company FROM artifacts a LEFT JOIN roles r ON r.id = a.role_id LEFT JOIN companies c ON c.id = r.company_id
+  return t.q<ScopedArtifact>(
+    `SELECT a.*, r.id AS card_id, c.name AS company FROM artifacts a LEFT JOIN roles r ON r.id = ${canonicalOf('a.role_id')} LEFT JOIN companies c ON c.id = r.company_id
      WHERE ${cond} AND ${where} ORDER BY a.id`,
     ...p, ...params,
   );
@@ -53,7 +56,7 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
   const selfReported = eventsIn(t, scope, "e.status = 'applied' AND e.actor = 'user' AND (e.evidence IS NULL OR trim(e.evidence) = '')");
   const replies = eventsIn(t, scope, "e.actor = 'employer'");
   const dropped = eventsIn(t, scope, "e.status = 'dropped' AND e.actor != 'import'");
-  const assessed = new Set(eventsIn(t, scope, "e.status IN ('verified', 'scored', 'dropped') AND e.actor != 'import'").map((e) => e.role_id)).size;
+  const assessed = new Set(eventsIn(t, scope, "e.status IN ('verified', 'scored', 'dropped') AND e.actor != 'import'").map((e) => e.card_id)).size;
   const drafts = artifactsIn(t, scope, "a.kind = 'gmail_draft'");
   const verifiedDrafts = drafts.filter((d) => d.verified_at);
 
@@ -159,23 +162,24 @@ export function runAudit(t: Tracker, { date, run_id }: ArgsFor<'audit'>) {
   const excluded = (t.section('filters').excluded_industries || []).map((s) => s.toLowerCase());
   if (excluded.length) {
     const touched = eventsIn(t, scope, "e.status IN ('scored', 'queued', 'applied')").filter((e) => e.industry && excluded.some((x) => e.industry?.toLowerCase().includes(x)));
-    for (const e of touched) failures.push({ check: 'excluded_industry', role_id: e.role_id, detail: `${e.company} (${e.industry}) reached ${e.status} despite the excluded-industries filter.` });
+    for (const e of touched) failures.push({ check: 'excluded_industry', role_id: e.card_id, detail: `${e.company} (${e.industry}) reached ${e.status} despite the excluded-industries filter.` });
   }
   for (const e of eventsIn(t, scope, "e.status = 'dropped' AND (e.evidence IS NULL OR trim(e.evidence) = '') AND e.actor != 'user'"))
-    failures.push({ check: 'drop_without_evidence', role_id: e.role_id, detail: `Drop of ${e.company} has no evidence.` });
+    failures.push({ check: 'drop_without_evidence', role_id: e.card_id, detail: `Drop of ${e.company} has no evidence.` });
   // The board's self-reported applications are the user's word, listed in the report instead.
   for (const e of eventsIn(t, scope, "e.status = 'applied' AND (e.evidence IS NULL OR trim(e.evidence) = '') AND e.actor != 'user'"))
-    failures.push({ check: 'applied_without_confirmation', role_id: e.role_id, detail: `${e.company} marked applied without confirmation text.` });
+    failures.push({ check: 'applied_without_confirmation', role_id: e.card_id, detail: `${e.company} marked applied without confirmation text.` });
   for (const e of eventsIn(t, scope, "e.status = 'verified'")) {
+    // The row the event was written on is the one it verified.
     const r = t.mustRole(e.role_id);
-    if (!r.verified_at || !r.location_line) failures.push({ check: 'verified_without_location', role_id: e.role_id, detail: `${e.company} verified without a location line.` });
+    if (!r.verified_at || !r.location_line) failures.push({ check: 'verified_without_location', role_id: e.card_id, detail: `${e.company} verified without a location line.` });
   }
   const maxWords = t.section('writing').max_words_cover_note;
   for (const a of artifactsIn(t, scope, "a.kind IN ('cover_note', 'form_answers', 'gmail_draft') AND a.content IS NOT NULL")) {
     const lint = lintProse(a.content, { max_words: a.kind === 'cover_note' ? maxWords : undefined });
     if (!lint.ok) {
       const kinds = [...new Set(lint.issues.filter((i) => i.severity === 'error').map((i) => i.kind))].join(', ');
-      failures.push({ check: 'prose_lint', artifact_id: a.id, role_id: a.role_id, detail: `${a.kind} ${a.id}${a.company ? ` (${a.company})` : ''} fails lint: ${kinds}.` });
+      failures.push({ check: 'prose_lint', artifact_id: a.id, role_id: a.card_id, detail: `${a.kind} ${a.id}${a.company ? ` (${a.company})` : ''} fails lint: ${kinds}.` });
     }
   }
   for (const a of artifactsIn(t, scope, "a.kind = 'gmail_draft' AND a.verified_at IS NULL"))
@@ -183,7 +187,7 @@ export function runAudit(t: Tracker, { date, run_id }: ArgsFor<'audit'>) {
   for (const e of eventsIn(t, scope, `e.status IN (${LIVE.map(() => '?').join(', ')})`, ...LIVE)) {
     const c = t.one<{ no_cold_apply: number; no_cold_apply_reason: string | null }>('SELECT no_cold_apply, no_cold_apply_reason FROM companies WHERE id = ?', e.company_id);
     if (c?.no_cold_apply && e.status === 'applied' && e.actor === 'pipeline')
-      failures.push({ check: 'no_cold_apply', role_id: e.role_id, detail: `Applied to ${e.company} despite no_cold_apply (${c.no_cold_apply_reason}).` });
+      failures.push({ check: 'no_cold_apply', role_id: e.card_id, detail: `Applied to ${e.company} despite no_cold_apply (${c.no_cold_apply_reason}).` });
   }
   return { date: run_id != null ? null : (date ?? null), run_id: run_id ?? null, ok: failures.length === 0, failures };
 }

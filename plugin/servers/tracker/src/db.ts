@@ -171,6 +171,14 @@ export interface RolePostingRow {
   posting_id: string;
 }
 
+export interface RoleLinkRow {
+  duplicate_role_id: number;
+  canonical_role_id: number;
+  reason: string;
+  evidence: string;
+  created_at: string;
+}
+
 export interface EventRow {
   id: number;
   role_id: number;
@@ -322,7 +330,7 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 // MIGRATIONS[i] takes the schema from version i + 1 to i + 2. Append only; never edit a shipped one.
 const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
@@ -379,6 +387,19 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       addUrl.run(r.id, r.url, normalized_url);
       if (posting) addKey.run(r.id, posting.provider, posting.employer_key, posting.posting_id);
     }
+  },
+  // 4: historical duplicates linked to the role kept as their card. Both rows and everything pointing at them stay.
+  (db) => {
+    db.exec(`
+      CREATE TABLE role_links (
+        duplicate_role_id INTEGER PRIMARY KEY REFERENCES roles(id),
+        canonical_role_id INTEGER NOT NULL REFERENCES roles(id),
+        reason TEXT NOT NULL,
+        evidence TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX role_links_canonical ON role_links(canonical_role_id);
+    `);
   },
 ];
 
