@@ -13,7 +13,7 @@ import { checkPay } from './pay.ts';
 import type { PostingIdentity, PostingKey } from './posting.ts';
 import { parsePostingUrl, urlIdentity } from './posting.ts';
 import type { RuleListItem, RuleType } from './rules.ts';
-import { assertFreshRevision, decodeRuleCursor, encodeRuleCursor, normalizeRuleLimit, normalizeRuleTypes, RULE_TYPES, resolveRuleFilters } from './rules.ts';
+import { assertFreshRevision, decodeDetailCursor, decodeRuleCursor, detailChunk, encodeRuleCursor, normalizeDetailLimit, normalizeRuleLimit, normalizeRuleTypes, packRulePage, RULE_TYPES, resolveRuleFilters } from './rules.ts';
 import { dayBounds, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
 import type { ArgsFor } from './tools.ts';
 import { isRecord, oneOf, parseJson } from './util.ts';
@@ -879,11 +879,26 @@ export class Tracker {
       const rows = this.q<RuleRow>(`SELECT * FROM rules WHERE ${where} AND id > ? ORDER BY id LIMIT ?`, ...matched, after?.after_id ?? 0, size + 1);
       const page = rows.slice(0, size);
       const kinds = this.ruleTypesFor(page.map((r) => r.id));
-      const last = page[page.length - 1];
-      const next_cursor = rows.length > size && last ? encodeRuleCursor({ v: 1, after_id: last.id, revision, types: filter, include_inactive: inactive }) : null;
       // ruleTypesFor answers every id it is given, so the lookup cannot miss.
-      const rules: RuleListItem[] = page.map((r) => ({ ...r, types: kinds.get(r.id)! }));
+      const candidates: RuleListItem[] = page.map((r) => ({ ...r, types: kinds.get(r.id)! }));
+      const cursorAfter = (id: number) => encodeRuleCursor({ v: 1, after_id: id, revision, types: filter, include_inactive: inactive });
+      const { rules, next_cursor } = packRulePage(candidates, rows.length > size, { total, rules_revision: revision, cursorAfter });
       return { rules, next_cursor, total, rules_revision: revision };
+    });
+  }
+
+  // One rule as list_rules would show it, in pieces of its JSON text. For a rule list_rules marked requires_detail.
+  getRule({ id, cursor, limit }: ArgsFor<'get_rule'>) {
+    const after = cursor == null ? null : decodeDetailCursor(cursor);
+    const size = normalizeDetailLimit(limit);
+    if (after && after.id !== id) throw new ToolError(`cursor belongs to rule ${after.id}, not rule ${id}. Restart get_rule for rule ${id} without a cursor.`);
+    return readTx(this.db, () => {
+      const revision = this.rulesRevision();
+      if (after) assertFreshRevision('get_rule', after.revision, revision);
+      const rule = this.one<RuleRow>('SELECT * FROM rules WHERE id = ?', id);
+      req(rule, `No rule ${id}`);
+      const item: RuleListItem = { ...rule, types: this.ruleTypesFor([id]).get(id)! };
+      return detailChunk(id, JSON.stringify(item), after?.offset ?? 0, size, revision);
     });
   }
 

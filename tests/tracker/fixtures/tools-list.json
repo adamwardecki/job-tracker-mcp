@@ -722,7 +722,7 @@
   },
   {
     "name": "list_rules",
-    "description": "Rules with provenance and types, one page at a time: at most 10 by default, limit up to 50. Follow next_cursor until it is null; never act on a partial set. types filters to those consumers plus global rules, which are always included. If rules changed mid-listing, the cursor is refused: restart without it.",
+    "description": "Rules with provenance and types, one page at a time: at most 10 by default, limit up to 50. Follow next_cursor until it is null; never act on a partial set. types filters to those consumers plus global rules, which are always included. If rules changed mid-listing, the cursor is refused: restart without it. An entry with requires_detail is too large to list: read it with get_rule. Results stay under 24 KiB, so a page can hold fewer rules than limit; next_cursor says whether more remain.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -747,6 +747,31 @@
         }
       },
       "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_rule",
+    "description": "Read one whole rule in chunks. Only for a list_rules entry marked requires_detail. Call until next_cursor is null, join every chunk in order, then JSON.parse the result. Never act on a partial chunk. If rules changed meanwhile, the cursor is refused: restart without it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Rule id, from a list_rules entry with requires_detail"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "next_cursor from the previous chunk. Omit for the first chunk"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Chunk size in characters, 1 to 4000 (default 4000)"
+        }
+      },
+      "required": [
+        "id"
+      ],
       "additionalProperties": false
     }
   },

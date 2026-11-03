@@ -130,3 +130,100 @@ export function resolveRuleFilters(types: unknown, includeInactive: boolean | nu
   }
   return { types: after.types, include_inactive: after.include_inactive };
 }
+
+// ---------- response size ----------
+// A result is bounded as the pretty-printed JSON the server writes into the tool's text content (mcp.ts). The
+// structuredContent copy is the same data compact, so it is smaller. Counting the pretty print, with escaping,
+// the cursor and the metadata, keeps every representation under the limit.
+export const RULE_RESPONSE_BYTES = 24 * 1024;
+export const DEFAULT_DETAIL_LIMIT = 4000;
+
+export const resultBytes = (result: unknown): number => Buffer.byteLength(JSON.stringify(result, null, 2), 'utf8');
+
+export interface RulePageFrame {
+  total: number;
+  rules_revision: number;
+  cursorAfter: (id: number) => string;
+}
+
+// Fill a page with whole rules for as long as the result fits the byte budget. `candidates` are the rows the
+// count limit allows, in id order, and `moreAfter` says a matching row lies beyond them. A rule that cannot fit
+// even alone becomes a short {id, types, requires_detail} entry, which counts as progress, so a page is never
+// empty while rules remain. A rule that fits alone but not beside the others waits for the next page.
+// Every fit check includes a cursor after the candidate, so the finished page, whose cursor is for its last
+// rule or absent, is never larger than what was checked.
+export function packRulePage(candidates: RuleListItem[], moreAfter: boolean, frame: RulePageFrame): { rules: RuleListItem[]; next_cursor: string | null } {
+  const result = (rules: RuleListItem[], id: number) => ({ rules, next_cursor: frame.cursorAfter(id), total: frame.total, rules_revision: frame.rules_revision });
+  const rules: RuleListItem[] = [];
+  for (const item of candidates) {
+    const withItem = [...rules, item];
+    if (resultBytes(result(withItem, item.id)) <= RULE_RESPONSE_BYTES) {
+      rules.push(item);
+    } else if (rules.length) {
+      break;
+    } else {
+      rules.push({ id: item.id, types: item.types, requires_detail: true });
+    }
+  }
+  const last = rules[rules.length - 1];
+  const remains = moreAfter || rules.length < candidates.length;
+  return { rules, next_cursor: remains && last ? frame.cursorAfter(last.id) : null };
+}
+
+// ---------- rule detail ----------
+// get_rule hands out the JSON serialization of one whole rule in pieces of code points (never half a surrogate
+// pair), so the caller concatenates them and parses once. The cursor binds the rule, the offset into the
+// serialization and the rules revision.
+
+const DETAIL_CURSOR_KEYS = ['id', 'offset', 'revision'];
+
+export interface DetailCursor {
+  v: 1;
+  id: number;
+  offset: number;
+  revision: number;
+}
+
+export function normalizeDetailLimit(limit: unknown): number {
+  if (limit == null) return DEFAULT_DETAIL_LIMIT;
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > DEFAULT_DETAIL_LIMIT) {
+    throw new ToolError(`limit must be a whole number from 1 to ${DEFAULT_DETAIL_LIMIT} (default ${DEFAULT_DETAIL_LIMIT}), got ${JSON.stringify(limit)}`);
+  }
+  return limit;
+}
+
+export function decodeDetailCursor(cursor: unknown): DetailCursor {
+  const tool = 'get_rule';
+  const raw = decodeCursor(cursor, tool, DETAIL_CURSOR_KEYS);
+  return { v: 1, id: cursorInt(tool, 'rule id', raw.id, 1), offset: cursorInt(tool, 'offset', raw.offset, 0), revision: cursorInt(tool, 'revision', raw.revision, 0) };
+}
+
+export interface RuleDetailChunk {
+  id: number;
+  chunk: string;
+  next_cursor: string | null;
+  rules_revision: number;
+}
+
+// The piece of `serialized` (a rule's JSON text) that starts at code point `offset`: at most `limit` code
+// points, fewer when the piece, put in a JSON string and counted in UTF-8 bytes, would push the result past
+// the byte budget. Never empty. At the default limit that cannot happen today (a code point costs at most 4
+// bytes: an emoji, or a backslash or quote that gets escaped again), so this is the guard that keeps the
+// promise if the budget or the limit changes.
+export function detailChunk(id: number, serialized: string, offset: number, limit: number, revision: number): RuleDetailChunk {
+  const points = Array.from(serialized);
+  if (offset >= points.length) throw badCursor('get_rule', 'offset is past the end of the rule');
+  const build = (n: number): RuleDetailChunk => {
+    const end = offset + n;
+    return { id, chunk: points.slice(offset, end).join(''), next_cursor: end < points.length ? encodeCursor({ id, offset: end, revision }) : null, rules_revision: revision };
+  };
+  let n = Math.min(limit, points.length - offset);
+  for (;;) {
+    const out = build(n);
+    const over = resultBytes(out) - RULE_RESPONSE_BYTES;
+    // Each code point removed saves at least one byte and usually up to four, so this converges. One code
+    // point always fits, as the budget is far above the fixed fields.
+    if (over <= 0 || n === 1) return out;
+    n = Math.max(1, n - Math.ceil(over / 4));
+  }
+}
