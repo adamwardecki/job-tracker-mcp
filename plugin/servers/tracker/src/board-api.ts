@@ -62,7 +62,7 @@ export function boardMove(t: Tracker, input: unknown) {
   if (!oneOf(STATUSES, to)) throw new ToolError(`to must be one of: ${STATUSES.join(', ')}`);
   if (CLAUDE_ONLY.includes(to)) throw new ToolError(`Moving to ${to} needs Claude: run a sweep, or ask Claude to verify role ${role_id}.`);
   // A same-status transition is legal (re-running a step with new evidence) but would only add a no-op event here.
-  const current = t.roleRow(t.canonicalRoleId(role_id));
+  const current = t.cardRow(role_id);
   if (current && (current.status || 'found') === to) throw new ToolError(`Role ${role_id} is already ${to}.`);
   const reason = optionalString('reason', body.reason)?.trim() || DEFAULT_REASON;
   const args = { role_id, to, reason, evidence: optionalString('evidence', body.evidence), outcome: optionalString('outcome', body.outcome) };

@@ -29,15 +29,15 @@ function call(t: Tracker) {
 }
 
 const ONE = 'https://jobs.ashbyhq.com/acme/one';
-type Ev = [ts: string, status: string, outcome?: string];
+type Ev = [ts: string, status: string | null, outcome?: string | null, extra?: { evidence?: string; question?: string }];
 
 // A row as an older release left it, written straight to the tables so no lookup could merge it first.
 // Its status is the last status in its history, as insertEvent would have left it.
-function legacyRole(t: Tracker, id: number, history: Ev[], { company = 1, url = ONE as string | null } = {}): number {
+function legacyRole(t: Tracker, id: number, history: Ev[], { company = 1, url = ONE as string | null, title = 'Engineer' } = {}): number {
   const status = history.filter(([, s]) => s).at(-1)?.[1] ?? null;
-  t.run("INSERT INTO roles(id, company_id, title, url, first_seen, updated_at, status) VALUES(?, ?, 'Engineer', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?)", id, company, url, status);
+  t.run("INSERT INTO roles(id, company_id, title, url, first_seen, updated_at, status) VALUES(?, ?, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?)", id, company, title, url, status);
   if (url) t.indexRoleUrls(id, [url]);
-  for (const [ts, s, outcome] of history) t.run("INSERT INTO events(role_id, ts, status, outcome, actor, reason) VALUES(?, ?, ?, ?, 'import', 'Legacy row')", id, ts, s, outcome ?? null);
+  for (const [ts, s, outcome, extra] of history) t.run("INSERT INTO events(role_id, ts, status, outcome, evidence, question, actor, reason) VALUES(?, ?, ?, ?, ?, ?, 'import', 'Legacy row')", id, ts, s, outcome ?? null, extra?.evidence ?? null, extra?.question ?? null);
   return id;
 }
 
@@ -305,4 +305,84 @@ test('the legacy import refuses a URL held by two independent roles', (ctx) => {
   legacyRole(t, 2, APPLIED);
   assert.throws(() => importLegacy(t, { queue: [{ filename: 'acme.md', content: `# Acme · Engineer\n\n- **Posting:** ${ONE}\n` }] }), /matches roles 1, 2/);
   assert.equal(t.one<{ n: number }>('SELECT COUNT(*) AS n FROM artifacts')?.n, 0);
+});
+
+test('a URL both rows hold is listed once, with the canonical role\'s evidence', async (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, APPLIED);
+  legacyRole(t, 2, PREP, { url: `${ONE}?utm_source=mail` });
+  t.run("UPDATE role_urls SET evidence = 'Seen on the careers page' WHERE role_id = 1");
+  t.run("UPDATE role_urls SET evidence = 'From a recruiter mail' WHERE role_id = 2");
+  await call(t)('link_duplicate_role', { canonical_role_id: 1, duplicate_role_id: 2, ...LINK });
+  assert.deepEqual(t.roleDetail({ role_id: 2 }).urls.map((u) => ({ ...u })), [{ url: ONE, normalized_url: ONE, evidence: 'Seen on the careers page' }]);
+});
+
+test('closed with another outcome is a disagreement', async (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, REJECTED);
+  legacyRole(t, 2, [...APPLIED, ['2026-01-20T00:00:00Z', 'closed', 'withdrawn']]);
+  const r = await call(t)('link_duplicate_role', { canonical_role_id: 1, duplicate_role_id: 2, ...LINK });
+  assert.match(r.error, /role 1 is closed \(rejected\) and role 2 is closed \(withdrawn\)/);
+  assert.equal(linkCount(t), 0);
+});
+
+test('a different latest status is a disagreement even when the canonical one is newer', async (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, [...APPLIED, ['2026-02-05T00:00:00Z', 'interviewing']]);
+  legacyRole(t, 2, [...APPLIED, ['2026-02-02T00:00:00Z', 'offer']]);
+  const r = await call(t)('link_duplicate_role', { canonical_role_id: 1, duplicate_role_id: 2, ...LINK });
+  assert.match(r.error, /role 1 is interviewing and role 2 is offer/);
+  assert.equal(linkCount(t), 0);
+});
+
+test('the same state reached at the same moment links', async (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, APPLIED);
+  legacyRole(t, 2, APPLIED);
+  assert.equal((await call(t)('link_duplicate_role', { canonical_role_id: 1, duplicate_role_id: 2, ...LINK })).error, '');
+});
+
+test('an event written straight to a linked duplicate lands on the canonical role', async (ctx) => {
+  const t = fresh(ctx);
+  await linkedPair(t);
+  t.insertEvent({ role_id: 2, status: 'interviewing', actor: 'employer', reason: 'Invite' });
+  assert.equal(t.one<{ role_id: number }>("SELECT role_id FROM events WHERE reason = 'Invite'")?.role_id, 1);
+  assert.deepEqual([t.mustRole(1).status, t.mustRole(2).status], ['interviewing', 'queued']);
+});
+
+test('views count a group once and take its newest events and questions', (ctx) => {
+  const t = fresh(ctx);
+  t.run("INSERT INTO companies(id, name, created_at) VALUES(3, 'Orbit', '2026-01-01T00:00:00Z'), (4, 'Nimbus', '2026-01-01T00:00:00Z')");
+  const recent = new Date(Date.now() - 864e5).toISOString();
+  const link = (canonical_role_id: number, duplicate_role_id: number) => t.linkDuplicateRole({ canonical_role_id, duplicate_role_id, ...LINK });
+  // Fresh queue: the canonical role's own events are old, the duplicate has a note from yesterday.
+  legacyRole(t, 10, [['2026-01-01T00:00:00Z', 'found'], ['2026-01-10T00:00:00Z', 'queued', null, { question: 'Canonical question?' }]]);
+  legacyRole(t, 11, [['2026-01-02T00:00:00Z', 'found'], ['2026-01-05T00:00:00Z', 'queued'], [recent, null]]);
+  link(10, 11);
+  // Stale queue: everything is old, the duplicate's note is the newest.
+  const zenith = 'https://jobs.ashbyhq.com/zenith/one';
+  legacyRole(t, 20, [['2026-01-10T00:00:00Z', 'queued']], { company: 2, url: zenith });
+  legacyRole(t, 21, [['2026-01-05T00:00:00Z', 'queued'], ['2026-02-01T00:00:00Z', null]], { company: 2, url: zenith });
+  link(20, 21);
+  // Live process: both rows interviewing, the group's latest event (the duplicate's note) asks a question.
+  const orbit = 'https://jobs.ashbyhq.com/orbit/one';
+  legacyRole(t, 30, [...APPLIED, ['2026-02-05T00:00:00Z', 'interviewing']], { company: 3, url: orbit });
+  legacyRole(t, 31, [...APPLIED, ['2026-02-01T00:00:00Z', 'interviewing'], ['2026-02-10T00:00:00Z', null, null, { question: 'Which slot?' }]], { company: 3, url: orbit });
+  link(30, 31);
+  // Rejection: both closed at the same moment; the duplicate's event was written last, so it is the group's latest.
+  const nimbus = 'https://jobs.ashbyhq.com/nimbus/one';
+  legacyRole(t, 40, [...APPLIED, ['2026-03-01T00:00:00Z', 'closed', 'rejected', { evidence: 'Canonical feedback' }]], { company: 4, url: nimbus });
+  legacyRole(t, 41, [...APPLIED, ['2026-03-01T00:00:00Z', 'closed', 'rejected', { evidence: 'Duplicate feedback' }]], { company: 4, url: nimbus });
+  link(40, 41);
+
+  const items = t.openItems();
+  assert.deepEqual(items.queue.map((q) => [q.id, q.question, q.last_event]), [[10, 'Canonical question?', recent]]);
+  assert.deepEqual(items.stale_queue.map((q) => [q.id, q.last_event]), [[20, '2026-02-01T00:00:00Z']]);
+  assert.deepEqual(items.questions.map((q) => [q.id, q.question]), [[30, 'Which slot?']]);
+  const summary = t.pipelineSummary();
+  assert.deepEqual(summary.live_processes.map((r) => r.id), [30]);
+  assert.deepEqual(summary.rejections.map((r) => [r.id, r.evidence]), [[40, 'Duplicate feedback']]);
+  assert.deepEqual(summary.queue.map((q) => [q.id, q.last_event]), [[10, recent]]);
+  assert.deepEqual(summary.stale_queue.map((q) => [q.id, q.last_activity]), [[20, '2026-02-01T00:00:00Z']]);
+  assert.equal(boardView(t).roles.find((r) => r.id === 10)?.last_event, recent);
 });

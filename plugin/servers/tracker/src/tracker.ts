@@ -129,23 +129,27 @@ export const canonicalOf = (col: string) => `COALESCE((SELECT canonical_role_id 
 
 // Statuses that record what happened with the employer. Everything before them is the sweep's own preparation,
 // including a drop before any application.
-const AUTHORITATIVE: readonly string[] = ['applied', 'interviewing', 'offer', 'closed'];
+const AUTHORITATIVE: readonly Status[] = ['applied', 'interviewing', 'offer', 'closed'];
 type StatusEvent = Pick<EventRow, 'ts' | 'status' | 'outcome'>;
 const stateLabel = (e: StatusEvent) => (e.status === 'closed' ? `closed (${e.outcome ?? 'no outcome'})` : String(e.status));
+const hasEmployerHistory = (evs: readonly StatusEvent[]) => evs.some((e) => oneOf(AUTHORITATIVE, e.status));
 
 // Whether a duplicate's history can sit under the canonical role's card without hiding what happened. Each side is
 // a root id and its group's status events, oldest first. Nothing here ranks states: the canonical role must already
 // show the latest state itself, and the normal evidence-backed workflow corrects it first when it does not.
 function checkHistories(canonical: { id: number; events: StatusEvent[] }, duplicate: { id: number; events: StatusEvent[] }): void {
-  const applied = (evs: StatusEvent[]) => evs.some((e) => AUTHORITATIVE.includes(String(e.status)));
   const c = canonical.events.at(-1);
   const d = duplicate.events.at(-1);
-  // Preparation only, under a role that went further: nothing the employer did is hidden.
-  if (!d || (applied(canonical.events) && !applied(duplicate.events))) return;
-  if (applied(duplicate.events)) {
-    req(c && applied(canonical.events), `Role ${duplicate.id} is ${stateLabel(d)}, but role ${canonical.id} has no application history. Nothing was written. Record that state on role ${canonical.id} first (transition or record, with its evidence), or link role ${canonical.id} into role ${duplicate.id}.`);
+  const canonicalHistory = hasEmployerHistory(canonical.events);
+  const duplicateHistory = hasEmployerHistory(duplicate.events);
+  // No status on the duplicate, or preparation only under a role that went further: nothing the employer did is hidden.
+  if (!d) return;
+  if (canonicalHistory && !duplicateHistory) return;
+  if (duplicateHistory) {
+    req(c && canonicalHistory, `Role ${duplicate.id} is ${stateLabel(d)}, but role ${canonical.id} has no application history. Nothing was written. Record that state on role ${canonical.id} first (transition or record, with its evidence), or link role ${canonical.id} into role ${duplicate.id}.`);
     req(c.status === d.status && (c.outcome ?? null) === (d.outcome ?? null), `The histories disagree: role ${canonical.id} is ${stateLabel(c)} and role ${duplicate.id} is ${stateLabel(d)}. Nothing was written. Linking would hide one of them; correct the wrong one with transition or record first.`);
   }
+  // Latest means the latest status event of any kind, so a later move back to queued or dropped counts.
   req(c && c.ts >= d.ts, `Role ${duplicate.id} became ${stateLabel(d)} on ${d.ts}, after role ${canonical.id} (${c?.ts ?? 'no status yet'}). Nothing was written. The canonical role must hold the latest state: link role ${canonical.id} into role ${duplicate.id} instead, or record the state on role ${canonical.id} first.`);
 }
 
@@ -478,7 +482,7 @@ export class Tracker {
   resolveTarget(f: ArgsFor<'upsert_role'>, claims: readonly ClaimedUrl[]): Target {
     const holders = claims.map((c) => this.exactRoleIds(c));
     if (f.id) {
-      const role = this.roleRow(this.canonicalRoleId(f.id));
+      const role = this.cardRow(f.id);
       req(role, `No role ${f.id}`);
       // A role keeps what its group already holds, so an old duplicate can still be updated. Only a new claim can collide.
       const group = this.roleGroupIds(role.id);
@@ -563,7 +567,9 @@ export class Tracker {
     });
   }
 
-  // Every event lands on the canonical role, so nothing can move a linked duplicate's status after the link.
+  // Every event lands on the canonical role, so nothing can move a linked duplicate's status after the link. This
+  // covers the event and the status only: callers must resolve the id themselves (cardRow) before any other write to
+  // roles, such as verified_at, score or url.
   insertEvent({ role_id: requested, status = null, outcome = null, category = null, question = null, blocked_by = null, actor, reason, evidence = null, run_id = null, ts = now() }: EventInput): void {
     const role_id = this.canonicalRoleId(requested);
     this.run(
@@ -596,7 +602,7 @@ export class Tracker {
     req(input.to, 'to is required');
     req(!selfReported || actor === 'user', 'Only the user can make a self-reported move.');
     return tx(this.db, () => {
-      const role = this.roleRow(this.canonicalRoleId(input.role_id));
+      const role = this.cardRow(input.role_id);
       req(role, `No role ${input.role_id}`);
       // A linked duplicate's id moves its canonical role: the check, the event and the row update all use that role.
       const a = { ...input, role_id: role.id };
@@ -642,6 +648,11 @@ export class Tracker {
   // Links always point at a root (linkDuplicateRole flattens them), so one lookup finds the canonical role.
   canonicalRoleId(id: number): number {
     return this.one<{ id: number }>('SELECT canonical_role_id AS id FROM role_links WHERE duplicate_role_id = ?', id)?.id ?? id;
+  }
+
+  // The row a role id acts on: the canonical role of its group, or the role itself.
+  cardRow(id: number): RoleRow | undefined {
+    return this.roleRow(this.canonicalRoleId(id));
   }
 
   // The canonical role first, then its linked duplicates in id order.
@@ -693,13 +704,17 @@ export class Tracker {
   // A linked duplicate's id shows its canonical role, with the history, artifacts, interviews and URLs of every row
   // in the group under their original ids.
   roleDetail({ role_id }: ArgsFor<'get_role'>) {
-    const role = this.roleRow(this.canonicalRoleId(role_id));
+    const role = this.cardRow(role_id);
     req(role, `No role ${role_id}`);
     const group = this.roleGroupIds(role.id);
     const inGroup = `IN (${marks(group)})`;
     type ArtifactSummary = Pick<ArtifactRow, 'id' | 'role_id' | 'kind' | 'path_or_ref' | 'verified_at' | 'created_at' | 'lint'>;
     type LinkSummary = Omit<RoleLinkRow, 'canonical_role_id'> & Pick<RoleRow, 'title' | 'url' | 'status'>;
-    const distinct = <T>(rows: T[]) => [...new Map(rows.map((r) => [JSON.stringify(r), r])).values()];
+    // Rows come canonical role first, so the first of each key is the one kept.
+    const distinct = <T>(rows: T[], key: (r: T) => string) => {
+      const seen = new Set<string>();
+      return rows.filter((r) => !seen.has(key(r)) && !!seen.add(key(r)));
+    };
     return {
       requested_role_id: role_id,
       role,
@@ -710,16 +725,16 @@ export class Tracker {
       events: this.q<EventRow>(`SELECT * FROM events WHERE role_id ${inGroup} ORDER BY ts, id`, ...group),
       artifacts: this.q<ArtifactSummary>(`SELECT id, role_id, kind, path_or_ref, verified_at, created_at, lint FROM artifacts WHERE role_id ${inGroup} ORDER BY id`, ...group).map((a) => ({ ...a, lint: parseJson<LintResult | null>(a.lint, null) })),
       interviews: this.q<InterviewRow>(`SELECT * FROM interviews WHERE role_id ${inGroup} ORDER BY id`, ...group),
-      // A URL both rows hold is listed once.
-      urls: distinct(this.q<Omit<RoleUrlRow, 'role_id'>>(`SELECT url, normalized_url, evidence FROM role_urls WHERE role_id ${inGroup} ORDER BY role_id != ?, role_id, normalized_url`, ...group, role.id)),
-      postings: distinct(this.q<Omit<RolePostingRow, 'role_id'>>(`SELECT provider, employer_key, posting_id FROM role_postings WHERE role_id ${inGroup} ORDER BY role_id != ?, role_id, provider, employer_key, posting_id`, ...group, role.id)),
+      // A URL or posting several rows hold is listed once, as the canonical role holds it.
+      urls: distinct(this.q<Omit<RoleUrlRow, 'role_id'>>(`SELECT url, normalized_url, evidence FROM role_urls WHERE role_id ${inGroup} ORDER BY role_id != ?, role_id, normalized_url`, ...group, role.id), (u) => u.normalized_url),
+      postings: distinct(this.q<Omit<RolePostingRow, 'role_id'>>(`SELECT provider, employer_key, posting_id FROM role_postings WHERE role_id ${inGroup} ORDER BY role_id != ?, role_id, provider, employer_key, posting_id`, ...group, role.id), keyLabel),
     };
   }
 
   gateCheck({ role_id: requested }: ArgsFor<'gate_check'>): GateResult {
-    const role_id = this.canonicalRoleId(requested);
-    const role = this.roleRow(role_id);
+    const role = this.cardRow(requested);
     if (!role) return { ok: false, problems: [`No role ${requested}`] };
+    const role_id = role.id;
     const company = this.mustCompany(role.company_id);
     const problems: string[] = [];
     if (!role.verified_at) problems.push('Role not verified on the employer posting (verified_at is empty).');
@@ -776,7 +791,7 @@ export class Tracker {
     if (kind) where.push('a.kind = ?') && params.push(kind);
     type Listed = Pick<ArtifactRow, 'id' | 'role_id' | 'kind' | 'path_or_ref' | 'content' | 'lint' | 'verified_at' | 'created_at'> & { company: string | null };
     const rows = this.q<Listed>(`SELECT a.id, a.role_id, a.kind, a.path_or_ref, a.content, a.lint, a.verified_at, a.created_at, c.name AS company FROM artifacts a
-      LEFT JOIN roles r ON r.id = a.role_id LEFT JOIN companies c ON c.id = r.company_id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY a.id`, ...params);
+      LEFT JOIN roles r ON r.id = ${canonicalOf('a.role_id')} LEFT JOIN companies c ON c.id = r.company_id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY a.id`, ...params);
     return { artifacts: rows.map((a) => ({ ...a, lint: parseJson<LintResult | null>(a.lint, null) })) };
   }
 
@@ -832,7 +847,7 @@ export class Tracker {
   addInterview(a: ArgsFor<'add_interview'>) {
     req(a.stage, 'stage is required');
     return tx(this.db, () => {
-      const role = this.roleRow(this.canonicalRoleId(a.role_id));
+      const role = this.cardRow(a.role_id);
       req(role, `No role ${a.role_id}`);
       if (a.tz != null && !isValidTimeZone(a.tz)) throw zoneError(a.tz);
       const startsAt = a.starts_at ? toUtcIso(a.starts_at, a.tz || this.timezone()) : null;
@@ -865,7 +880,7 @@ export class Tracker {
     const queue = all.filter((r) => r.last_event != null && r.last_event >= cutoff);
     const stale_queue = all.filter((r) => r.last_event != null && r.last_event < cutoff).map(({ id, company, title, last_event }) => ({ id, company, title, last_event }));
     const drafts = this.q<{ id: number; role_id: number | null; draft_id: string | null; created_at: string; company: string | null }>(`SELECT a.id, a.role_id, a.path_or_ref AS draft_id, a.created_at, c.name AS company FROM artifacts a
-      LEFT JOIN roles r ON r.id = a.role_id LEFT JOIN companies c ON c.id = r.company_id WHERE a.kind = 'gmail_draft' AND a.verified_at IS NULL`);
+      LEFT JOIN roles r ON r.id = ${canonicalOf('a.role_id')} LEFT JOIN companies c ON c.id = r.company_id WHERE a.kind = 'gmail_draft' AND a.verified_at IS NULL`);
     const to_book = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = ${canonicalOf('i.role_id')} JOIN companies c ON c.id = r.company_id WHERE i.starts_at IS NULL AND r.status NOT IN ('closed', 'dropped')`);
     const upcoming = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = ${canonicalOf('i.role_id')} JOIN companies c ON c.id = r.company_id WHERE i.starts_at >= ? AND r.status NOT IN ('closed', 'dropped') ORDER BY i.starts_at`, now());
     // Questions raised on roles outside the queue (e.g. an applied role that broke a filter).
