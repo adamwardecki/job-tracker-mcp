@@ -344,6 +344,7 @@ test('AC11: legacy import reproduces live processes, rejections and queue', () =
   assert.ok(out.imported.no_cold_apply.includes('Intro Example'));
   assert.equal(out.imported.rules, 2);
   assert.equal(t.listRules().rules[0]?.added_by, 'user');
+  assert.deepEqual(t.listRules().rules.map((r) => r.types), [['global'], ['global']]); // imported rules are unclassified
   // Rejection feedback is kept verbatim in evidence.
   const cam = t.findCompany({ name: 'Cobalt Flow' }).matches[0]?.roles[0];
   assert.ok(cam);

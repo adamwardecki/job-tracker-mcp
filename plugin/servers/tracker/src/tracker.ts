@@ -3,7 +3,7 @@
 import type { DatabaseSync, SQLInputValue, StatementResultingChanges } from 'node:sqlite';
 import type { ConfigSections, Profile, SectionName } from './config.ts';
 import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './config.ts';
-import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RunRow, SourceRow } from './db.ts';
+import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RuleTypeRow, RunRow, SourceRow } from './db.ts';
 import { now, tx } from './db.ts';
 import { ToolError } from './errors.ts';
 import { atsFromUrl, nameScore, normalizeDomain, normalizeName } from './fuzzy.ts';
@@ -12,6 +12,8 @@ import { lintProse } from './lint.ts';
 import { checkPay } from './pay.ts';
 import type { PostingIdentity, PostingKey } from './posting.ts';
 import { parsePostingUrl, urlIdentity } from './posting.ts';
+import type { RuleType } from './rules.ts';
+import { normalizeRuleTypes, RULE_TYPES } from './rules.ts';
 import { dayBounds, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
 import type { ArgsFor } from './tools.ts';
 import { isRecord, oneOf, parseJson } from './util.ts';
@@ -840,20 +842,72 @@ export class Tracker {
 
   // ---------- rules, sources, interviews ----------
 
-  addRule({ text, reason, example, added_by = 'user', added_on }: ArgsFor<'add_rule'> & { added_on?: string }) {
+  addRule({ text, reason, example, types, added_by = 'user', added_on }: ArgsFor<'add_rule'> & { added_on?: string }) {
     req(text && reason, 'text and reason are required');
-    const r = this.run('INSERT INTO rules(text, reason, example, added_by, added_on) VALUES(?, ?, ?, ?, ?)', text, reason, example || null, added_by, added_on || day(now()));
-    return { rule_id: Number(r.lastInsertRowid) };
+    // An omitted or null types is global: a rule nobody classified must still reach every consumer.
+    const kinds = types == null ? (['global'] as RuleType[]) : normalizeRuleTypes(types);
+    return tx(this.db, () => {
+      const r = this.run('INSERT INTO rules(text, reason, example, added_by, added_on) VALUES(?, ?, ?, ?, ?)', text, reason, example || null, added_by, added_on || day(now()));
+      const rule_id = Number(r.lastInsertRowid);
+      this.storeRuleTypes(rule_id, kinds);
+      this.bumpRulesRevision();
+      return { rule_id };
+    });
   }
 
   listRules({ include_inactive = false }: ArgsFor<'list_rules'> = {}) {
-    return { rules: this.q<RuleRow>(`SELECT * FROM rules ${include_inactive ? '' : 'WHERE active = 1'} ORDER BY id`) };
+    const rules = this.q<RuleRow>(`SELECT * FROM rules ${include_inactive ? '' : 'WHERE active = 1'} ORDER BY id`);
+    const byRule = new Map<number, string[]>();
+    for (const { rule_id, type } of this.q<RuleTypeRow>('SELECT rule_id, type FROM rule_types')) byRule.set(rule_id, [...(byRule.get(rule_id) ?? []), type]);
+    return {
+      rules: rules.map((r) => ({ ...r, types: this.sortedRuleTypes(byRule.get(r.id)) })),
+      rules_revision: this.rulesRevision(),
+    };
+  }
+
+  setRuleTypes({ id, types }: ArgsFor<'set_rule_types'>) {
+    const kinds = normalizeRuleTypes(types);
+    return tx(this.db, () => {
+      req(this.one('SELECT 1 FROM rules WHERE id = ?', id), `No rule ${id}`);
+      const current = this.sortedRuleTypes(this.q<RuleTypeRow>('SELECT rule_id, type FROM rule_types WHERE rule_id = ?', id).map((r) => r.type));
+      if (current.join() !== kinds.join()) {
+        this.run('DELETE FROM rule_types WHERE rule_id = ?', id);
+        this.storeRuleTypes(id, kinds);
+        this.bumpRulesRevision();
+      }
+      return { rule_id: id, types: kinds, rules_revision: this.rulesRevision() };
+    });
   }
 
   deactivateRule({ id }: ArgsFor<'deactivate_rule'>) {
-    const r = this.run('UPDATE rules SET active = 0 WHERE id = ?', id);
-    req(r.changes, `No rule ${id}`);
-    return { deactivated: id };
+    return tx(this.db, () => {
+      const rule = this.one<Pick<RuleRow, 'active'>>('SELECT active FROM rules WHERE id = ?', id);
+      req(rule, `No rule ${id}`);
+      if (rule.active) {
+        this.run('UPDATE rules SET active = 0 WHERE id = ?', id);
+        this.bumpRulesRevision();
+      }
+      return { deactivated: id };
+    });
+  }
+
+  // Internal, inside the caller's transaction.
+  private storeRuleTypes(ruleId: number, kinds: RuleType[]) {
+    for (const type of kinds) this.run('INSERT INTO rule_types(rule_id, type) VALUES(?, ?)', ruleId, type);
+  }
+
+  // A row written before rule types existed has no type rows: it is global.
+  private sortedRuleTypes(stored: string[] | undefined): RuleType[] {
+    const kinds = RULE_TYPES.filter((t) => stored?.includes(t));
+    return kinds.length ? kinds : ['global'];
+  }
+
+  private rulesRevision(): number {
+    return this.one<{ revision: number }>('SELECT revision FROM rule_state WHERE id = 1')?.revision ?? 0;
+  }
+
+  private bumpRulesRevision() {
+    this.run('UPDATE rule_state SET revision = revision + 1 WHERE id = 1');
   }
 
   sourceHealth() {

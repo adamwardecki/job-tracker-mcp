@@ -685,7 +685,7 @@
   },
   {
     "name": "add_rule",
-    "description": "Add a user preference or correction as a rule, with reason and example.",
+    "description": "Add a user preference or correction as a rule, with reason and example. types says which consumers read it; omit it for global.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -701,6 +701,13 @@
           "type": "string",
           "description": "Concrete example"
         },
+        "types": {
+          "type": "array",
+          "description": "Which consumers read it: global | sourcing | scoring | forms | writing | inbox | reporting. Omit for global",
+          "items": {
+            "type": "string"
+          }
+        },
         "added_by": {
           "type": "string",
           "description": "user | pipeline"
@@ -715,7 +722,7 @@
   },
   {
     "name": "list_rules",
-    "description": "Active rules with provenance.",
+    "description": "Active rules with provenance and types.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -725,6 +732,31 @@
         }
       },
       "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_rule_types",
+    "description": "Change which consumers a rule applies to. Edits the classification only: text, reason and who added it stay. Returns the types and rules_revision.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Rule id"
+        },
+        "types": {
+          "type": "array",
+          "description": "One or more of: global | sourcing | scoring | forms | writing | inbox | reporting",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "types"
+      ],
       "additionalProperties": false
     }
   },

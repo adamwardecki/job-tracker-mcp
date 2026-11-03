@@ -107,6 +107,61 @@ test('a pre-versioning database is marked v1 and migrated to the current version
   again.close();
 });
 
+// A database as the release before rule types left it (schema v4): active and inactive rules, an event citing each.
+function v4Database(path: string): void {
+  const raw = new DatabaseSync(path);
+  raw.exec(SCHEMA_V1);
+  raw.exec(`
+    ALTER TABLE artifacts ADD COLUMN run_id INTEGER;
+    CREATE TABLE role_urls (role_id INTEGER NOT NULL REFERENCES roles(id), url TEXT NOT NULL, normalized_url TEXT NOT NULL, evidence TEXT, PRIMARY KEY (role_id, normalized_url));
+    CREATE TABLE role_postings (role_id INTEGER NOT NULL REFERENCES roles(id), provider TEXT NOT NULL, employer_key TEXT NOT NULL, posting_id TEXT NOT NULL, PRIMARY KEY (role_id, provider, employer_key, posting_id));
+    CREATE TABLE role_links (duplicate_role_id INTEGER PRIMARY KEY REFERENCES roles(id), canonical_role_id INTEGER NOT NULL REFERENCES roles(id), reason TEXT NOT NULL, evidence TEXT NOT NULL, created_at TEXT NOT NULL);
+    PRAGMA user_version = 4;
+    INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z');
+    INSERT INTO roles(id, company_id, title, first_seen, updated_at, status) VALUES(1, 1, 'Engineer', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'dropped');
+    INSERT INTO rules(id, text, reason, example, added_by, added_on, active) VALUES(3, 'No agencies', 'Seen twice', 'Acme Staffing', 'pipeline', '2026-02-03', 1);
+    INSERT INTO rules(id, text, reason, example, added_by, added_on, active) VALUES(9, 'No crypto', 'User said so', NULL, 'user', '2026-01-04', 0);
+    INSERT INTO events(id, role_id, ts, status, actor, reason, evidence) VALUES(1, 1, '2026-02-04T00:00:00Z', 'dropped', 'pipeline', 'Agency', 'rule:3');
+    INSERT INTO events(id, role_id, ts, status, actor, reason, evidence) VALUES(2, 1, '2026-02-05T00:00:00Z', 'dropped', 'pipeline', 'Crypto', 'rule:9');
+  `);
+  raw.close();
+}
+
+test('upgrading from v4 classifies every rule as global and keeps its provenance and citations', () => {
+  const path = tempDb();
+  v4Database(path);
+  const db = openDb(path);
+  let revision: number;
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.deepEqual(db.prepare('SELECT * FROM rules ORDER BY id').all().map((r) => ({ ...r })), [
+      { id: 3, text: 'No agencies', reason: 'Seen twice', example: 'Acme Staffing', added_by: 'pipeline', added_on: '2026-02-03', active: 1 },
+      { id: 9, text: 'No crypto', reason: 'User said so', example: null, added_by: 'user', added_on: '2026-01-04', active: 0 },
+    ]);
+    assert.deepEqual(db.prepare('SELECT rule_id, type FROM rule_types ORDER BY rule_id').all().map((r) => ({ ...r })), [
+      { rule_id: 3, type: 'global' },
+      { rule_id: 9, type: 'global' },
+    ]);
+    const t = new Tracker(db);
+    assert.deepEqual(t.listRules({ include_inactive: true }).rules.map((r) => [r.id, r.types]), [[3, ['global']], [9, ['global']]]);
+    // The events that cite a rule still resolve, and a new citation of an old rule still validates.
+    assert.deepEqual(db.prepare('SELECT id, evidence FROM events ORDER BY id').all().map((r) => ({ ...r })), [{ id: 1, evidence: 'rule:3' }, { id: 2, evidence: 'rule:9' }]);
+    t.record({ role_id: 1, status: 'dropped', reason: 'Agency again', evidence: 'rule:9', actor: 'pipeline' });
+    t.addRule({ text: 'New', reason: 'r', types: ['forms'] });
+    revision = t.listRules().rules_revision;
+    assert.equal(revision, 1);
+  } finally {
+    db.close();
+  }
+  const again = openDb(path);
+  try {
+    assert.equal(again.prepare('SELECT COUNT(*) AS n FROM rule_types').get()?.n, 3, 'reopening adds no type rows');
+    assert.equal(new Tracker(again).listRules().rules_revision, revision, 'reopening does not reset the revision');
+  } finally {
+    again.close();
+  }
+});
+
 const ROLE_ONE = 'https://jobs.ashbyhq.com/acme/one?utm_source=mail';
 
 // A database as the previous release left it: two rows for one posting, a same-title row that is another

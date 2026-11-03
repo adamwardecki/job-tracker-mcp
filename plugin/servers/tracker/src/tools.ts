@@ -6,6 +6,7 @@ import type { LegacyQueueFile } from './legacy.ts';
 import { importLegacy } from './legacy.ts';
 import { lintProse } from './lint.ts';
 import { renderReport, runAudit } from './report.ts';
+import { RULE_TYPES } from './rules.ts';
 import type { ArgsOf, ObjSchema, Props } from './schema.ts';
 import { bool, int, num, obj, str, strList, typed } from './schema.ts';
 import type { Tracker } from './tracker.ts';
@@ -107,8 +108,9 @@ export const SCHEMAS = {
   open_items: obj({ stale_after_days: int('Queue items untouched this long are listed as stale (default 14)') }),
   pipeline_summary: obj({ stale_after_days: int('Default 14') }),
   open_board: obj({ open: bool('true also opens it in the default browser. Only when the user asked to see the board now; never in a scheduled run.') }),
-  add_rule: obj({ text: str('The rule, imperative'), reason: str('Why (the incident or the user words)'), example: str('Concrete example'), added_by: str('user | pipeline') }, ['text', 'reason']),
+  add_rule: obj({ text: str('The rule, imperative'), reason: str('Why (the incident or the user words)'), example: str('Concrete example'), types: strList(`Which consumers read it: ${RULE_TYPES.join(' | ')}. Omit for global`), added_by: str('user | pipeline') }, ['text', 'reason']),
   list_rules: obj({ include_inactive: bool('Include deactivated rules') }),
+  set_rule_types: obj({ id: int('Rule id'), types: strList(`One or more of: ${RULE_TYPES.join(' | ')}`) }, ['id', 'types']),
   deactivate_rule: obj({ id: int('Rule id') }, ['id']),
   source_health: obj({}),
   set_source_status: obj({ name: str('Source name'), status: str('ok | degraded | failed | disabled'), found: int('Leads found'), applied: int('Applications from it'), error: str('Error text') }, ['name', 'status']),
@@ -178,8 +180,9 @@ export const TOOLS: Tool[] = [
   defineTool('open_items', 'Queue (fresh and stale), unverified drafts, interviews to book, upcoming interviews.', (t, a) => t.openItems(a)),
   defineTool('pipeline_summary', 'Counts by status, live processes, rejections, queue (fresh and stale).', (t, a) => t.pipelineSummary(a)),
   defineTool('open_board', 'Start the local kanban board (or reuse the running one). With open: true it opens in the user\'s browser and the link is not returned; otherwise the link is returned. The user drags cards to move roles; moves follow transition\'s rules and are recorded as the user\'s. The board stops after 30 idle minutes.', (t, a) => openBoard({ dbPath: t.dbPath, open: a.open ?? false })),
-  defineTool('add_rule', 'Add a user preference or correction as a rule, with reason and example.', (t, a) => t.addRule(a)),
-  defineTool('list_rules', 'Active rules with provenance.', (t, a) => t.listRules(a)),
+  defineTool('add_rule', 'Add a user preference or correction as a rule, with reason and example. types says which consumers read it; omit it for global.', (t, a) => t.addRule(a)),
+  defineTool('list_rules', 'Active rules with provenance and types.', (t, a) => t.listRules(a)),
+  defineTool('set_rule_types', 'Change which consumers a rule applies to. Edits the classification only: text, reason and who added it stay. Returns the types and rules_revision.', (t, a) => t.setRuleTypes(a)),
   defineTool('deactivate_rule', 'Deactivate a rule.', (t, a) => t.deactivateRule(a)),
   defineTool('source_health', 'Per-source status, consecutive failures, yield.', (t) => t.sourceHealth()),
   defineTool('set_source_status', 'Record a source result for this run. Three consecutive failures mark it degraded.', (t, a) => t.setSourceStatus(a)),

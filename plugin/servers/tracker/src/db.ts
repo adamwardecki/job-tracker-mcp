@@ -228,6 +228,11 @@ export interface RuleRow {
   active: number;
 }
 
+export interface RuleTypeRow {
+  rule_id: number;
+  type: string;
+}
+
 export interface ProfileRow {
   key: string;
   value: string;
@@ -330,7 +335,7 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 // MIGRATIONS[i] takes the schema from version i + 1 to i + 2. Append only; never edit a shipped one.
 const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
@@ -399,6 +404,23 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
         created_at TEXT NOT NULL
       );
       CREATE INDEX role_links_canonical ON role_links(canonical_role_id);
+    `);
+  },
+  // 5: rule types and a revision counter. The rules table is untouched, so text, provenance and every rule:<id>
+  // citation stay as they were; each existing rule, active or not, becomes global. The SQL is written out here.
+  (db) => {
+    db.exec(`
+      CREATE TABLE rule_types (
+        rule_id INTEGER NOT NULL REFERENCES rules(id),
+        type TEXT NOT NULL,
+        PRIMARY KEY (rule_id, type)
+      );
+      CREATE TABLE rule_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        revision INTEGER NOT NULL
+      );
+      INSERT INTO rule_types(rule_id, type) SELECT id, 'global' FROM rules;
+      INSERT INTO rule_state(id, revision) VALUES(1, 0);
     `);
   },
 ];

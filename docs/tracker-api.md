@@ -69,7 +69,8 @@ closed (from queued | applied | interviewing | offer), with outcome: rejected | 
 | `verify_artifact` | `artifact_id`, `readback` (the text returned by `get_draft`/`list_drafts`) | Marks verified. The tracker checks the draft id is in the read-back; a hook checks a real `get_draft`/`list_drafts` result in the session contains it. |
 | `lint_prose` | `text`, `max_words?` | `{ok, issues:[{kind, match, hint}]}`: em/en dashes, "not X but Y", fake-candid openers, volunteered gaps, word count. |
 | `open_items` | `stale_after_days?` (14) | Fresh queue, stale queue, questions on non-queued roles, unverified drafts, interviews to book, upcoming interviews |
-| `add_rule` / `list_rules` / `deactivate_rule` | `text`, `reason`, `example?` / — / `id` | Rules with provenance |
+| `add_rule` / `list_rules` / `deactivate_rule` | `text`, `reason`, `example?`, `types?` / `include_inactive?` / `id` | Rules with provenance. `add_rule` returns `{rule_id}`; `types` is one or more of the rule types below, and omitted or `null` means `global`. `list_rules` returns `{rules, rules_revision}`: every matching rule with its stored fields plus `types`, in rule-type order. Rules from before types existed are `global`. `deactivate_rule` on an already inactive rule changes nothing. |
+| `set_rule_types` | `id`, `types` (non-empty) | `{rule_id, types, rules_revision}`. Replaces the rule's classification and nothing else: text, reason, example, author and date stay. Duplicates collapse; an empty list, a non-string or an unknown type is an error and writes nothing. |
 | `source_health` / `set_source_status` | — / `name`, `status` (`ok`\|`degraded`\|`failed`\|`disabled`), `found?`, `applied?`, `error?` | Per-source health; N consecutive failures flips to `degraded` |
 | `add_interview` | `role_id`, `stage`, `starts_at?` (ISO with offset, or a wall time read in `tz`), `tz?` (IANA), `people?`, `link?`, `booked_by?`, `notes?` | Also records an `interviewing` event if needed |
 | `render_report` | `date` (YYYY-MM-DD, local day), `run_id?` (preferred: that run only), `headline?` | Markdown daily report (spec §9). Only verified drafts and confirmed submissions are claimed. Missing capabilities and what was queued because of them are listed. Interview times are shown in local time. |
@@ -77,6 +78,10 @@ closed (from queued | applied | interviewing | offer), with outcome: rejected | 
 | `pipeline_summary` | `stale_after_days?` (14) | Counts by status, live processes (interviewing, offer), awaiting reply, rejections, fresh and stale queue |
 | `open_board` | `open?` (bool, default false: also open the default browser) | `{reused, opened, url?}`. With `open: true` and the browser opened, no `url`: the token stays out of the model's context. Otherwise `url`, and the text result is `Board: <url>`. Starts the local board for this database, or reuses the running one. See [Board](#board). |
 | `import_legacy` | `applied_log?` (markdown), `preferences?` (markdown), `queue?` (`[{filename, content}]`), `documents?` (`{profile, stories, reusable-answers}`), `path?` (local only: a `pipeline/` folder) | Import counts and unparsed rows. If a queue note's URL matches two roles that are not linked, the import stops with an error naming them and writes nothing. Check them with `get_role`, link them with `link_duplicate_role` if they are one posting, then import again. |
+
+## Rule types
+
+A rule has one or more types saying which consumers read it: `global`, `sourcing`, `scoring`, `forms`, `writing`, `inbox`, `reporting`. A rule can apply to several consumers. Rules added without `types`, and every rule that existed before types, are `global`. `rules_revision` counts rule changes: it goes up when a rule is added, when its types really change, and when an active rule is deactivated. Reads and no-op changes leave it alone. Filtering and pagination by type come in a later release; `list_rules` still returns every matching rule.
 
 ## Duplicate roles
 
