@@ -522,3 +522,72 @@ test('a live application elsewhere at the company, or no_cold_apply, still block
   assert.equal(t.gateCheck({ role_id: intro }).ok, false);
   assert.equal(t.gateCheck({ role_id: intro }).previous_application, false);
 });
+
+test('a withdrawal imported without an application still blocks the reopened role', (ctx) => {
+  const t = fresh(ctx);
+  importLegacy(t, { applied_log: '| 2026-03-01 | Acme | Engineer | LinkedIn | Applied | Withdrew |\n' });
+  const id = t.q<{ id: number }>('SELECT id FROM roles')[0]?.id ?? 0;
+  assert.deepEqual(t.roleDetail({ role_id: id }).events.map((e) => [e.status, e.outcome]), [['closed', 'withdrawn']]);
+  t.upsertRole({ id, title: 'Engineer', url: ONE });
+  t.run("UPDATE roles SET verified_at = '2026-04-01T00:00:00Z', score = 8 WHERE id = ?", id);
+  boardMove(t, { role_id: id, to: 'queued' });
+  const gate = t.gateCheck({ role_id: id });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.previous_application, true);
+  assert.match(gate.problems.join(' '), /closed \(withdrawn\) on 2026-03-01/);
+});
+
+test('an interview with no applied event on file blocks the reopened role', (ctx) => {
+  const t = fresh(ctx);
+  const id = queuedRole(t, ONE);
+  // The invite arrived for an application made outside the tracker, then the user dragged the card back.
+  t.record({ role_id: id, status: 'interviewing', reason: 'Invite', evidence: 'Book a call with us', actor: 'employer' });
+  boardMove(t, { role_id: id, to: 'queued' });
+  assert.ok(!t.roleDetail({ role_id: id }).events.some((e) => e.status === 'applied'));
+  const gate = t.gateCheck({ role_id: id });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.previous_application, true);
+  assert.equal(gate.matched_role_id, id);
+});
+
+test('history on a row linked under an unlinked holder of the posting counts', (ctx) => {
+  const t = fresh(ctx);
+  const a = queuedRole(t, ONE);
+  const companyId = t.mustRole(a).company_id;
+  // B holds the posting and is not linked to A. C, linked under B, holds the application; B only saw the posting close.
+  const c = oldRow(t, companyId, 'https://www.linkedin.com/jobs/view/55', [['2026-01-05T00:00:00Z', 'applied'], ['2026-01-10T00:00:00Z', 'closed', 'role_closed']]);
+  const b = oldRow(t, companyId, ONE, [['2026-01-12T00:00:00Z', 'closed', 'role_closed']]);
+  t.linkDuplicateRole({ canonical_role_id: b, duplicate_role_id: c, reason: 'Same job', evidence: `The LinkedIn card links to ${ONE}` });
+  const gate = t.gateCheck({ role_id: a });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.previous_application, true);
+  assert.equal(gate.matched_role_id, c);
+});
+
+test('a URL only a linked duplicate holds still finds another unlinked row for it', (ctx) => {
+  const t = fresh(ctx);
+  const r = queuedRole(t, ONE);
+  const companyId = t.mustRole(r).company_id;
+  const d = oldRow(t, companyId, LINKEDIN, [['2026-01-02T00:00:00Z', 'found']]);
+  t.linkDuplicateRole({ canonical_role_id: r, duplicate_role_id: d, reason: 'Same job', evidence: `The LinkedIn card links to ${ONE}` });
+  const e = oldRow(t, companyId, LINKEDIN, [['2026-01-03T00:00:00Z', 'found']]);
+  const gate = t.gateCheck({ role_id: r });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.dedupe_clean, false);
+  assert.match(gate.problems.join(' '), new RegExp(`also tracked as role ${e}\\b`));
+});
+
+test('two rows with one ATS posting under different URLs block on the posting key alone', (ctx) => {
+  const t = fresh(ctx);
+  const a = queuedRole(t, 'https://jobs.ashbyhq.com/acme/x');
+  const b = oldRow(t, t.mustRole(a).company_id, 'https://jobs.ashbyhq.com/acme/x/application', [['2026-01-02T00:00:00Z', 'applied']]);
+  assert.equal(t.one<{ n: number }>('SELECT COUNT(DISTINCT normalized_url) AS n FROM role_urls')?.n, 2, 'the URLs differ');
+  const gate = t.gateCheck({ role_id: a });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.previous_application, true);
+  assert.equal(gate.matched_role_id, b);
+  assert.match(gate.problems.join(' '), new RegExp(`also tracked as role ${b}\\b`));
+  // The other row is still applied, but it is reported as this posting, not as a second live process.
+  assert.equal(gate.live_elsewhere, false);
+  assert.doesNotMatch(gate.problems.join(' '), /Live application at this company/);
+});

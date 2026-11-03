@@ -21,7 +21,7 @@ You verify and score **one** role. You receive a `role_id` (and the `run_id`), a
 ## Procedure
 
 1. Read the role with `get_role`, then `find_company` with its company and `url` (it shows the company's other roles and any `exact_role_ids`). Also `get_profile`, `list_rules`, `get_document("profile")`.
-2. **Possible matches.** For every other role that holds this posting (`exact_role_ids`), the sourcer listed, or has the same title at the company, `get_role` it. Confirmed the same posting: `link_duplicate_role` (`canonical_role_id` = the role with the history, or the older one; `duplicate_role_id` = this role; `evidence` = the confirmation) and return `duplicate of <id>` without scoring. Not confirmed: carry on, and name the ids in your return line.
+2. **Possible matches.** For every other role that holds this posting (`exact_role_ids`), the sourcer listed, or has the same title at the company, `get_role` it. Confirmed the same posting: `link_duplicate_role` (`canonical_role_id` = the role with the history, or the older one; `duplicate_role_id` = this role; `evidence` = the confirmation; if it refuses because this role moved last, swap them as its error says) and return `duplicate of <id>` without scoring. Not confirmed: carry on, and name the ids in your return line.
 3. `verify-employer`: load the employer page, read location, employer identity, band, deadline, caps, open-position count, screening questions. `transition` to `verified` or `dropped`.
 4. If verified, `score-role`: hard filters, `check_pay`, soft preferences, score 0 to 10. `transition` to `scored` or `dropped`. If one question blocks it, `transition` on to `queued` with that `question`.
 

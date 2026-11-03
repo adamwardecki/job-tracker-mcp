@@ -86,10 +86,10 @@ Per-source recipes (endpoints, selectors, index queries) are in `reference.md` n
 Return one line per lead, and upsert it as `found`:
 
 ```
-company | title | url | source | raw_location (UNVERIFIED) | raw_comp (UNVERIFIED) | dedupe verdict
+company | title | url | source | raw_location (UNVERIFIED) | raw_comp (UNVERIFIED) | dedupe verdict | possible duplicate of <ids> (if unresolved)
 ```
 
-`upsert_role` fields: `company`, `company_domain` if known, `title`, `url` (always when the card has one; prefer the employer ATS link over the aggregator link, see Identity above), `url_aliases` with `identity_evidence` for a confirmed listing of the same job, `ats` if obvious from the URL, `source`, `posted_at` if given. Do **not** set `location_line`, `location_type` or `comp_*` from aggregator data. Put the raw tags in the reason of the `found` event if useful.
+`upsert_role` fields: `company`, `company_domain` if known, `title`, `url` (always when the card has one; prefer the employer ATS link over the aggregator link, see Identity below), `url_aliases` with `identity_evidence` for a confirmed listing of the same job, `ats` if obvious from the URL, `source`, `posted_at` if given. Do **not** set `location_line`, `location_type` or `comp_*` from aggregator data. Put the raw tags in the reason of the `found` event if useful.
 
 ## Identity: one posting, one role
 

@@ -137,6 +137,8 @@ const stateLabel = (e: StatusEvent) => (e.status === 'closed' ? `closed (${e.out
 const hasEmployerHistory = (evs: readonly StatusEvent[]) => evs.some((e) => oneOf(AUTHORITATIVE, e.status));
 // Events that show the user already applied to a posting. A rejection or withdrawal ends an application, so either
 // counts even when no applied event was imported with it. A closed posting (role_closed) alone does not.
+// Not AUTHORITATIVE: that set decides whether two histories may be linked, and counts any closed outcome, since a
+// posting that closed is still something the employer did. This one decides whether applying again is allowed.
 const APPLIED_SQL = "(status IN ('applied', 'interviewing', 'offer') OR (status = 'closed' AND outcome IN ('rejected', 'withdrawn')))";
 
 // Whether a duplicate's history can sit under the canonical role's card without hiding what happened. Each side is
@@ -473,13 +475,14 @@ export class Tracker {
 
   // The canonical roles of every row that holds a URL or ATS posting of this group, the group's own root included.
   samePostingGroups(group: readonly number[]): number[] {
-    const ids = this.q<{ role_id: number }>(
-      `SELECT role_id FROM role_urls WHERE normalized_url IN (SELECT normalized_url FROM role_urls WHERE role_id IN (${marks(group)}))
-       UNION SELECT p.role_id FROM role_postings p JOIN role_postings g ON g.provider = p.provider AND g.employer_key = p.employer_key AND g.posting_id = p.posting_id
-       WHERE g.role_id IN (${marks(group)})`,
+    return this.q<{ id: number }>(
+      `SELECT DISTINCT ${canonicalOf('m.role_id')} AS id FROM (
+         SELECT role_id FROM role_urls WHERE normalized_url IN (SELECT normalized_url FROM role_urls WHERE role_id IN (${marks(group)}))
+         UNION SELECT p.role_id FROM role_postings p JOIN role_postings g ON g.provider = p.provider AND g.employer_key = p.employer_key AND g.posting_id = p.posting_id
+         WHERE g.role_id IN (${marks(group)})
+       ) m ORDER BY id`,
       ...group, ...group,
-    ).map((r) => r.role_id);
-    return [...new Set(ids.map((id) => this.canonicalRoleId(id)))].sort((a, b) => a - b);
+    ).map((r) => r.id);
   }
 
   // Internal, inside the caller's transaction. Records that a role answers to these URLs and the ATS postings
@@ -759,14 +762,15 @@ export class Tracker {
     const problems: string[] = [];
     if (!role.verified_at) problems.push('Role not verified on the employer posting (verified_at is empty).');
     if (company.no_cold_apply) problems.push(`Company is no_cold_apply: ${company.no_cold_apply_reason || 'intro or recruiter process open'}.`);
-    // Other cards only: a linked duplicate's status stopped moving at the link, so its group's card speaks for it.
-    const others = this.q<Pick<RoleRow, 'id' | 'title' | 'status'>>(`SELECT id, title, status FROM roles r WHERE company_id = ? AND id != ? AND ${isCard('r.id')}`, company.id, role_id).filter((r) => oneOf(LIVE, r.status));
-    if (others.length) problems.push(`Live application at this company already: ${others.map((r) => `${r.title} (${r.status})`).join('; ')}.`);
-    if (oneOf(['dropped', 'closed'], role.status)) problems.push(`Role is ${role.status}.`);
-    if (oneOf(LIVE, role.status)) problems.push(`Role is already ${role.status}.`);
     // Rows outside the group that hold one of its URLs or postings are the same posting under a history nobody has
     // reconciled. Until they are linked (or one is corrected), neither can be applied to, and their history counts.
     const unresolved = this.samePostingGroups(group).filter((id) => id !== role_id);
+    // Other cards only: a linked duplicate's status stopped moving at the link, so its group's card speaks for it.
+    // An unresolved row for this posting is reported below as this posting, not as a second live process.
+    const others = this.q<Pick<RoleRow, 'id' | 'title' | 'status'>>(`SELECT id, title, status FROM roles r WHERE company_id = ? AND id != ? AND ${isCard('r.id')}`, company.id, role_id).filter((r) => oneOf(LIVE, r.status) && !unresolved.includes(r.id));
+    if (others.length) problems.push(`Live application at this company already: ${others.map((r) => `${r.title} (${r.status})`).join('; ')}.`);
+    if (oneOf(['dropped', 'closed'], role.status)) problems.push(`Role is ${role.status}.`);
+    if (oneOf(LIVE, role.status)) problems.push(`Role is already ${role.status}.`);
     if (unresolved.length) problems.push(`This posting is also tracked as role ${unresolved.join(', ')}. Check them with get_role; link them with link_duplicate_role if they are one posting, or correct the wrong URL, before applying.`);
     const history = [...group, ...unresolved.flatMap((id) => this.roleGroupIds(id))];
     const previous = this.one<StatusEvent & Pick<EventRow, 'role_id'>>(`SELECT role_id, ts, status, outcome FROM events WHERE role_id IN (${marks(history)}) AND ${APPLIED_SQL} ORDER BY ts DESC, id DESC LIMIT 1`, ...history);

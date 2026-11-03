@@ -322,6 +322,12 @@ export async function prompt(payload: HookPayload): Promise<void> {
 
 // ---------------------------------------------------------------- Stop
 
+// The role a tracker tool answered with: upsert_role, transition and record all return {"role": {"id": ...}}.
+function resultRoleId(text: string): number | null {
+  const m = text.match(/"role"\s*:\s*\{\s*"id"\s*:\s*(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
 export async function stop(payload: HookPayload): Promise<void> {
   const session = loadSession(payload.session_id);
   if (session.kind !== 'sweep') return;
@@ -336,15 +342,15 @@ export async function stop(payload: HookPayload): Promise<void> {
     const r = resultFor.get(u.id);
     if (!r || r.isError) continue;
     if (short === 'upsert_role') {
-      const m = r.text.match(/"role"\s*:\s*\{\s*"id"\s*:\s*(\d+)/);
-      if (m) touched.add(Number(m[1]));
+      const id = resultRoleId(r.text);
+      if (id !== null) touched.add(id);
     }
     if (short === 'transition' || short === 'record') {
       if (u.input?.role_id != null) recorded.add(Number(u.input.role_id));
       // A linked duplicate's old id acts on its canonical role, which the tracker names in its answer and which is
       // the id upsert_role returns, so count that one too.
-      const m = r.text.match(/"role"\s*:\s*\{\s*"id"\s*:\s*(\d+)/);
-      if (m) recorded.add(Number(m[1]));
+      const id = resultRoleId(r.text);
+      if (id !== null) recorded.add(id);
     }
     if (short === 'render_report') reported = true;
   }

@@ -14,8 +14,9 @@ export async function gateCheck(roleId: number): Promise<GateResult> {
     const db = openDb(path, { readOnly: true });
     try {
       // A hook only reads, so it never migrates. An older schema lacks tables the check needs; say so plainly.
-      const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
-      if (user_version < SCHEMA_VERSION) return { ok: false, problems: [`The tracker database is at schema v${user_version}; start the tracker once to upgrade it. A submit cannot be checked until then, so it is blocked.`] };
+      // Anything but the current version blocks, including a value that is not a number at all.
+      const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: unknown };
+      if (user_version !== SCHEMA_VERSION) return { ok: false, problems: [`The tracker database is at schema v${user_version}; start the tracker once to upgrade it. A submit cannot be checked until then, so it is blocked.`] };
       return new Tracker(db).gateCheck({ role_id: roleId });
     } finally {
       db.close();
