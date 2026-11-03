@@ -314,7 +314,11 @@ export function openDb(path: string = defaultDbPath(), { readOnly = false }: { r
 // Nested calls join the outer transaction: they neither begin nor commit, and an inner
 // failure only rolls anything back if it propagates out of the outermost call.
 const inTx = new WeakSet<DatabaseSync>();
+// The outermost transactions that readTx began. A write there would be a deferred transaction's lock upgrade.
+const readOnlyTx = new WeakSet<DatabaseSync>();
 export function tx<T>(db: DatabaseSync, fn: () => T): T {
+  // A bug in the caller, not something the model can fix, so it is a plain Error.
+  if (readOnlyTx.has(db)) throw new Error('tx was called inside readTx: a read transaction must not write.');
   if (inTx.has(db)) return fn();
   db.exec('BEGIN IMMEDIATE');
   inTx.add(db);
@@ -333,11 +337,12 @@ export function tx<T>(db: DatabaseSync, fn: () => T): T {
 
 // A read-only transaction: a deferred BEGIN takes no write lock, so it does not wait on or block the board
 // server's writes, and every query in `fn` sees one snapshot. Joins an outer transaction like `tx`. `fn` must
-// not write: a write here could not upgrade a snapshot another connection has since changed.
+// not write: tx refuses to run inside it, since a write could not upgrade a snapshot another connection has since changed.
 export function readTx<T>(db: DatabaseSync, fn: () => T): T {
   if (inTx.has(db)) return fn();
   db.exec('BEGIN');
   inTx.add(db);
+  readOnlyTx.add(db);
   try {
     const out = fn();
     db.exec('COMMIT');
@@ -346,6 +351,7 @@ export function readTx<T>(db: DatabaseSync, fn: () => T): T {
     if (db.isTransaction) db.exec('ROLLBACK');
     throw err;
   } finally {
+    readOnlyTx.delete(db);
     inTx.delete(db);
   }
 }

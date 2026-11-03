@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import { openDb, SCHEMA_V1, SCHEMA_VERSION, tx } from '../../plugin/servers/tracker/src/db.ts';
+import { openDb, readTx, SCHEMA_V1, SCHEMA_VERSION, tx } from '../../plugin/servers/tracker/src/db.ts';
 import { secureDir, secureFile } from '../../plugin/servers/tracker/src/fsperm.ts';
 import { importLegacy } from '../../plugin/servers/tracker/src/legacy.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
@@ -70,6 +70,41 @@ test('a throw inside a nested tx rolls back the outer writes too', () => {
   assert.deepEqual(ruleTexts(db), []);
   tx(db, () => addRule(db, 'after')); // the inTx marker was cleared
   assert.deepEqual(ruleTexts(db), ['after']);
+});
+
+test('a readTx inside a tx joins it and sees its uncommitted write', () => {
+  const db = openDb(':memory:');
+  tx(db, () => {
+    addRule(db, 'outer');
+    assert.deepEqual(readTx(db, () => ruleTexts(db)), ['outer']);
+    assert.equal(db.isTransaction, true, 'the read did not commit the outer transaction');
+    addRule(db, 'later');
+  });
+  assert.deepEqual(ruleTexts(db), ['outer', 'later']);
+});
+
+test('a throw inside a readTx nested in a tx rolls the outer writes back', () => {
+  const db = openDb(':memory:');
+  assert.throws(() => tx(db, () => {
+    addRule(db, 'outer');
+    readTx(db, () => {
+      throw new Error('boom');
+    });
+  }), /boom/);
+  assert.equal(db.isTransaction, false);
+  assert.deepEqual(ruleTexts(db), []);
+  tx(db, () => addRule(db, 'after'));
+  assert.deepEqual(ruleTexts(db), ['after']);
+});
+
+test('a tx inside a readTx is a bug: it throws a plain Error and the read ends cleanly', () => {
+  const db = openDb(':memory:');
+  addRule(db, 'kept');
+  assert.throws(() => readTx(db, () => tx(db, () => addRule(db, 'sneaked'))), (e) => e instanceof Error && e.constructor === Error && /read transaction/.test(e.message));
+  assert.equal(db.isTransaction, false);
+  assert.deepEqual(ruleTexts(db), ['kept']);
+  tx(db, () => addRule(db, 'after')); // neither marker is left behind
+  assert.deepEqual(readTx(db, () => ruleTexts(db)), ['kept', 'after']);
 });
 
 const userVersion = (db: DatabaseSync) => (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
