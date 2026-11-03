@@ -331,6 +331,25 @@ export function tx<T>(db: DatabaseSync, fn: () => T): T {
   }
 }
 
+// A read-only transaction: a deferred BEGIN takes no write lock, so it does not wait on or block the board
+// server's writes, and every query in `fn` sees one snapshot. Joins an outer transaction like `tx`. `fn` must
+// not write: a write here could not upgrade a snapshot another connection has since changed.
+export function readTx<T>(db: DatabaseSync, fn: () => T): T {
+  if (inTx.has(db)) return fn();
+  db.exec('BEGIN');
+  inTx.add(db);
+  try {
+    const out = fn();
+    db.exec('COMMIT');
+    return out;
+  } catch (err) {
+    if (db.isTransaction) db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    inTx.delete(db);
+  }
+}
+
 export function now(): string {
   return new Date().toISOString();
 }

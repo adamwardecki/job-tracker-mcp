@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue, StatementResultingChanges } from 'nod
 import type { ConfigSections, Profile, SectionName } from './config.ts';
 import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './config.ts';
 import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RuleTypeRow, RunRow, SourceRow } from './db.ts';
-import { now, tx } from './db.ts';
+import { now, readTx, tx } from './db.ts';
 import { ToolError } from './errors.ts';
 import { atsFromUrl, nameScore, normalizeDomain, normalizeName } from './fuzzy.ts';
 import type { LintResult } from './lint.ts';
@@ -13,7 +13,7 @@ import { checkPay } from './pay.ts';
 import type { PostingIdentity, PostingKey } from './posting.ts';
 import { parsePostingUrl, urlIdentity } from './posting.ts';
 import type { RuleListItem, RuleType } from './rules.ts';
-import { decodeRuleCursor, encodeRuleCursor, normalizeRuleLimit, normalizeRuleTypes, RULE_TYPES, resolveRuleFilters } from './rules.ts';
+import { assertFreshRevision, decodeRuleCursor, encodeRuleCursor, normalizeRuleLimit, normalizeRuleTypes, RULE_TYPES, resolveRuleFilters } from './rules.ts';
 import { dayBounds, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
 import type { ArgsFor } from './tools.ts';
 import { isRecord, oneOf, parseJson } from './util.ts';
@@ -190,6 +190,13 @@ function takesPrimary(current: string | null, incoming: PostingIdentity, explici
   if (held.normalized_url === incoming.normalized_url) return false;
   if (!held.posting !== !incoming.posting) return !!incoming.posting;
   return explicit;
+}
+
+// Matches a rule with any of these types, or with no type rows at all (written before types existed, so global).
+// EXISTS cannot repeat a rule that has several matching types. One `?` per type.
+function typeFilterSql(matched: readonly RuleType[]): string {
+  const hasRows = 'SELECT 1 FROM rule_types rt WHERE rt.rule_id = rules.id';
+  return `(EXISTS (${hasRows} AND rt.type IN (${matched.map(() => '?').join(',')})) OR NOT EXISTS (${hasRows}))`;
 }
 
 export class Tracker {
@@ -862,22 +869,20 @@ export class Tracker {
     const after = cursor == null ? null : decodeRuleCursor(cursor);
     const { types: filter, include_inactive: inactive } = resolveRuleFilters(types, include_inactive, after);
     const size = normalizeRuleLimit(limit);
-    return tx(this.db, () => {
+    return readTx(this.db, () => {
       const revision = this.rulesRevision();
-      // Pages from two revisions could skip or repeat a rule that moved between them, so the caller starts over.
-      if (after && after.revision !== revision) {
-        throw new ToolError(`Rules changed since this page was read (revision ${after.revision}, now ${revision}). Restart list_rules without a cursor and discard the pages already read.`);
-      }
-      // Any requested type or global; a rule with no type rows is global too. EXISTS cannot duplicate a rule that has several matching types.
+      if (after) assertFreshRevision('list_rules', after.revision, revision);
+      // Any requested type or global.
       const matched = filter ? [...new Set<RuleType>([...filter, 'global'])] : [];
-      const where = `${inactive ? '1' : 'active = 1'}${filter ? ` AND (EXISTS (SELECT 1 FROM rule_types rt WHERE rt.rule_id = rules.id AND rt.type IN (${matched.map(() => '?').join(',')})) OR NOT EXISTS (SELECT 1 FROM rule_types rt WHERE rt.rule_id = rules.id))` : ''}`;
+      const where = `${inactive ? '1' : 'active = 1'}${filter ? ` AND ${typeFilterSql(matched)}` : ''}`;
       const total = this.one<{ n: number }>(`SELECT COUNT(*) AS n FROM rules WHERE ${where}`, ...matched)?.n ?? 0;
       const rows = this.q<RuleRow>(`SELECT * FROM rules WHERE ${where} AND id > ? ORDER BY id LIMIT ?`, ...matched, after?.after_id ?? 0, size + 1);
       const page = rows.slice(0, size);
       const kinds = this.ruleTypesFor(page.map((r) => r.id));
       const last = page[page.length - 1];
       const next_cursor = rows.length > size && last ? encodeRuleCursor({ v: 1, after_id: last.id, revision, types: filter, include_inactive: inactive }) : null;
-      const rules: RuleListItem[] = page.map((r) => ({ ...r, types: kinds.get(r.id) ?? ['global'] }));
+      // ruleTypesFor answers every id it is given, so the lookup cannot miss.
+      const rules: RuleListItem[] = page.map((r) => ({ ...r, types: kinds.get(r.id)! }));
       return { rules, next_cursor, total, rules_revision: revision };
     });
   }
