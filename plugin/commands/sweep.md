@@ -38,11 +38,12 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
 
 3. **Source.** Follow the `source-roles` skill to choose today's sources from config and capabilities. Launch one `sourcer` agent per available source, in parallel. Browser sources are skipped when no browser is reachable; list each skip in the report (do not mark the source failed for it). Collect each sourcer's lead list.
 
-4. **Dedupe.** The sourcers already call `find_company` before `upsert_role`. For any lead they marked `seen` or `skip`, do not verify again. A company with `no_cold_apply` or a live application is never prepared.
+4. **Dedupe.** The sourcers already call `find_company` before `upsert_role`. A lead they marked `skip` (the posting is already tracked, a live application at the company, or `no_cold_apply`) was not upserted: do not verify it again. A lead marked `seen` that they upserted is a different requisition at a known company: it is a `found` role like any other and goes on to step 5, even if the company rejected the user for another role. Why: a rejection blocks only the posting it was for; there is no company ban. A company with `no_cold_apply` or a live application is never prepared. Leads listed as `possible duplicate of <ids>` go to their scorer with those ids.
 
 5. **Verify and score.** For each `found` role from this run, launch a `scorer` agent (one role per agent, several in parallel). Each scorer follows `verify-employer` then `score-role` and writes `transition` events with evidence. Respect `--limit`.
 
 6. **Prepare.** Take the top scored roles (default 3, at most 8, in score order) that cleared every hard filter. For each:
+   - Call `gate_check` first. If it fails, do not prepare the role; put its problems in the report. Why: a posting applied to before (`previous_application`), or one with a live application or `no_cold_apply` at the company, can never be submitted, so a note for it is wasted.
    - Follow the `write-note` skill to write the cover note. `lint_prose` must pass.
    - Save it with `add_artifact` (`kind: "cover_note"`).
    - `transition` the role to `queued` with a reason naming the note, the `run_id`, and `blocked_by: "browser"` if no browser was available this run, else `blocked_by: "user"`.
@@ -64,4 +65,4 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
 
 ## When sources are caught up
 
-If every lead today is a company already in the tracker, say "sources are caught up" in the report and stop. Do not widen the filters to manufacture a shortlist.
+If every lead today is a posting already in the tracker (`skip`), say "sources are caught up" in the report and stop. A new requisition at a known company is not caught up. Do not widen the filters to manufacture a shortlist.

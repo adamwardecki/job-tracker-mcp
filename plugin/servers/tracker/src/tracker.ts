@@ -29,6 +29,8 @@ export interface GateResult {
   dedupe_clean?: boolean;
   no_cold_apply?: boolean;
   live_elsewhere?: boolean;
+  previous_application?: boolean;
+  matched_role_id?: number;
 }
 
 export const STATUSES = ['found', 'verified', 'scored', 'queued', 'applied', 'interviewing', 'offer', 'dropped', 'closed'] as const;
@@ -133,6 +135,9 @@ const AUTHORITATIVE: readonly Status[] = ['applied', 'interviewing', 'offer', 'c
 type StatusEvent = Pick<EventRow, 'ts' | 'status' | 'outcome'>;
 const stateLabel = (e: StatusEvent) => (e.status === 'closed' ? `closed (${e.outcome ?? 'no outcome'})` : String(e.status));
 const hasEmployerHistory = (evs: readonly StatusEvent[]) => evs.some((e) => oneOf(AUTHORITATIVE, e.status));
+// Events that show the user already applied to a posting. A rejection or withdrawal ends an application, so either
+// counts even when no applied event was imported with it. A closed posting (role_closed) alone does not.
+const APPLIED_SQL = "(status IN ('applied', 'interviewing', 'offer') OR (status = 'closed' AND outcome IN ('rejected', 'withdrawn')))";
 
 // Whether a duplicate's history can sit under the canonical role's card without hiding what happened. Each side is
 // a root id and its group's status events, oldest first. Nothing here ranks states: the canonical role must already
@@ -378,7 +383,8 @@ export class Tracker {
       company: { id: c.id, name: c.name, aliases: parseJson<string[]>(c.aliases, []), domain: c.domain, no_cold_apply: !!c.no_cold_apply, no_cold_apply_reason: c.no_cold_apply_reason },
       score: Math.round(score * 100) / 100,
       certain: score >= 1,
-      roles: this.q<RoleSummary>('SELECT id, title, url, status, updated_at FROM roles WHERE company_id = ? ORDER BY updated_at DESC', c.id),
+      // One card per linked group, so a duplicate's stale status is never read as a process of its own.
+      roles: this.q<RoleSummary>(`SELECT id, title, url, status, updated_at FROM roles r WHERE company_id = ? AND ${isCard('r.id')} ORDER BY updated_at DESC`, c.id),
     }));
     const certain = out.filter((m) => m.certain);
     const pool = certain.length ? certain : out;
@@ -463,6 +469,17 @@ export class Tracker {
   // The canonical roles behind an exact match: rows of one linked group are one role, independent rows a conflict.
   exactGroups(identity: PostingIdentity): number[] {
     return [...new Set(this.exactRoleIds(identity).map((id) => this.canonicalRoleId(id)))].sort((a, b) => a - b);
+  }
+
+  // The canonical roles of every row that holds a URL or ATS posting of this group, the group's own root included.
+  samePostingGroups(group: readonly number[]): number[] {
+    const ids = this.q<{ role_id: number }>(
+      `SELECT role_id FROM role_urls WHERE normalized_url IN (SELECT normalized_url FROM role_urls WHERE role_id IN (${marks(group)}))
+       UNION SELECT p.role_id FROM role_postings p JOIN role_postings g ON g.provider = p.provider AND g.employer_key = p.employer_key AND g.posting_id = p.posting_id
+       WHERE g.role_id IN (${marks(group)})`,
+      ...group, ...group,
+    ).map((r) => r.role_id);
+    return [...new Set(ids.map((id) => this.canonicalRoleId(id)))].sort((a, b) => a - b);
   }
 
   // Internal, inside the caller's transaction. Records that a role answers to these URLs and the ATS postings
@@ -731,18 +748,29 @@ export class Tracker {
     };
   }
 
+  // A posting is applied to once. The current status is not enough: a board move or a re-run can put a rejected
+  // role back in the queue, so the history of every row for this posting decides, under any of its ids.
   gateCheck({ role_id: requested }: ArgsFor<'gate_check'>): GateResult {
     const role = this.cardRow(requested);
     if (!role) return { ok: false, problems: [`No role ${requested}`] };
     const role_id = role.id;
     const company = this.mustCompany(role.company_id);
+    const group = this.roleGroupIds(role_id);
     const problems: string[] = [];
     if (!role.verified_at) problems.push('Role not verified on the employer posting (verified_at is empty).');
     if (company.no_cold_apply) problems.push(`Company is no_cold_apply: ${company.no_cold_apply_reason || 'intro or recruiter process open'}.`);
-    const others = this.q<Pick<RoleRow, 'id' | 'title' | 'status'>>('SELECT id, title, status FROM roles WHERE company_id = ? AND id != ?', company.id, role_id).filter((r) => oneOf(LIVE, r.status));
+    // Other cards only: a linked duplicate's status stopped moving at the link, so its group's card speaks for it.
+    const others = this.q<Pick<RoleRow, 'id' | 'title' | 'status'>>(`SELECT id, title, status FROM roles r WHERE company_id = ? AND id != ? AND ${isCard('r.id')}`, company.id, role_id).filter((r) => oneOf(LIVE, r.status));
     if (others.length) problems.push(`Live application at this company already: ${others.map((r) => `${r.title} (${r.status})`).join('; ')}.`);
     if (oneOf(['dropped', 'closed'], role.status)) problems.push(`Role is ${role.status}.`);
     if (oneOf(LIVE, role.status)) problems.push(`Role is already ${role.status}.`);
+    // Rows outside the group that hold one of its URLs or postings are the same posting under a history nobody has
+    // reconciled. Until they are linked (or one is corrected), neither can be applied to, and their history counts.
+    const unresolved = this.samePostingGroups(group).filter((id) => id !== role_id);
+    if (unresolved.length) problems.push(`This posting is also tracked as role ${unresolved.join(', ')}. Check them with get_role; link them with link_duplicate_role if they are one posting, or correct the wrong URL, before applying.`);
+    const history = [...group, ...unresolved.flatMap((id) => this.roleGroupIds(id))];
+    const previous = this.one<StatusEvent & Pick<EventRow, 'role_id'>>(`SELECT role_id, ts, status, outcome FROM events WHERE role_id IN (${marks(history)}) AND ${APPLIED_SQL} ORDER BY ts DESC, id DESC LIMIT 1`, ...history);
+    if (previous) problems.push(`This posting was applied to before: role ${previous.role_id} was ${stateLabel(previous)} on ${day(previous.ts)}. A posting is applied to once, even after a rejection or a move back to the queue.`);
     return {
       ok: problems.length === 0,
       role_id,
@@ -750,9 +778,11 @@ export class Tracker {
       title: role.title,
       url: role.url || undefined,
       verified: !!role.verified_at,
-      dedupe_clean: others.length === 0,
+      dedupe_clean: others.length === 0 && !unresolved.length && !previous,
       no_cold_apply: !!company.no_cold_apply,
       live_elsewhere: others.length > 0,
+      previous_application: !!previous,
+      ...(previous ? { matched_role_id: previous.role_id } : {}),
       problems,
     };
   }

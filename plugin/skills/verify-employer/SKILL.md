@@ -20,17 +20,18 @@ Load the employer's own posting, quote it, and decide. This step is the only way
 ## Procedure
 
 1. **Get the employer URL.** From the lead's URL, a "View job post"/apply link, or the employer's careers page. If the lead came via a recruiter or broker, find the employer's own page anyway; a recruiter's rewrite can drop the whole tech stack.
-2. **Load it.** Prefer the ATS posting API or a plain fetch (works without a browser; see `source-roles/reference.md`). Use the browser only if fetch cannot render it.
+2. **Bind the employer URL to the role.** If the role's `url` is not this employer page, `upsert_role` with its `id` and `url` = the employer page (pass `identity_evidence` if the tool asks for it, saying how the lead links to this page). If the tool answers that the URL belongs to another role, this lead is that posting: do not verify it as new. `link_duplicate_role` with that role as `canonical_role_id`, this one as `duplicate_role_id` and the shared URL as `evidence`, and return `duplicate of <id>`. Why: the employer URL is the posting's identity; verifying a second row for it would let one job be prepared, and applied to, twice.
+3. **Load it.** Prefer the ATS posting API or a plain fetch (works without a browser; see `source-roles/reference.md`). Use the browser only if fetch cannot render it.
    - Posting gone (404, "no longer active", redirect to the board root): `transition` to `dropped`, reason "posting closed", evidence = URL plus the message seen.
-3. **Read, in this order, and copy verbatim:**
+4. **Read, in this order, and copy verbatim:**
    1. Location line and workplace/location type. Secondary locations. Any country list.
    2. The employer's identity: the About block, who actually employs the hire. Recruiting agency or staffing firm presenting a client is a different employer.
    3. Pay band if published, with currency and period.
    4. Deadline field and any application caps ("may not apply more than N times in 60 days").
    5. Open-position count on the board.
    6. If the apply form is reachable without login: its screening questions (Greenhouse `?questions=true` works by fetch).
-4. **Check the tells below.** Each produces a drop (with quote) or a question for the user (passed to `score-role`).
-5. **Record.** If the role passes: `transition` to `verified` with `evidence`, `location_line`, `location_type`, and update the role with any comp, stack, industry and ATS details via `upsert_role` (with `id`). Otherwise `transition` to `dropped` with the quote and a `category` (`location`, `pay`, `industry`, `role_shape`, `stack`, `culture`, `duplicate`, `gated`, `other`). Pass the `run_id` when you have one.
+5. **Check the tells below.** Each produces a drop (with quote) or a question for the user (passed to `score-role`).
+6. **Record.** If the role passes: `transition` to `verified` with `evidence`, `location_line`, `location_type`, and update the role with any comp, stack, industry and ATS details via `upsert_role` (with `id`). Otherwise `transition` to `dropped` with the quote and a `category` (`location`, `pay`, `industry`, `role_shape`, `stack`, `culture`, `duplicate`, `gated`, `other`). Pass the `run_id` when you have one.
 
 ## Tells and what they mean
 
@@ -65,4 +66,4 @@ These JDs are often excellent on the work. The geography still decides. Drop wit
 
 ## Output
 
-Return one line per role: `role_id | verified|dropped | location_line (verbatim) | one-line reason | question for the user (if any)`.
+Return one line per role: `role_id | verified|dropped|duplicate of <id> | location_line (verbatim) | one-line reason | question for the user (if any)`.

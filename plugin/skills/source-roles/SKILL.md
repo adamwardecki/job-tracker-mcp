@@ -10,7 +10,7 @@ A source produces **leads**. A lead is never a verdict: every tag on it (locatio
 ## Hard rules
 
 - **Mark every aggregator field UNVERIFIED.** Pass location and comp tags through as `raw_location` / `raw_comp`, never into `location_line` or `comp_*`. Why: wrong drops happened on stale tags (a years-old industry tag, a "UK only" that wasn't), and wrong approvals on "Remote" tags the ATS contradicted.
-- **Dedupe before upsert.** Call `find_company` (name plus domain when known) for every lead. `skip` (live application or `no_cold_apply`) means do not upsert a new role; `seen` means update only if it is a different req.
+- **Dedupe before upsert.** Call `find_company` for every lead with its `url` (the employer ATS link when the card has one), the name, and the domain when known. `skip` (this posting is already tracked, a live application at the company, or `no_cold_apply`) means do not upsert. `seen` is a known company with nothing blocking: a different requisition there is a new lead, even after a rejection at that company, so upsert it. Why: a rejection blocks only the posting it was for; there is no company ban, and `gate_check` blocks a second application to the same posting.
 - **Capability-aware.** Skip browser sources when no browser is reachable, and say so in the report ("skipped: no browser"). Do not mark the source `failed` for that: only real errors from the source count towards degradation.
 - **Retry limits.** A failing call is retried at most twice, then the source is recorded with `set_source_status(name, "failed", error: <verbatim error>)` and the run moves on. Never loop.
 - **Never guess a URL.** Sites with one fixed address (Work at a Startup, Wellfound, Welcome to the Jungle, We Work Remotely, Jack & Jill, and the US boards) start from the start URL in `reference.md`; that is not a guess, and they need nothing in config. User-specific URLs (employer boards in `sources.boards`, the JobCopilot tracker) come from config, the user, or an email that contains them. A login redirect on a guessed URL is not evidence the session expired.
@@ -89,7 +89,17 @@ Return one line per lead, and upsert it as `found`:
 company | title | url | source | raw_location (UNVERIFIED) | raw_comp (UNVERIFIED) | dedupe verdict
 ```
 
-`upsert_role` fields: `company`, `company_domain` if known, `title`, `url` (prefer the employer ATS link over the aggregator link when the card has one), `ats` if obvious from the URL, `source`, `posted_at` if given. Do **not** set `location_line`, `location_type` or `comp_*` from aggregator data. Put the raw tags in the reason of the `found` event if useful.
+`upsert_role` fields: `company`, `company_domain` if known, `title`, `url` (always when the card has one; prefer the employer ATS link over the aggregator link, see Identity above), `url_aliases` with `identity_evidence` for a confirmed listing of the same job, `ats` if obvious from the URL, `source`, `posted_at` if given. Do **not** set `location_line`, `location_type` or `comp_*` from aggregator data. Put the raw tags in the reason of the `found` event if useful.
+
+## Identity: one posting, one role
+
+A role is matched on its exact URL or ATS posting, never on its title. Different reqs often share a title, and a lead without a URL always creates a new role.
+
+- **Pass `url` whenever the lead has one.** Prefer the employer ATS link. When the card is an aggregator listing that links to an ATS page, pass the ATS link as `url` and the listing in `url_aliases`, with `identity_evidence` saying how you know (e.g. "The LinkedIn card links to <ATS URL>"). Why: without a URL, every re-run of the source created another row for the same job.
+- **A lead without a URL, or with only a listing:** look at the same-title roles in `find_company`'s `matches[].roles` first, and `get_role` each. If one is this posting (its `urls` or `postings` hold the link, the card links to its ATS page, or the req number matches), update it with `upsert_role` and its `id` instead of creating a role, adding any new link as `url_aliases` with `identity_evidence`.
+- **`possible_role_ids` after an upsert:** `get_role` each. Same posting, confirmed as above: `link_duplicate_role` with the role that has the history (or the older one) as `canonical_role_id`, the row just created as `duplicate_role_id`, and the confirmation as `evidence`; if it refuses because the other row moved last, swap them as its error says. Not confirmed: keep both and list the new row as `possible duplicate of <ids>` in the lead line.
+- **`link_duplicate_role` needs positive evidence**: the same ATS URL or posting ID, a listing that links to the other row's ATS page, or the same req number. Never a matching title, company or location alone. Why: a wrong link hides one application's history under another role, and the submit gate reads that history.
+- **Several `exact_role_ids`** mean the posting is tracked twice already. Do not upsert; list the ids for the sweep report.
 
 ## Early drops at source
 

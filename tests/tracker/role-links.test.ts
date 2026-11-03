@@ -299,6 +299,17 @@ test('the legacy import treats a linked group as one role', async (ctx) => {
   assert.equal(t.mustRole(1).status, 'queued');
 });
 
+test('an outcome sentence in the legacy log does not land on a linked duplicate\'s stale queue status', async (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, REJECTED);
+  legacyRole(t, 2, PREP);
+  await call(t)('link_duplicate_role', { canonical_role_id: 1, duplicate_role_id: 2, ...LINK });
+  // The card is closed, so the log's rejection is already on file; the duplicate row still says queued.
+  const out = importLegacy(t, { applied_log: '| 2026-03-05 | — replies received — | **Acme** rejected the application. | inbox | note | — |\n' });
+  assert.equal(out.imported.outcomes_from_meta, 0);
+  assert.deepEqual(t.roleDetail({ role_id: 1 }).events.filter((e) => e.status === 'closed').map((e) => e.role_id), [1]);
+});
+
 test('the legacy import refuses a URL held by two independent roles', (ctx) => {
   const t = fresh(ctx);
   legacyRole(t, 1, PREP);

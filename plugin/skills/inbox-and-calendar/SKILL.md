@@ -29,7 +29,7 @@ Turn incoming mail into tracker events and, where a written answer is needed, a 
 - LinkedIn connector (if present): read the inbox list. A jobs-search failure is not a logout if the inbox works.
 
 ### 3. Match and classify
-For each thread: `get_thread`, then match it to a company with `find_company` (sender domain and name). No role in the tracker but clearly about one: `upsert_role` with `source: "inbound"`.
+For each thread: `get_thread`, then match it to a company with `find_company` (sender domain and name, plus the posting `url` when the mail links one: `exact_role_ids` then names the role). Several roles at the company and no URL: pick the one the mail names by title and req, and `get_role` to confirm before recording on it. No role in the tracker but clearly about one: `upsert_role` with `source: "inbound"` and the posting `url` when the mail has one; if it returns `possible_role_ids`, check them as in Identity in `source-roles` and record the outcome on the role that is this posting. Why: a URL-less upsert always creates a new role, so an outcome recorded on it would miss the role that holds the application.
 
 Classify into one of:
 

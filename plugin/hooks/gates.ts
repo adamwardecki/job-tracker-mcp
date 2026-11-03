@@ -339,7 +339,13 @@ export async function stop(payload: HookPayload): Promise<void> {
       const m = r.text.match(/"role"\s*:\s*\{\s*"id"\s*:\s*(\d+)/);
       if (m) touched.add(Number(m[1]));
     }
-    if ((short === 'transition' || short === 'record') && u.input?.role_id != null) recorded.add(Number(u.input.role_id));
+    if (short === 'transition' || short === 'record') {
+      if (u.input?.role_id != null) recorded.add(Number(u.input.role_id));
+      // A linked duplicate's old id acts on its canonical role, which the tracker names in its answer and which is
+      // the id upsert_role returns, so count that one too.
+      const m = r.text.match(/"role"\s*:\s*\{\s*"id"\s*:\s*(\d+)/);
+      if (m) recorded.add(Number(m[1]));
+    }
     if (short === 'render_report') reported = true;
   }
   const missing = [...touched].filter((id) => !recorded.has(id));

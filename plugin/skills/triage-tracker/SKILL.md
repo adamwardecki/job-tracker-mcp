@@ -57,14 +57,14 @@ What the delete hook accepts after a passing guard: the delete control and then 
 
 ### 3. Reconcile the Applied column (every run, read-only)
 - Read every card inside the Applied column only: company, title, link, date.
-- For each, `find_company`. If the tracker has no live application for it:
-  - `upsert_role` with `source` = this board, then `record` with `status: "applied"`, `actor: "user"`, reason "Filed by <tool> in the user's name", evidence = the card text verbatim.
+- For each, `find_company` with the card's link as `url` (`exact_role_ids` names the role if it is tracked). If the tracker has no live application for it:
+  - `upsert_role` with `source` = this board and the card's link as `url`. If it returns `possible_role_ids`, check them as in Identity in `source-roles`: when one is this posting, record on that role and link the new row under it with `link_duplicate_role`. Why: a second row would split the application's history, and the submit gate reads that history. Then `record` with `status: "applied"`, `actor: "user"`, reason "Filed by <tool> in the user's name", evidence = the card text verbatim.
   - Check it against hard filters from the card and, if cheap, the employer page. Any violation: `record` a note with the quote and a `question` (e.g. "Withdraw?"), and tell the user in the session. The application is already out; only the user can decide to withdraw.
 - Report how many Applied cards there are and how many were new to the tracker.
 
 ### 4. Harvest the Saved column
 - Read cards inside the Saved column only. The list may be virtualised: it can advance only on real scroll events (the browser's scroll action), not `scrollTop` or synthetic wheel events. Budget roughly one scroll per few cards; do not loop JS scrolling (it can freeze the renderer).
-- For each card: `find_company`. New and plausible: `upsert_role` as `found` (it goes through `verify-employer` later). Already seen, dropped, stale, or clearly excluded by title: candidate for deletion.
+- For each card: `find_company` with the card's link as `url`. New and plausible: `upsert_role` as `found` with that `url` (it goes through `verify-employer` later). Already seen, dropped, stale, or clearly excluded by title: candidate for deletion.
 
 ### 5. Agree criteria with the user
 Show the counts and a sample of each group, and propose the delete criteria (e.g. "delete Saved cards already in the tracker or with excluded titles"). Proceed only on the user's yes.

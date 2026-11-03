@@ -7,7 +7,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TestContext } from 'node:test';
 import { test } from 'node:test';
+import { boardMove } from '../../plugin/servers/tracker/src/board-api.ts';
 import { openDb } from '../../plugin/servers/tracker/src/db.ts';
+import { importLegacy } from '../../plugin/servers/tracker/src/legacy.ts';
 import type { RpcResponse } from '../../plugin/servers/tracker/src/mcp.ts';
 import { makeHandler } from '../../plugin/servers/tracker/src/mcp.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
@@ -366,4 +368,157 @@ test('an ATS alias gives a URL-less role its main URL on an update by id', (ctx)
   const updated = t.upsertRole({ id: role.id, title: 'Engineer', url_aliases: [ONE], identity_evidence: 'Recruiter mail names the Ashby req' });
   assert.equal(updated.role.url, ONE);
   assert.equal(updated.role.ats, 'ashby');
+});
+
+// --- Repeat applications: history decides, not the current status ---
+
+const NEW_REQ = 'https://jobs.ashbyhq.com/acme/new-req';
+
+const verify = (t: Tracker, role_id: number, url: string) =>
+  t.transition({ role_id, to: 'verified', reason: 'Checked the ATS', evidence: `${url} "Remote (EU)"`, location_line: 'Remote (EU)', location_type: 'remote' });
+
+// A role taken through the pipeline, applied to with a confirmation, then rejected by the employer.
+function appliedThenRejected(t: Tracker, url = ONE): number {
+  const { role } = t.upsertRole({ company: 'Acme', title: 'Engineer', url, source: 'ashby' });
+  verify(t, role.id, url);
+  t.transition({ role_id: role.id, to: 'scored', reason: 'Fits', score: 8 });
+  t.transition({ role_id: role.id, to: 'queued', reason: 'Top pick' });
+  t.transition({ role_id: role.id, to: 'applied', reason: 'Submitted', evidence: 'Thanks for applying to Acme!' });
+  t.record({ role_id: role.id, status: 'closed', outcome: 'rejected', reason: 'Rejection email', evidence: 'We decided to move forward with other candidates', actor: 'employer' });
+  return role.id;
+}
+
+test('a rejected role moved back to the queue keeps its block; another req at the company does not', (ctx) => {
+  const t = fresh(ctx);
+  const originalId = appliedThenRejected(t);
+  boardMove(t, { role_id: originalId, to: 'queued' });
+  assert.equal(t.mustRole(originalId).status, 'queued');
+  assert.equal(t.gateCheck({ role_id: originalId }).ok, false);
+  assert.equal(t.gateCheck({ role_id: originalId }).previous_application, true);
+  assert.equal(t.findCompany({ name: 'Acme', url: NEW_REQ }).verdict, 'seen');
+  const newVerifiedRoleId = t.upsertRole({ company: 'Acme', title: 'Engineer', url: NEW_REQ, source: 'ashby' }).role.id;
+  verify(t, newVerifiedRoleId, NEW_REQ);
+  assert.equal(t.gateCheck({ role_id: newVerifiedRoleId }).ok, true);
+});
+
+// A row an older release made for a posting another row also holds, with its own history, written straight to the
+// tables so no lookup merges it first.
+function oldRow(t: Tracker, company_id: number, url: string, history: [ts: string, status: string, outcome?: string][]): number {
+  const status = history.at(-1)?.[1] ?? null;
+  const id = Number(t.run("INSERT INTO roles(company_id, title, url, first_seen, updated_at, status) VALUES(?, 'Engineer', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?)", company_id, url, status).lastInsertRowid);
+  t.indexRoleUrls(id, [url]);
+  for (const [ts, s, outcome] of history) t.run("INSERT INTO events(role_id, ts, status, outcome, actor, reason, evidence) VALUES(?, ?, ?, ?, 'import', 'Legacy row', 'Thanks for applying')", id, ts, s, outcome ?? null);
+  return id;
+}
+
+// Researched and queued, as the pipeline leaves a role it has not applied to.
+function queuedRole(t: Tracker, url: string, company = 'Acme'): number {
+  const { role } = t.upsertRole({ company, title: 'Engineer', url, source: 'ashby' });
+  verify(t, role.id, url);
+  t.transition({ role_id: role.id, to: 'scored', reason: 'Fits', score: 8 });
+  t.transition({ role_id: role.id, to: 'queued', reason: 'Top pick' });
+  return role.id;
+}
+
+test('an application recorded on a linked duplicate blocks the group, through either id', (ctx) => {
+  const t = fresh(ctx);
+  const canonicalId = queuedRole(t, ONE);
+  // The old row was applied to, then the posting closed; the canonical row only saw it close.
+  const duplicateId = oldRow(t, t.mustRole(canonicalId).company_id, ONE, [['2026-01-05T00:00:00Z', 'applied'], ['2026-01-10T00:00:00Z', 'closed', 'role_closed']]);
+  t.record({ role_id: canonicalId, status: 'closed', outcome: 'role_closed', reason: 'Posting closed', evidence: 'This job is no longer available', actor: 'employer' });
+  t.linkDuplicateRole({ canonical_role_id: canonicalId, duplicate_role_id: duplicateId, reason: 'Same Ashby posting', evidence: `Both rows link to ${ONE}` });
+  boardMove(t, { role_id: canonicalId, to: 'queued' });
+  for (const role_id of [canonicalId, duplicateId]) {
+    const gate = t.gateCheck({ role_id });
+    assert.equal(gate.role_id, canonicalId);
+    assert.equal(gate.ok, false);
+    assert.equal(gate.previous_application, true);
+    assert.equal(gate.matched_role_id, duplicateId);
+    assert.equal(gate.dedupe_clean, false);
+    assert.equal(gate.live_elsewhere, false);
+    assert.match(gate.problems.join(' '), new RegExp(`role ${duplicateId} was applied on 2026-01-05`));
+  }
+});
+
+test('a rejection imported without an application still blocks the reopened role', (ctx) => {
+  const t = fresh(ctx);
+  importLegacy(t, { applied_log: '| 2026-03-01 | Acme | Engineer | LinkedIn | Applied | Rejected |\n' });
+  const id = t.q<{ id: number }>('SELECT id FROM roles')[0]?.id ?? 0;
+  assert.deepEqual(t.roleDetail({ role_id: id }).events.map((e) => [e.status, e.outcome]), [['closed', 'rejected']]);
+  // The role is researched again later and the user drags it back to the queue.
+  t.upsertRole({ id, title: 'Engineer', url: ONE });
+  t.run("UPDATE roles SET verified_at = '2026-04-01T00:00:00Z', score = 8 WHERE id = ?", id);
+  boardMove(t, { role_id: id, to: 'queued' });
+  const gate = t.gateCheck({ role_id: id });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.previous_application, true);
+  assert.match(gate.problems.join(' '), /closed \(rejected\) on 2026-03-01/);
+});
+
+test('a posting held by two independent roles cannot be applied to until they are resolved', (ctx) => {
+  const t = fresh(ctx);
+  const a = queuedRole(t, ONE);
+  const b = oldRow(t, t.mustRole(a).company_id, `${ONE}?utm_source=mail`, [['2026-01-02T00:00:00Z', 'found']]);
+  for (const [role_id, other] of [[a, b], [b, a]] as const) {
+    const gate = t.gateCheck({ role_id });
+    assert.equal(gate.ok, false);
+    assert.equal(gate.dedupe_clean, false);
+    assert.equal(gate.previous_application, false);
+    assert.match(gate.problems.join(' '), new RegExp(`also tracked as role ${other}\\b.*link_duplicate_role`));
+  }
+  // Linked, they are one role again, and the ambiguity is gone.
+  t.linkDuplicateRole({ canonical_role_id: a, duplicate_role_id: b, reason: 'Same posting', evidence: `Both link to ${ONE}` });
+  assert.equal(t.gateCheck({ role_id: a }).ok, true);
+});
+
+test('an application on the other row of an unresolved posting is a previous application', (ctx) => {
+  const t = fresh(ctx);
+  const a = queuedRole(t, ONE);
+  const b = oldRow(t, t.mustRole(a).company_id, ONE, [['2026-01-02T00:00:00Z', 'applied'], ['2026-01-09T00:00:00Z', 'closed', 'rejected']]);
+  const gate = t.gateCheck({ role_id: a });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.previous_application, true);
+  assert.equal(gate.matched_role_id, b);
+});
+
+test('a linked duplicate\'s stale status is not a live application of its own', (ctx) => {
+  const t = fresh(ctx);
+  const canonicalId = queuedRole(t, ONE);
+  const companyId = t.mustRole(canonicalId).company_id;
+  // Both rows say applied when they are linked; the rejection comes later and lands on the canonical row only.
+  const duplicateId = oldRow(t, companyId, ONE, [['2026-01-05T00:00:00Z', 'applied']]);
+  t.transition({ role_id: canonicalId, to: 'applied', reason: 'Submitted', evidence: 'Thanks for applying to Acme!' });
+  t.linkDuplicateRole({ canonical_role_id: canonicalId, duplicate_role_id: duplicateId, reason: 'Same posting', evidence: `Both link to ${ONE}` });
+  t.record({ role_id: duplicateId, status: 'closed', outcome: 'rejected', reason: 'Rejection email', evidence: 'Not moving forward', actor: 'employer' });
+  assert.equal(t.mustRole(canonicalId).status, 'closed');
+  assert.equal(t.mustRole(duplicateId).status, 'applied');
+  const other = queuedRole(t, NEW_REQ);
+  const gate = t.gateCheck({ role_id: other });
+  assert.equal(gate.live_elsewhere, false);
+  assert.equal(gate.ok, true);
+  const found = t.findCompany({ name: 'Acme', url: 'https://jobs.ashbyhq.com/acme/third' });
+  assert.equal(found.live_application, false);
+  assert.equal(found.verdict, 'seen');
+  assert.deepEqual(found.matches[0]?.roles.map((r) => r.id).sort(), [canonicalId, other].sort(), 'one card per group');
+  // The group itself is judged by its own history, whichever id is asked.
+  for (const role_id of [canonicalId, duplicateId]) assert.equal(t.gateCheck({ role_id }).previous_application, true);
+});
+
+test('a live application elsewhere at the company, or no_cold_apply, still blocks a never-applied role', (ctx) => {
+  const t = fresh(ctx);
+  const live = queuedRole(t, ONE);
+  t.transition({ role_id: live, to: 'applied', reason: 'Submitted', evidence: 'Thanks for applying to Acme!' });
+  // Another req at the company, found under the company's brand name.
+  t.addAlias({ company_id: t.mustRole(live).company_id, alias: 'Acme Robots' });
+  const other = queuedRole(t, NEW_REQ, 'Acme Robots');
+  assert.equal(t.mustRole(other).company_id, t.mustRole(live).company_id);
+  const gate = t.gateCheck({ role_id: other });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.live_elsewhere, true);
+  assert.equal(gate.previous_application, false);
+  assert.equal(t.findCompany({ name: 'Acme Robots', url: 'https://jobs.ashbyhq.com/acme/third' }).verdict, 'skip');
+  const intro = queuedRole(t, 'https://jobs.ashbyhq.com/zenith/1', 'Zenith');
+  t.setNoColdApply({ company_id: t.mustRole(intro).company_id, reason: 'Recruiter intro open' });
+  assert.equal(t.gateCheck({ role_id: intro }).ok, false);
+  assert.equal(t.gateCheck({ role_id: intro }).previous_application, false);
 });
