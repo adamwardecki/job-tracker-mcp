@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import type { TestContext } from 'node:test';
 import { test } from 'node:test';
 import { openDb } from '../../plugin/servers/tracker/src/db.ts';
+import { ToolError } from '../../plugin/servers/tracker/src/errors.ts';
 import type { RpcResponse } from '../../plugin/servers/tracker/src/mcp.ts';
 import { makeHandler } from '../../plugin/servers/tracker/src/mcp.ts';
 import { RULE_TYPES } from '../../plugin/servers/tracker/src/rules.ts';
@@ -79,6 +80,7 @@ const BAD: [string, unknown, RegExp][] = [
   ['an unknown type', ['unknown'], /unknown/],
   ['a number', [7], /7/],
   ['a mixed list', ['scoring', 7], /7/],
+  ['a string', 'scoring', /expected array|list of rule types/],
   ['a valid type beside an unknown one', ['scoring', 'Scoring'], /Scoring/],
 ];
 
@@ -161,5 +163,41 @@ test('a failed add leaves neither a rule nor a revision change', (ctx) => {
   assert.throws(() => t.addRule({ text: 'Half', reason: 'r', types: ['forms'] }));
   assert.equal(t.q('SELECT id FROM rules').length, 0);
   t.run('ALTER TABLE rule_types_gone RENAME TO rule_types');
+  assert.equal(revision(t), start);
+});
+
+test('each rule lists its own types', (ctx) => {
+  const t = fresh(ctx);
+  t.addRule({ text: 'One', reason: 'r', types: ['sourcing'] });
+  t.addRule({ text: 'Two', reason: 'r', types: ['forms', 'writing'] });
+  t.addRule({ text: 'Three', reason: 'r' });
+  t.addRule({ text: 'Four', reason: 'r', types: ['reporting', 'inbox'] });
+  assert.deepEqual(t.listRules().rules.map((r) => [r.text, r.types]), [
+    ['One', ['sourcing']],
+    ['Two', ['forms', 'writing']],
+    ['Three', ['global']],
+    ['Four', ['inbox', 'reporting']],
+  ]);
+});
+
+test('a missing revision row is a bug, not a tool error', (ctx) => {
+  const t = fresh(ctx);
+  const { rule_id } = t.addRule({ text: 'One', reason: 'r' });
+  t.run('DELETE FROM rule_state');
+  assert.throws(() => t.listRules(), (e) => e instanceof Error && !(e instanceof ToolError) && /rule_state/.test(e.message));
+  assert.throws(() => t.addRule({ text: 'Two', reason: 'r' }), (e) => e instanceof Error && !(e instanceof ToolError) && /rule_state/.test(e.message));
+  assert.throws(() => t.deactivateRule({ id: rule_id }), (e) => e instanceof Error && !(e instanceof ToolError));
+  assert.equal(t.q('SELECT id FROM rules').length, 1, 'the failed add left no rule');
+  assert.equal(t.one<{ active: number }>('SELECT active FROM rules WHERE id = ?', rule_id)?.active, 1, 'the failed deactivation rolled back');
+});
+
+test('a failed reclassification keeps the old types', (ctx) => {
+  const t = fresh(ctx);
+  const { rule_id } = t.addRule({ text: 'One', reason: 'r', types: ['scoring', 'forms'] });
+  const start = revision(t);
+  // The delete succeeds, then the insert of the new type fails.
+  t.run("CREATE TRIGGER no_inbox BEFORE INSERT ON rule_types WHEN NEW.type = 'inbox' BEGIN SELECT RAISE(ABORT, 'no inbox'); END");
+  assert.throws(() => t.setRuleTypes({ id: rule_id, types: ['inbox'] }), /no inbox/);
+  assert.deepEqual(t.listRules().rules[0]?.types, ['scoring', 'forms']);
   assert.equal(revision(t), start);
 });

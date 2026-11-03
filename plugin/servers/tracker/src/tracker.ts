@@ -20,6 +20,9 @@ import { isRecord, oneOf, parseJson } from './util.ts';
 
 export { ToolError };
 
+// Every database has the rule_state row from migration 5 on, so a missing one is damage, not something the model can fix.
+const MISSING_RULE_STATE = 'The rule_state row is missing from the tracker database; rule changes cannot be tracked.';
+
 export interface GateResult {
   ok: boolean;
   problems: string[];
@@ -857,19 +860,15 @@ export class Tracker {
 
   listRules({ include_inactive = false }: ArgsFor<'list_rules'> = {}) {
     const rules = this.q<RuleRow>(`SELECT * FROM rules ${include_inactive ? '' : 'WHERE active = 1'} ORDER BY id`);
-    const byRule = new Map<number, string[]>();
-    for (const { rule_id, type } of this.q<RuleTypeRow>('SELECT rule_id, type FROM rule_types')) byRule.set(rule_id, [...(byRule.get(rule_id) ?? []), type]);
-    return {
-      rules: rules.map((r) => ({ ...r, types: this.sortedRuleTypes(byRule.get(r.id)) })),
-      rules_revision: this.rulesRevision(),
-    };
+    const types = this.ruleTypesFor(rules.map((r) => r.id));
+    return { rules: rules.map((r) => ({ ...r, types: types.get(r.id) ?? ['global'] })), rules_revision: this.rulesRevision() };
   }
 
   setRuleTypes({ id, types }: ArgsFor<'set_rule_types'>) {
     const kinds = normalizeRuleTypes(types);
     return tx(this.db, () => {
       req(this.one('SELECT 1 FROM rules WHERE id = ?', id), `No rule ${id}`);
-      const current = this.sortedRuleTypes(this.q<RuleTypeRow>('SELECT rule_id, type FROM rule_types WHERE rule_id = ?', id).map((r) => r.type));
+      const current = this.ruleTypesFor([id]).get(id) ?? ['global'];
       if (current.join() !== kinds.join()) {
         this.run('DELETE FROM rule_types WHERE rule_id = ?', id);
         this.storeRuleTypes(id, kinds);
@@ -896,18 +895,30 @@ export class Tracker {
     for (const type of kinds) this.run('INSERT INTO rule_types(rule_id, type) VALUES(?, ?)', ruleId, type);
   }
 
-  // A row written before rule types existed has no type rows: it is global.
-  private sortedRuleTypes(stored: string[] | undefined): RuleType[] {
-    const kinds = RULE_TYPES.filter((t) => stored?.includes(t));
-    return kinds.length ? kinds : ['global'];
+  // The stored types of these rules, each in RULE_TYPES order. A rule with no type rows (written before rule
+  // types existed) is global, so every id asked for comes back with at least one type.
+  ruleTypesFor(ids: readonly number[]): Map<number, RuleType[]> {
+    const stored = new Map<number, Set<string>>();
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      const rows = this.q<RuleTypeRow>(`SELECT rule_id, type FROM rule_types WHERE rule_id IN (${chunk.map(() => '?').join(',')})`, ...chunk);
+      for (const { rule_id, type } of rows) stored.set(rule_id, (stored.get(rule_id) ?? new Set()).add(type));
+    }
+    return new Map(ids.map((id) => {
+      const kinds = RULE_TYPES.filter((t) => stored.get(id)?.has(t));
+      return [id, kinds.length ? kinds : ['global']];
+    }));
   }
 
   private rulesRevision(): number {
-    return this.one<{ revision: number }>('SELECT revision FROM rule_state WHERE id = 1')?.revision ?? 0;
+    const row = this.one<{ revision: number }>('SELECT revision FROM rule_state WHERE id = 1');
+    if (!row) throw new Error(MISSING_RULE_STATE);
+    return row.revision;
   }
 
   private bumpRulesRevision() {
-    this.run('UPDATE rule_state SET revision = revision + 1 WHERE id = 1');
+    const r = this.run('UPDATE rule_state SET revision = revision + 1 WHERE id = 1');
+    if (r.changes !== 1) throw new Error(MISSING_RULE_STATE);
   }
 
   sourceHealth() {

@@ -762,7 +762,7 @@
   },
   {
     "name": "deactivate_rule",
-    "description": "Deactivate a rule.",
+    "description": "Deactivate a rule. Repeating it on an inactive rule is a no-op.",
     "inputSchema": {
       "type": "object",
       "properties": {
