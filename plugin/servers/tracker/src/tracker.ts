@@ -12,8 +12,8 @@ import { lintProse } from './lint.ts';
 import { checkPay } from './pay.ts';
 import type { PostingIdentity, PostingKey } from './posting.ts';
 import { parsePostingUrl, urlIdentity } from './posting.ts';
-import type { RuleType } from './rules.ts';
-import { normalizeRuleTypes, RULE_TYPES } from './rules.ts';
+import type { RuleListItem, RuleType } from './rules.ts';
+import { decodeRuleCursor, encodeRuleCursor, normalizeRuleLimit, normalizeRuleTypes, RULE_TYPES, resolveRuleFilters } from './rules.ts';
 import { dayBounds, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
 import type { ArgsFor } from './tools.ts';
 import { isRecord, oneOf, parseJson } from './util.ts';
@@ -858,10 +858,28 @@ export class Tracker {
     });
   }
 
-  listRules({ include_inactive = false }: ArgsFor<'list_rules'> = {}) {
-    const rules = this.q<RuleRow>(`SELECT * FROM rules ${include_inactive ? '' : 'WHERE active = 1'} ORDER BY id`);
-    const types = this.ruleTypesFor(rules.map((r) => r.id));
-    return { rules: rules.map((r) => ({ ...r, types: types.get(r.id) ?? ['global'] })), rules_revision: this.rulesRevision() };
+  listRules({ types, limit, cursor, include_inactive }: ArgsFor<'list_rules'> = {}) {
+    const after = cursor == null ? null : decodeRuleCursor(cursor);
+    const { types: filter, include_inactive: inactive } = resolveRuleFilters(types, include_inactive, after);
+    const size = normalizeRuleLimit(limit);
+    return tx(this.db, () => {
+      const revision = this.rulesRevision();
+      // Pages from two revisions could skip or repeat a rule that moved between them, so the caller starts over.
+      if (after && after.revision !== revision) {
+        throw new ToolError(`Rules changed since this page was read (revision ${after.revision}, now ${revision}). Restart list_rules without a cursor and discard the pages already read.`);
+      }
+      // Any requested type or global; a rule with no type rows is global too. EXISTS cannot duplicate a rule that has several matching types.
+      const matched = filter ? [...new Set<RuleType>([...filter, 'global'])] : [];
+      const where = `${inactive ? '1' : 'active = 1'}${filter ? ` AND (EXISTS (SELECT 1 FROM rule_types rt WHERE rt.rule_id = rules.id AND rt.type IN (${matched.map(() => '?').join(',')})) OR NOT EXISTS (SELECT 1 FROM rule_types rt WHERE rt.rule_id = rules.id))` : ''}`;
+      const total = this.one<{ n: number }>(`SELECT COUNT(*) AS n FROM rules WHERE ${where}`, ...matched)?.n ?? 0;
+      const rows = this.q<RuleRow>(`SELECT * FROM rules WHERE ${where} AND id > ? ORDER BY id LIMIT ?`, ...matched, after?.after_id ?? 0, size + 1);
+      const page = rows.slice(0, size);
+      const kinds = this.ruleTypesFor(page.map((r) => r.id));
+      const last = page[page.length - 1];
+      const next_cursor = rows.length > size && last ? encodeRuleCursor({ v: 1, after_id: last.id, revision, types: filter, include_inactive: inactive }) : null;
+      const rules: RuleListItem[] = page.map((r) => ({ ...r, types: kinds.get(r.id) ?? ['global'] }));
+      return { rules, next_cursor, total, rules_revision: revision };
+    });
   }
 
   setRuleTypes({ id, types }: ArgsFor<'set_rule_types'>) {
@@ -896,12 +914,12 @@ export class Tracker {
   }
 
   // The stored types of these rules, each in RULE_TYPES order. A rule with no type rows (written before rule
-  // types existed) is global, so every id asked for comes back with at least one type.
+  // types existed) is global, so every id asked for comes back with at least one type. Callers pass one page
+  // (at most MAX_RULE_LIMIT ids) or one id, so the IN list stays far below SQLite's variable limit.
   ruleTypesFor(ids: readonly number[]): Map<number, RuleType[]> {
     const stored = new Map<number, Set<string>>();
-    for (let i = 0; i < ids.length; i += 500) {
-      const chunk = ids.slice(i, i + 500);
-      const rows = this.q<RuleTypeRow>(`SELECT rule_id, type FROM rule_types WHERE rule_id IN (${chunk.map(() => '?').join(',')})`, ...chunk);
+    if (ids.length) {
+      const rows = this.q<RuleTypeRow>(`SELECT rule_id, type FROM rule_types WHERE rule_id IN (${ids.map(() => '?').join(',')})`, ...ids);
       for (const { rule_id, type } of rows) stored.set(rule_id, (stored.get(rule_id) ?? new Set()).add(type));
     }
     return new Map(ids.map((id) => {

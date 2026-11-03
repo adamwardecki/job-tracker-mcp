@@ -722,10 +722,25 @@
   },
   {
     "name": "list_rules",
-    "description": "Active rules with provenance and types.",
+    "description": "Rules with provenance and types, one page at a time: at most 10 by default, limit up to 50. Follow next_cursor until it is null; never act on a partial set. types filters to those consumers plus global rules, which are always included. If rules changed mid-listing, the cursor is refused: restart without it.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "types": {
+          "type": "array",
+          "description": "Only rules for these consumers (and global ones): global | sourcing | scoring | forms | writing | inbox | reporting. Omit for all",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Page size, 1 to 50 (default 10)"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "next_cursor from the previous page. Omit types and include_inactive to keep the cursor's"
+        },
         "include_inactive": {
           "type": "boolean",
           "description": "Include deactivated rules"
