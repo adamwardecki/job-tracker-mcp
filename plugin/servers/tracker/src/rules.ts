@@ -150,14 +150,15 @@ export interface RulePageFrame {
 // count limit allows, in id order, and `moreAfter` says a matching row lies beyond them. A rule that cannot fit
 // even alone becomes a short {id, types, requires_detail} entry, which counts as progress, so a page is never
 // empty while rules remain. A rule that fits alone but not beside the others waits for the next page.
-// Every fit check includes a cursor after the candidate, so the finished page, whose cursor is for its last
-// rule or absent, is never larger than what was checked.
+// A fit check counts the cursor only when a matching row remains after the candidate, because only then does
+// the finished page carry one; the last rule of the final page is not pushed out by a cursor it will not have.
+// When the page stops early its cursor is the one the last check counted, so it is never larger than checked.
 export function packRulePage(candidates: RuleListItem[], moreAfter: boolean, frame: RulePageFrame): { rules: RuleListItem[]; next_cursor: string | null } {
-  const result = (rules: RuleListItem[], id: number) => ({ rules, next_cursor: frame.cursorAfter(id), total: frame.total, rules_revision: frame.rules_revision });
+  const result = (rules: RuleListItem[], cursorId: number | null) => ({ rules, next_cursor: cursorId == null ? null : frame.cursorAfter(cursorId), total: frame.total, rules_revision: frame.rules_revision });
   const rules: RuleListItem[] = [];
-  for (const item of candidates) {
-    const withItem = [...rules, item];
-    if (resultBytes(result(withItem, item.id)) <= RULE_RESPONSE_BYTES) {
+  for (const [i, item] of candidates.entries()) {
+    const remainsAfter = moreAfter || i < candidates.length - 1;
+    if (resultBytes(result([...rules, item], remainsAfter ? item.id : null)) <= RULE_RESPONSE_BYTES) {
       rules.push(item);
     } else if (rules.length) {
       break;
@@ -206,24 +207,14 @@ export interface RuleDetailChunk {
 }
 
 // The piece of `serialized` (a rule's JSON text) that starts at code point `offset`: at most `limit` code
-// points, fewer when the piece, put in a JSON string and counted in UTF-8 bytes, would push the result past
-// the byte budget. Never empty. At the default limit that cannot happen today (a code point costs at most 4
-// bytes: an emoji, or a backslash or quote that gets escaped again), so this is the guard that keeps the
-// promise if the budget or the limit changes.
+// points, and never empty. A code point costs at most 4 bytes once put in a JSON string (an emoji, or a
+// backslash or quote that gets escaped again), so 4000 of them stay far under the byte budget; going over it
+// would be a bug, not something the caller can fix, hence a plain Error.
 export function detailChunk(id: number, serialized: string, offset: number, limit: number, revision: number): RuleDetailChunk {
   const points = Array.from(serialized);
   if (offset >= points.length) throw badCursor('get_rule', 'offset is past the end of the rule');
-  const build = (n: number): RuleDetailChunk => {
-    const end = offset + n;
-    return { id, chunk: points.slice(offset, end).join(''), next_cursor: end < points.length ? encodeCursor({ id, offset: end, revision }) : null, rules_revision: revision };
-  };
-  let n = Math.min(limit, points.length - offset);
-  for (;;) {
-    const out = build(n);
-    const over = resultBytes(out) - RULE_RESPONSE_BYTES;
-    // Each code point removed saves at least one byte and usually up to four, so this converges. One code
-    // point always fits, as the budget is far above the fixed fields.
-    if (over <= 0 || n === 1) return out;
-    n = Math.max(1, n - Math.ceil(over / 4));
-  }
+  const end = Math.min(offset + limit, points.length);
+  const out = { id, chunk: points.slice(offset, end).join(''), next_cursor: end < points.length ? encodeCursor({ id, offset: end, revision }) : null, rules_revision: revision };
+  if (resultBytes(out) > RULE_RESPONSE_BYTES) throw new Error('get_rule chunk exceeds the response budget');
+  return out;
 }

@@ -100,7 +100,7 @@ A rule has one or more types saying which consumers read it: `global`, `sourcing
 A rule that cannot fit a page even alone is listed as `{id, types, requires_detail: true}` with no text; the server never shortens a rule. It counts as a page entry, so the listing continues past it. Read it with `get_rule({id})`:
 
 - `chunk` is a piece of the JSON serialization of the complete rule, the object a normal list entry would be (`id`, `text`, `reason`, `example`, `added_by`, `added_on`, `active`, `types`), not just its text. Call again with `cursor: next_cursor` until it is `null`, join the chunks in order, then `JSON.parse` the result. Never parse or act on a partial chunk.
-- A chunk holds at most `limit` Unicode code points (1 to 4000, default 4000) and never splits a surrogate pair. It is shortened further if its escaped form would pass the 24 KiB budget. The last chunk is never empty.
+- A chunk holds at most `limit` Unicode code points (1 to 4000, default 4000) and never splits a surrogate pair. Even 4000 code points of 4-byte characters, escaped, stay far under the 24 KiB budget. The last chunk is never empty.
 - The cursor binds the rule id, the offset into the serialization (in code points) and `rules_revision`. A cursor for another rule, a malformed or out-of-range one, or one issued before a rule change is an error that says to restart `get_rule` without a cursor. Discard the chunks already read when it says so.
 - An unknown id is an error. Inactive rules can be read, with `active: 0` in the rule.
 - This is the exception: ordinary rules arrive complete in `list_rules` and need no extra call.

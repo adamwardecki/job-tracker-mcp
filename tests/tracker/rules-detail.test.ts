@@ -8,12 +8,15 @@ import { openDb } from '../../plugin/servers/tracker/src/db.ts';
 import { ToolError } from '../../plugin/servers/tracker/src/errors.ts';
 import type { RpcResponse } from '../../plugin/servers/tracker/src/mcp.ts';
 import { makeHandler } from '../../plugin/servers/tracker/src/mcp.ts';
-import { detailChunk, encodeCursor } from '../../plugin/servers/tracker/src/rules.ts';
+import type { RuleType } from '../../plugin/servers/tracker/src/rules.ts';
+import { encodeCursor } from '../../plugin/servers/tracker/src/rules.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
 
 const BUDGET = 24 * 1024;
 // A lone surrogate half means a chunk was cut inside a pair.
 const wellFormed = (s: string) => !/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(s);
+// For assert.throws: a ToolError (the kind the model can act on) whose message matches.
+const expectToolError = (re: RegExp) => (e: unknown) => e instanceof ToolError && re.test(e.message);
 const size = (v: unknown) => Buffer.byteLength(JSON.stringify(v, null, 2), 'utf8');
 
 function fresh(ctx: TestContext) {
@@ -57,24 +60,28 @@ test('an oversized rule is a detail reference in the list and arrives intact thr
 // A rule as list_rules shows it when it fits: stored fields plus types.
 function stored(t: Tracker, id: number) {
   const row = t.q<RuleRow>('SELECT * FROM rules WHERE id = ?', id)[0]!;
-  return { ...row, types: t.ruleTypesFor([id]).get(id)! as string[] };
+  return { ...row, types: t.ruleTypesFor([id]).get(id)! };
 }
 
 // Follow next_cursor to the end and rebuild every rule, reading each detail reference through get_rule.
 function collect(t: Tracker, args: Parameters<Tracker['listRules']>[0]) {
-  const rules: unknown[] = [];
-  const sizes: number[] = [];
+  const rules: Partial<RuleRow>[] = [];
   let page = t.listRules(args);
+  let lastId = 0;
+  // Every page holds at least one rule, so a pager that needs more pages than there are rules is stuck.
   for (let n = 0; ; n++) {
-    if (n >= 200) assert.fail('still paging after 200 pages');
+    if (n > page.total) assert.fail(`still paging after ${n} pages for ${page.total} rules`);
     assert.ok(size(page) <= BUDGET, `page of ${size(page)} bytes`);
     assert.ok(page.rules.length > 0 || page.total === 0, 'empty page while rules remain');
-    sizes.push(page.rules.length);
-    for (const r of page.rules) rules.push(r.requires_detail ? JSON.parse(readDetail(t, r.id).join('')) : r);
+    for (const r of page.rules) {
+      assert.ok(r.id > lastId, `rule ${r.id} after ${lastId}: the pager did not advance`);
+      lastId = r.id;
+      rules.push(r.requires_detail ? JSON.parse(readDetail(t, r.id).join('')) : r);
+    }
     if (!page.next_cursor) break;
     page = t.listRules({ cursor: page.next_cursor, limit: args?.limit });
   }
-  return { rules, sizes };
+  return { rules };
 }
 
 test('pages stop at the byte budget before the count limit and say more remains', (ctx) => {
@@ -90,7 +97,7 @@ test('pages stop at the byte budget before the count limit and say more remains'
   // The next page starts right after the last rule that was included.
   const next = t.listRules({ cursor: page.next_cursor, limit: 50 });
   assert.equal(next.rules[0]?.id, ids[page.rules.length]);
-  assert.deepEqual(collect(t, { limit: 50 }).rules.map((r) => (r as { id: number }).id), ids);
+  assert.deepEqual(collect(t, { limit: 50 }).rules.map((r) => r.id), ids);
 });
 
 test('a rule that fits alone is not turned into a reference because others came first', (ctx) => {
@@ -106,13 +113,46 @@ test('a rule that fits alone is not turned into a reference because others came 
   assert.equal(next.next_cursor, null);
 });
 
+// A rule whose page is exactly the byte budget with next_cursor null, and over it with a cursor string there.
+function exactFitText() {
+  const probe = openDb(':memory:');
+  const t = new Tracker(probe);
+  const id = t.addRule({ text: 'x', reason: 'r' }).rule_id;
+  const page = { rules: [stored(t, id)], next_cursor: null, total: 1, rules_revision: 1 };
+  probe.close();
+  return 'x'.repeat(1 + BUDGET - size(page));
+}
+
+test('a final-page rule that fits only without a cursor is listed in full', (ctx) => {
+  const t = fresh(ctx);
+  const id = t.addRule({ text: exactFitText(), reason: 'r' }).rule_id;
+  const page = t.listRules();
+  assert.equal(size(page), BUDGET);
+  assert.equal(page.next_cursor, null);
+  assert.deepEqual(page.rules, [stored(t, id)]);
+});
+
+test('the same rule is a reference when rules follow it', (ctx) => {
+  const t = fresh(ctx);
+  const id = t.addRule({ text: exactFitText(), reason: 'r' }).rule_id;
+  const after = t.addRule({ text: 'small', reason: 'r' }).rule_id;
+  const reference = { id, types: ['global'], requires_detail: true };
+  // The reference takes the page's first slot and the small rule still fits behind it.
+  assert.deepEqual(t.listRules().rules, [reference, stored(t, after)]);
+  // With the count limit leaving a row behind, a cursor would be needed, so it cannot be listed in full.
+  const first = t.listRules({ limit: 1 });
+  assert.deepEqual(first.rules, [reference]);
+  assert.ok(first.next_cursor);
+  assert.deepEqual(t.listRules({ cursor: first.next_cursor, limit: 1 }).rules, [stored(t, after)]);
+});
+
 test('a reference counts as progress and the rules after it still arrive', (ctx) => {
   const t = fresh(ctx);
   t.addRule({ text: 'small before', reason: 'r' });
   t.addRule({ text: 'z'.repeat(40000), reason: 'r' });
   t.addRule({ text: 'small after', reason: 'r' });
   const { rules } = collect(t, { limit: 50 });
-  assert.deepEqual(rules.map((r) => (r as { text: string }).text.slice(0, 8)), ['small be', 'zzzzzzzz', 'small af']);
+  assert.deepEqual(rules.map((r) => r.text?.slice(0, 8)), ['small be', 'zzzzzzzz', 'small af']);
 });
 
 test('emoji, combining marks and control characters survive at every chunk size', (ctx) => {
@@ -129,15 +169,13 @@ test('emoji, combining marks and control characters survive at every chunk size'
   }
 });
 
-test('a chunk that would exceed the byte budget is shortened without splitting a code point', () => {
-  // 4-byte code points at a limit above what the tool allows: the guard, not the limit, bounds the chunk.
-  const serialized = '🙂'.repeat(20000);
-  const part = detailChunk(1, serialized, 0, 20000, 3);
-  assert.ok(size(part) <= BUDGET);
-  assert.ok(Array.from(part.chunk).length < 20000 && wellFormed(part.chunk));
-  assert.ok(part.next_cursor);
-  const rest = detailChunk(1, serialized, Array.from(part.chunk).length, 20000, 3);
-  assert.equal(part.chunk + rest.chunk, serialized.slice(0, (part.chunk + rest.chunk).length));
+test('4000 emoji at the maximum limit fit the byte budget', (ctx) => {
+  const t = fresh(ctx);
+  const id = t.addRule({ text: '🙂'.repeat(9000), reason: 'r' }).rule_id;
+  const part = t.getRule({ id, limit: 4000 });
+  assert.equal(Array.from(part.chunk).length, 4000);
+  assert.ok(size(part) <= BUDGET, `chunk of ${size(part)} bytes`);
+  assert.equal(JSON.parse(readDetail(t, id).join('')).text, '🙂'.repeat(9000));
 });
 
 test('there is no empty last chunk when the length divides evenly', (ctx) => {
@@ -157,17 +195,20 @@ test('a cursor for another rule, a stale revision and a bad offset are refused w
   const b = t.addRule({ text: 'b'.repeat(9000), reason: 'r' }).rule_id;
   const first = t.getRule({ id: a, limit: 100 });
   assert.ok(first.next_cursor);
-  assert.throws(() => t.getRule({ id: b, cursor: first.next_cursor }), (e) => e instanceof ToolError && /belongs to rule \d+, not rule \d+. Restart get_rule/.test(e.message));
+  assert.throws(() => t.getRule({ id: b, cursor: first.next_cursor }), expectToolError(/belongs to rule \d+, not rule \d+. Restart get_rule/));
   const revision = first.rules_revision;
+  const length = Array.from(JSON.stringify(stored(t, a))).length;
+  // Exactly at the end is out of range too: it would be an empty chunk.
+  assert.throws(() => t.getRule({ id: a, cursor: encodeCursor({ id: a, offset: length, revision }) }), expectToolError(/past the end.*Restart get_rule/));
   const past = encodeCursor({ id: a, offset: 99999, revision });
-  assert.throws(() => t.getRule({ id: a, cursor: past }), (e) => e instanceof ToolError && /past the end.*Restart get_rule/.test(e.message));
+  assert.throws(() => t.getRule({ id: a, cursor: past }), expectToolError(/past the end.*Restart get_rule/));
   for (const bad of [{ id: a, offset: -1, revision }, { id: a, offset: 1.5, revision }, { id: a, offset: 'x', revision }, { id: a, revision }, { id: a, offset: 1, revision, extra: 1 }]) {
-    assert.throws(() => t.getRule({ id: a, cursor: encodeCursor(bad) }), (e) => e instanceof ToolError && /Restart get_rule/.test(e.message));
+    assert.throws(() => t.getRule({ id: a, cursor: encodeCursor(bad) }), expectToolError(/Restart get_rule/));
   }
-  assert.throws(() => t.getRule({ id: a, cursor: 'not a cursor!' }), (e) => e instanceof ToolError && /Restart get_rule/.test(e.message));
+  assert.throws(() => t.getRule({ id: a, cursor: 'not a cursor!' }), expectToolError(/Restart get_rule/));
   // A list_rules cursor is not a detail cursor.
   const listCursor = t.listRules({ limit: 1 }).next_cursor;
-  assert.throws(() => t.getRule({ id: a, cursor: listCursor }), (e) => e instanceof ToolError && /Restart get_rule/.test(e.message));
+  assert.throws(() => t.getRule({ id: a, cursor: listCursor }), expectToolError(/Restart get_rule/));
 });
 
 test('a rules change between chunks refuses the next chunk and says to restart', (ctx) => {
@@ -175,17 +216,17 @@ test('a rules change between chunks refuses the next chunk and says to restart',
   const id = t.addRule({ text: 'q'.repeat(9000), reason: 'r' }).rule_id;
   const first = t.getRule({ id, limit: 1000 });
   t.addRule({ text: 'another', reason: 'r' });
-  assert.throws(() => t.getRule({ id, cursor: first.next_cursor, limit: 1000 }), (e) => e instanceof ToolError && /Rules changed.*Restart get_rule without a cursor/.test(e.message));
+  assert.throws(() => t.getRule({ id, cursor: first.next_cursor, limit: 1000 }), expectToolError(/Rules changed.*Restart get_rule without a cursor/));
   // Starting over works and reads the new revision.
   const again = t.getRule({ id, limit: 1000 });
   assert.equal(again.rules_revision, first.rules_revision + 1);
   t.setRuleTypes({ id, types: ['forms'] });
-  assert.throws(() => t.getRule({ id, cursor: again.next_cursor }), (e) => e instanceof ToolError && /Restart get_rule/.test(e.message));
+  assert.throws(() => t.getRule({ id, cursor: again.next_cursor }), expectToolError(/Restart get_rule/));
 });
 
 test('a rule that does not exist is an error the model can act on', (ctx) => {
   const t = fresh(ctx);
-  assert.throws(() => t.getRule({ id: 99 }), (e) => e instanceof ToolError && /No rule 99/.test(e.message));
+  assert.throws(() => t.getRule({ id: 99 }), expectToolError(/No rule 99/));
 });
 
 test('an inactive rule keeps its state, types and provenance through get_rule', (ctx) => {
@@ -198,12 +239,13 @@ test('an inactive rule keeps its state, types and provenance through get_rule', 
 
 test('every page and chunk is bounded and complete over small, medium and oversized rules', (ctx) => {
   const t = fresh(ctx);
+  const kinds: RuleType[][] = [['global'], ['sourcing'], ['forms', 'writing']];
   const sizes = [20, 3000, 40000, 100, 9000, 9000, 70000, 5, 12000, 4000, 4000, 4000, 30000, 1];
   for (const [i, n] of sizes.entries()) {
-    const id = t.addRule({ text: `${i}:${'Ł🙂\\\n'.repeat(Math.ceil(n / 5))}`, reason: `reason ${i}`, types: [['global'], ['sourcing'], ['forms', 'writing']][i % 3] as ['global'] }).rule_id;
+    const id = t.addRule({ text: `${i}:${'Ł🙂\\\n'.repeat(Math.ceil(n / 5))}`, reason: `reason ${i}`, types: kinds[i % 3] }).rule_id;
     if (i % 5 === 4) t.deactivateRule({ id });
   }
-  for (const filter of [{}, { types: ['sourcing' as const] }, { include_inactive: true }, { types: ['writing' as const], include_inactive: true }]) {
+  for (const filter of [{}, { types: ['sourcing'] satisfies RuleType[] }, { include_inactive: true }, { types: ['writing'] satisfies RuleType[], include_inactive: true }]) {
     const all = t.listRules({ ...filter, limit: 50 });
     const expected = t.q<{ id: number }>('SELECT id FROM rules ORDER BY id').map((r) => r.id).filter((id) => {
       const row = stored(t, id);
