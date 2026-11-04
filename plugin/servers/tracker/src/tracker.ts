@@ -1078,6 +1078,8 @@ export class Tracker {
     req(given(a.coverage), 'source_account and checked_through describe a scan and come with coverage (complete | partial | unavailable). Nothing was written.');
     req(oneOf(COVERAGES, a.coverage), `coverage must be one of ${COVERAGES.join(' | ')}; got "${a.coverage}". Nothing was written.`);
     req(given(a.source_account), 'coverage needs source_account: the mailbox or board account the scan covered, so that two accounts never share a checkpoint. Nothing was written.');
+    // Checkpoints lowercase the source so Gmail and gmail match across tools; sources.name keeps its spelling for old callers.
+    // requireKey, not a bare trim: a blank name is a valid sources row but must not become an empty checkpoint source.
     const source = requireKey(a.name, 'name').toLowerCase();
     const account = requireKey(a.source_account, 'source_account');
     const through = given(a.checked_through) ? explicitUtcIso(a.checked_through, 'checked_through') : null;
@@ -1089,7 +1091,8 @@ export class Tracker {
     return { source, account, coverage: a.coverage, through };
   }
 
-  // Only a complete scan moves checked_through, and only forward. Every report records the attempt.
+  // Only a complete scan moves checked_through, and only forward. Every report records the attempt. checked_through is
+  // validated but ignored for partial and unavailable reports: they do not say the records up to it were checked.
   private writeCheckpoint({ source, account, coverage, through }: { source: string; account: string; coverage: Coverage; through: string | null }) {
     const known = this.one<SourceCheckpointRow>('SELECT * FROM source_checkpoints WHERE source = ? AND source_account = ?', source, account);
     const advance = coverage === 'complete' && through && (!known?.checked_through || through > known.checked_through);

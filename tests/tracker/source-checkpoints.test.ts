@@ -110,3 +110,27 @@ for (const status of ['failed', 'degraded', 'disabled']) {
     assert.equal(JSON.stringify(t.sourceHealth()), before);
   });
 }
+
+test('a partial report on a fresh account leaves the cutoff null even with checked_through', (ctx) => {
+  const t = fresh(ctx);
+  t.setSourceStatus({ name: 'gmail', status: 'ok', source_account: ACCOUNT, coverage: 'partial', checked_through: '2026-10-30T00:00:00Z' });
+  assert.equal(t.sourceHealth().checkpoints[0]?.checked_through, null);
+  assert.equal(t.sourceHealth().checkpoints[0]?.last_coverage, 'partial');
+  t.setSourceStatus({ name: 'gmail', status: 'failed', source_account: ACCOUNT, coverage: 'unavailable', checked_through: '2026-10-31T00:00:00Z' });
+  assert.equal(t.sourceHealth().checkpoints[0]?.checked_through, null);
+});
+
+test('every report moves last_attempt_at, a late complete one included', (ctx) => {
+  ctx.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-04T12:00:00Z') });
+  const t = fresh(ctx);
+  const attempt = () => t.sourceHealth().checkpoints[0]?.last_attempt_at;
+  t.setSourceStatus({ name: 'gmail', status: 'ok', source_account: ACCOUNT, coverage: 'complete', checked_through: '2026-10-29T00:00:00Z' });
+  assert.equal(attempt(), '2026-11-04T12:00:00.000Z');
+  ctx.mock.timers.setTime(Date.parse('2026-11-04T13:00:00Z'));
+  t.setSourceStatus({ name: 'gmail', status: 'ok', source_account: ACCOUNT, coverage: 'complete', checked_through: '2026-10-20T00:00:00Z' });
+  assert.equal(attempt(), '2026-11-04T13:00:00.000Z');
+  assert.equal(t.sourceHealth().checkpoints[0]?.checked_through, '2026-10-29T00:00:00.000Z');
+  ctx.mock.timers.setTime(Date.parse('2026-11-04T14:00:00Z'));
+  t.setSourceStatus({ name: 'gmail', status: 'failed', source_account: ACCOUNT, coverage: 'unavailable' });
+  assert.equal(attempt(), '2026-11-04T14:00:00.000Z');
+});
