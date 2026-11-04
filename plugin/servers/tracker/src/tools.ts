@@ -86,10 +86,10 @@ export const SCHEMAS = {
     blocked_by: str('browser | user | login | captcha | other'),
     actor: str('user | employer | pipeline'),
     run_id: int('Current run id'),
-    source: str('Events from outside only: where it came from, e.g. gmail, linkedin, board. Pass with source_account, source_id and occurred_at, or none of them'),
+    source: str('Events from outside only: where it came from, e.g. gmail, linkedin, board (case-insensitive). Pass with source_account, source_id and occurred_at, or none of them'),
     source_account: str('The mailbox or account, e.g. jobs@example.test. The same source_id in two accounts is two events'),
     source_id: str('The source\'s own id for this one occurrence (message id; board application id plus its original date), not a thread or a mutable card'),
-    occurred_at: str('When it happened, ISO 8601 with an explicit offset (the message date), not when you read it'),
+    occurred_at: str('When it happened, ISO 8601 with an explicit offset (the message date), not when you read it, and not in the future'),
   }, ['role_id', 'reason', 'actor']),
   check_pay: obj({
     comp_min: num('Band minimum'),

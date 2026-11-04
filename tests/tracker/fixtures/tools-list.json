@@ -478,7 +478,7 @@
         },
         "source": {
           "type": "string",
-          "description": "Events from outside only: where it came from, e.g. gmail, linkedin, board. Pass with source_account, source_id and occurred_at, or none of them"
+          "description": "Events from outside only: where it came from, e.g. gmail, linkedin, board (case-insensitive). Pass with source_account, source_id and occurred_at, or none of them"
         },
         "source_account": {
           "type": "string",
@@ -490,7 +490,7 @@
         },
         "occurred_at": {
           "type": "string",
-          "description": "When it happened, ISO 8601 with an explicit offset (the message date), not when you read it"
+          "description": "When it happened, ISO 8601 with an explicit offset (the message date), not when you read it, and not in the future"
         }
       },
       "required": [

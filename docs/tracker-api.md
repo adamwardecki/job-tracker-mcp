@@ -111,7 +111,9 @@ A rule that cannot fit a page even alone is listed as `{id, types, requires_deta
 (`gmail`, `board`, ...), `source_account` (the mailbox or account, which scopes the id), `source_id` (the source's
 own id for one immutable occurrence: a message id, or a board application id with its original date; not a thread or
 a mutable card) and `occurred_at` (ISO 8601 with an explicit offset). All four or none: a partial group, an empty
-key, or a time with no offset or that is not a real date is refused, and nothing is written.
+key, a time with no offset, that is not a real date, or that is more than 24 hours ahead of now is refused, and
+nothing is written. `source` is trimmed and lowercased (`Gmail` and `gmail` are one source); `source_account` and
+`source_id` are trimmed and otherwise kept exactly as given.
 
 - **Time.** `occurred_at` is stored as UTC and becomes the event's `ts`; the time the tracker heard of it is kept in
   `received_at`. Receipt time and the role's `updated_at` never decide order. Every existing event has

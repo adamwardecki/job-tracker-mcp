@@ -115,8 +115,12 @@ function req(cond: unknown, msg: string): asserts cond {
 const marks = (ids: readonly unknown[]) => ids.map(() => '?').join(', ');
 const day = (iso: string | null | undefined) => String(iso || '').slice(0, 10);
 
+// Why: a time far ahead would outrank every later event and pin the role; a day allows for clock skew.
+const FUTURE_SKEW_MS = 24 * 60 * 60 * 1000;
+
 // The external identity of a record call: all four fields or none. Keys are stored trimmed, so a retry with stray
-// whitespace is the same occurrence. ts is the normalized UTC time the event happened.
+// whitespace is the same occurrence, and the source name is lowercase so Gmail and gmail are one source. Account and
+// id keep their case: providers may distinguish it. ts is the normalized UTC time the event happened.
 function externalIdentity(f: { source?: string | null; source_account?: string | null; source_id?: string | null; occurred_at?: string | null }): { source: string; source_account: string; source_id: string; ts: string } | null {
   const given = [f.source, f.source_account, f.source_id, f.occurred_at].filter((v) => v != null);
   if (!given.length) return null;
@@ -126,7 +130,9 @@ function externalIdentity(f: { source?: string | null; source_account?: string |
     req(typeof v === 'string' && v.trim(), `${name} must not be empty.`);
     return v.trim();
   };
-  return { source: key('source'), source_account: key('source_account'), source_id: key('source_id'), ts: explicitUtcIso(f.occurred_at, 'occurred_at') };
+  const ts = explicitUtcIso(f.occurred_at, 'occurred_at');
+  req(Date.parse(ts) <= Date.now() + FUTURE_SKEW_MS, `occurred_at is in the future (${ts}). Use the time the message or board record itself carries, not a time you expect it to happen. Nothing was written.`);
+  return { source: key('source').toLowerCase(), source_account: key('source_account'), source_id: key('source_id'), ts };
 }
 
 const companyAliases = (aliases: string[] | null | undefined, url: string | null | undefined): string[] => {

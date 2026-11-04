@@ -320,3 +320,31 @@ test('two connections replaying one message record it once', { timeout: 30_000 }
     check.close();
   }
 });
+
+test('an occurrence more than a day in the future is refused', async (ctx) => {
+  ctx.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-04T12:00:00Z') });
+  const t = fresh(ctx);
+  const roleId = queued(t);
+  const before = count(t);
+  // A little ahead is clock skew between the mailbox and this machine; a year ahead would pin the role against every later event.
+  assert.equal(t.record({ ...ACK, role_id: roleId, occurred_at: '2026-11-05T11:59:00Z' }).duplicate, false);
+  for (const future of ['2026-11-05T12:01:00Z', '2027-10-01T09:00:00Z', '2026-11-05T16:00:00+02:00']) {
+    const res = await call(t)('record', { ...ACK, role_id: roleId, source_id: `future-${future}`, occurred_at: future });
+    assert.match(res.error, /occurred_at is in the future/, future);
+  }
+  assert.equal(count(t), before + 1, 'only the first was written');
+});
+
+test('source names are one key whatever their case or padding, accounts and ids are not', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = queued(t);
+  const first = t.record({ ...ACK, role_id: roleId, source: ' Gmail ' });
+  assert.equal(t.one<{ source: string }>('SELECT source FROM events WHERE id = ?', first.event_id)?.source, 'gmail');
+  const again = t.record({ ...ACK, role_id: roleId, source: 'GMAIL' });
+  assert.equal(again.duplicate, true);
+  assert.equal(again.event_id, first.event_id);
+  const other = t.record({ ...ACK, role_id: roleId, source_account: 'Jobs@Example.test', evidence: 'Another account.' });
+  assert.equal(other.duplicate, false, 'source_account keeps its case');
+  const id = t.record({ ...ACK, role_id: roleId, source_id: 'Message-1', evidence: 'Another id.' });
+  assert.equal(id.duplicate, false, 'source_id keeps its case');
+});
