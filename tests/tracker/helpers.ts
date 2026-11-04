@@ -1,7 +1,14 @@
 // Shared by tests in more than one file.
 
-// Turns a current database into one from the release before event sources (schema v5): drops what migration 6 added.
+// Turns a current database into one from the release before source checkpoints (schema v6): drops what migration 7 added.
+export const REWIND_TO_V6 = `
+  DROP TABLE source_checkpoints;
+  PRAGMA user_version = 6;
+`;
+
+// ...and one from the release before event sources (schema v5): also drops what migration 6 added.
 export const REWIND_TO_V5 = `
+  ${REWIND_TO_V6}
   DROP INDEX events_external;
   ALTER TABLE events DROP COLUMN source;
   ALTER TABLE events DROP COLUMN source_account;

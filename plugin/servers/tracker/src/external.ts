@@ -25,6 +25,12 @@ export interface ExternalIdentity {
   ts: string;
 }
 
+// A source, account or id as stored: a non-empty string, trimmed.
+export function requireKey(value: unknown, name: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new ToolError(`${name} must not be empty.`);
+  return value.trim();
+}
+
 // The external identity of a call: all four fields or none (null). Keys are stored trimmed, so a retry with stray
 // whitespace is the same occurrence, and the source name is lowercase so Gmail and gmail are one source. Account and
 // id keep their case: providers may distinguish it. A null value counts as not given.
@@ -33,11 +39,7 @@ export function externalIdentity(args: Readonly<Record<string, unknown>>, names:
   const given = all.filter((n) => args[n] != null);
   if (!given.length) return null;
   if (given.length !== all.length) throw new ToolError(`${all.slice(0, -1).join(', ')} and ${names.at} identify one occurrence from outside (a message or board record) and come together: pass all four, or none.`);
-  const key = (name: string) => {
-    const v = args[name];
-    if (typeof v !== 'string' || !v.trim()) throw new ToolError(`${name} must not be empty.`);
-    return v.trim();
-  };
+  const key = (name: string) => requireKey(args[name], name);
   const ts = explicitUtcIso(args[names.at], names.at);
   if (Date.parse(ts) > Date.now() + FUTURE_SKEW_MS) throw new ToolError(`${names.at} is in the future (${ts}). Use the time the message or board record itself carries, not a time you expect it to happen. Nothing was written.`);
   return { source: key(names.source).toLowerCase(), account: key(names.account), id: key(names.id), ts };

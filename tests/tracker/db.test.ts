@@ -11,7 +11,7 @@ import { openDb, readTx, SCHEMA_V1, SCHEMA_VERSION, tx } from '../../plugin/serv
 import { secureDir, secureFile } from '../../plugin/servers/tracker/src/fsperm.ts';
 import { importLegacy } from '../../plugin/servers/tracker/src/legacy.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
-import { REWIND_TO_V5 } from './helpers.ts';
+import { REWIND_TO_V5, REWIND_TO_V6 } from './helpers.ts';
 
 const tempDb = () => join(mkdtempSync(join(tmpdir(), 'jh-db-')), 'tracker.db');
 const addRule = (db: ReturnType<typeof openDb>, text: string) =>
@@ -261,6 +261,37 @@ test('upgrading from v5 keeps every event, dates its receipt by its time, and ma
   } finally {
     again.close();
   }
+});
+
+// A database as the release before source checkpoints left it (schema v6): the current schema minus the v7 table.
+function v6Database(path: string): void {
+  const db = openDb(path);
+  db.exec(`
+    ${REWIND_TO_V6}
+    INSERT INTO sources(name, last_run, status, consecutive_failures, found, applied, last_error) VALUES('gmail', '2026-02-05T00:00:00.000Z', 'failed', 2, 4, 1, '429');
+  `);
+  db.close();
+}
+
+test('upgrading from v6 adds source checkpoints, empty, and leaves the sources as they were', () => {
+  const path = tempDb();
+  v6Database(path);
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.deepEqual(db.prepare('SELECT name, last_run, status, consecutive_failures, found, applied, last_error FROM sources').all().map((r) => ({ ...r })), [
+      { name: 'gmail', last_run: '2026-02-05T00:00:00.000Z', status: 'failed', consecutive_failures: 2, found: 4, applied: 1, last_error: '429' },
+    ]);
+    const t = new Tracker(db);
+    assert.deepEqual(t.sourceHealth().checkpoints, []);
+    t.setSourceStatus({ name: 'gmail', status: 'ok', source_account: 'jobs@example.test', coverage: 'complete', checked_through: '2026-03-01T00:00:00Z' });
+    assert.equal(t.sourceHealth().checkpoints[0]?.checked_through, '2026-03-01T00:00:00.000Z');
+    assert.throws(() => db.exec("INSERT INTO source_checkpoints(source, source_account, last_coverage, last_attempt_at) VALUES('gmail', 'jobs@example.test', 'partial', 'now')"), /UNIQUE/);
+    assert.throws(() => db.exec("INSERT INTO source_checkpoints(source, source_account, last_coverage, last_attempt_at) VALUES('gmail', 'b@example.test', 'full', 'now')"), /CHECK/);
+  } finally {
+    db.close();
+  }
+  openDb(path).close(); // reopening does not migrate again
 });
 
 test('migrating keeps every row and indexes every URL, and duplicates become a lookup conflict', () => {

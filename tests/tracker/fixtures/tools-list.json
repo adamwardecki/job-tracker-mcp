@@ -835,7 +835,7 @@
   },
   {
     "name": "source_health",
-    "description": "Per-source status, consecutive failures, yield.",
+    "description": "Per-source status, consecutive failures, yield, and checkpoints: per source account, checked_through (end of the last complete scan; null if none yet), last_coverage and last_attempt_at.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -845,7 +845,7 @@
   },
   {
     "name": "set_source_status",
-    "description": "Record a source result for this run. Three consecutive failures mark it degraded.",
+    "description": "Record a source result for this run. Three consecutive failures mark it degraded. To also record what a mailbox, calendar or board account scan covered, pass source_account and coverage. complete (needs status ok and checked_through, the actual end of what was read) moves that account's checkpoint forward; partial and unavailable never do. checked_through is the real endpoint: the reader adds its own overlap when it picks the next search window.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -868,6 +868,18 @@
         "error": {
           "type": "string",
           "description": "Error text"
+        },
+        "source_account": {
+          "type": "string",
+          "description": "Account the scan covered (a mailbox, a board login). Needed with coverage"
+        },
+        "checked_through": {
+          "type": "string",
+          "description": "How far the scan reached, ISO 8601 with an explicit offset. Needed with complete"
+        },
+        "coverage": {
+          "type": "string",
+          "description": "complete | partial | unavailable: how much of source_account this run checked"
         }
       },
       "required": [

@@ -3,10 +3,10 @@
 import type { DatabaseSync, SQLInputValue, StatementResultingChanges } from 'node:sqlite';
 import type { ConfigSections, Profile, SectionName } from './config.ts';
 import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './config.ts';
-import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RuleTypeRow, RunRow, SourceRow } from './db.ts';
+import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RuleTypeRow, RunRow, SourceCheckpointRow, SourceRow } from './db.ts';
 import { now, readTx, tx } from './db.ts';
 import { ToolError } from './errors.ts';
-import { externalIdentity, requireSameFields } from './external.ts';
+import { externalIdentity, FUTURE_SKEW_MS, requireKey, requireSameFields } from './external.ts';
 import { atsFromUrl, nameScore, normalizeDomain, normalizeName } from './fuzzy.ts';
 import type { LintResult } from './lint.ts';
 import { lintProse } from './lint.ts';
@@ -15,11 +15,14 @@ import type { PostingIdentity, PostingKey } from './posting.ts';
 import { parsePostingUrl, urlIdentity } from './posting.ts';
 import type { RuleListItem, RuleType } from './rules.ts';
 import { assertFreshRevision, decodeDetailCursor, decodeRuleCursor, detailChunk, encodeRuleCursor, normalizeDetailLimit, normalizeRuleLimit, normalizeRuleTypes, packRulePage, RULE_TYPES, resolveRuleFilters } from './rules.ts';
-import { dayBounds, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
+import { dayBounds, explicitUtcIso, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
 import type { ArgsFor } from './tools.ts';
 import { isRecord, oneOf, parseJson } from './util.ts';
 
 export { ToolError };
+
+const COVERAGES = ['complete', 'partial', 'unavailable'] as const;
+type Coverage = (typeof COVERAGES)[number];
 
 // Every database has the rule_state row from migration 5 on, so a missing one is damage, not something the model can fix.
 const MISSING_RULE_STATE = 'The rule_state row is missing from the tracker database; rule changes cannot be tracked.';
@@ -1039,25 +1042,63 @@ export class Tracker {
   }
 
   sourceHealth() {
-    return { sources: this.q<SourceRow>('SELECT * FROM sources ORDER BY name') };
+    return {
+      sources: this.q<SourceRow>('SELECT * FROM sources ORDER BY name'),
+      checkpoints: this.q<SourceCheckpointRow>('SELECT source, source_account, checked_through, last_coverage, last_attempt_at FROM source_checkpoints ORDER BY source, source_account'),
+    };
   }
 
-  setSourceStatus({ name, status, found, applied, error, degrade_after = 3 }: ArgsFor<'set_source_status'> & { degrade_after?: number }) {
+  setSourceStatus({ name, status, found, applied, error, source_account, checked_through, coverage, degrade_after = 3 }: ArgsFor<'set_source_status'> & { degrade_after?: number }) {
     req(name && ['ok', 'degraded', 'failed', 'disabled'].includes(status), 'name and status (ok | degraded | failed | disabled) are required');
-    const cur = this.one<SourceRow>('SELECT * FROM sources WHERE name = ?', name);
-    const failures = status === 'failed' ? (cur?.consecutive_failures || 0) + 1 : status === 'ok' ? 0 : cur?.consecutive_failures || 0;
-    let effective = status;
-    if (status === 'failed' && failures >= degrade_after) effective = 'degraded';
-    const changed = !cur || cur.status !== effective;
+    const report = this.checkpointReport({ name, status, source_account, checked_through, coverage });
+    return tx(this.db, () => {
+      const cur = this.one<SourceRow>('SELECT * FROM sources WHERE name = ?', name);
+      const failures = status === 'failed' ? (cur?.consecutive_failures || 0) + 1 : status === 'ok' ? 0 : cur?.consecutive_failures || 0;
+      let effective = status;
+      if (status === 'failed' && failures >= degrade_after) effective = 'degraded';
+      const changed = !cur || cur.status !== effective;
+      this.run(
+        `INSERT INTO sources(name, last_run, status, status_changed_at, consecutive_failures, found, applied, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET last_run = excluded.last_run, status = excluded.status,
+           status_changed_at = CASE WHEN sources.status != excluded.status THEN excluded.status_changed_at ELSE sources.status_changed_at END,
+           consecutive_failures = excluded.consecutive_failures, found = sources.found + excluded.found,
+           applied = sources.applied + excluded.applied, last_error = excluded.last_error`,
+        name, now(), effective, now(), failures, found || 0, applied || 0, error || null,
+      );
+      const source = this.one<SourceRow>('SELECT * FROM sources WHERE name = ?', name);
+      if (!report) return { source, changed };
+      return { source, changed, checkpoint: this.writeCheckpoint(report) };
+    });
+  }
+
+  // The checkpoint part of a set_source_status call, validated before anything is written; null when the call has none.
+  private checkpointReport(a: { name: string; status: string; source_account?: string | null | undefined; checked_through?: string | null | undefined; coverage?: string | null | undefined }) {
+    const given = (v: unknown) => v != null;
+    if (!given(a.source_account) && !given(a.checked_through) && !given(a.coverage)) return null;
+    req(given(a.coverage), 'source_account and checked_through describe a scan and come with coverage (complete | partial | unavailable). Nothing was written.');
+    req(oneOf(COVERAGES, a.coverage), `coverage must be one of ${COVERAGES.join(' | ')}; got "${a.coverage}". Nothing was written.`);
+    req(given(a.source_account), 'coverage needs source_account: the mailbox or board account the scan covered, so that two accounts never share a checkpoint. Nothing was written.');
+    const source = requireKey(a.name, 'name').toLowerCase();
+    const account = requireKey(a.source_account, 'source_account');
+    const through = given(a.checked_through) ? explicitUtcIso(a.checked_through, 'checked_through') : null;
+    if (through && Date.parse(through) > Date.now() + FUTURE_SKEW_MS) throw new ToolError(`checked_through is in the future (${through}). Pass how far the scan actually reached. Nothing was written.`);
+    if (a.coverage === 'complete') {
+      req(through, 'coverage complete needs checked_through: the time the scan reached, ISO 8601 with an explicit offset. Nothing was written.');
+      req(a.status === 'ok', `coverage complete needs status ok, not ${a.status}: a failed, degraded or disabled source did not finish a scan. Report partial or unavailable instead. Nothing was written.`);
+    }
+    return { source, account, coverage: a.coverage, through };
+  }
+
+  // Only a complete scan moves checked_through, and only forward. Every report records the attempt.
+  private writeCheckpoint({ source, account, coverage, through }: { source: string; account: string; coverage: Coverage; through: string | null }) {
+    const known = this.one<SourceCheckpointRow>('SELECT * FROM source_checkpoints WHERE source = ? AND source_account = ?', source, account);
+    const advance = coverage === 'complete' && through && (!known?.checked_through || through > known.checked_through);
     this.run(
-      `INSERT INTO sources(name, last_run, status, status_changed_at, consecutive_failures, found, applied, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(name) DO UPDATE SET last_run = excluded.last_run, status = excluded.status,
-         status_changed_at = CASE WHEN sources.status != excluded.status THEN excluded.status_changed_at ELSE sources.status_changed_at END,
-         consecutive_failures = excluded.consecutive_failures, found = sources.found + excluded.found,
-         applied = sources.applied + excluded.applied, last_error = excluded.last_error`,
-      name, now(), effective, now(), failures, found || 0, applied || 0, error || null,
+      `INSERT INTO source_checkpoints(source, source_account, checked_through, last_coverage, last_attempt_at) VALUES(?, ?, ?, ?, ?)
+       ON CONFLICT(source, source_account) DO UPDATE SET checked_through = excluded.checked_through, last_coverage = excluded.last_coverage, last_attempt_at = excluded.last_attempt_at`,
+      source, account, advance ? through : (known?.checked_through ?? null), coverage, now(),
     );
-    return { source: this.one<SourceRow>('SELECT * FROM sources WHERE name = ?', name), changed };
+    return this.one<SourceCheckpointRow>('SELECT source, source_account, checked_through, last_coverage, last_attempt_at FROM source_checkpoints WHERE source = ? AND source_account = ?', source, account);
   }
 
   addInterview(a: ArgsFor<'add_interview'>) {

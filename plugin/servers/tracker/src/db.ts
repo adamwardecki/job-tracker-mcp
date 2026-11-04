@@ -222,6 +222,14 @@ export interface SourceRow {
   last_error: string | null;
 }
 
+export interface SourceCheckpointRow {
+  source: string;
+  source_account: string;
+  checked_through: string | null;
+  last_coverage: 'complete' | 'partial' | 'unavailable';
+  last_attempt_at: string;
+}
+
 export interface RuleRow {
   id: number;
   text: string;
@@ -364,7 +372,7 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 // MIGRATIONS[i] takes the schema from version i + 1 to i + 2. Append only; never edit a shipped one.
 const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
@@ -463,6 +471,21 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       ALTER TABLE events ADD COLUMN received_at TEXT;
       UPDATE events SET received_at = ts;
       CREATE UNIQUE INDEX events_external ON events(source, source_account, source_id) WHERE source IS NOT NULL AND source_account IS NOT NULL AND source_id IS NOT NULL;
+    `);
+  },
+  // 7: where the last fully successful scan of one source account ended, apart from sources.last_run, which moves on
+  // failure too. checked_through stays null until a complete scan; last_coverage and last_attempt_at record the latest
+  // attempt of any kind. The SQL is written out here.
+  (db) => {
+    db.exec(`
+      CREATE TABLE source_checkpoints (
+        source TEXT NOT NULL,
+        source_account TEXT NOT NULL,
+        checked_through TEXT,
+        last_coverage TEXT NOT NULL CHECK (last_coverage IN ('complete', 'partial', 'unavailable')),
+        last_attempt_at TEXT NOT NULL,
+        PRIMARY KEY (source, source_account)
+      );
     `);
   },
 ];
