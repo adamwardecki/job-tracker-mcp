@@ -56,11 +56,11 @@ change for every future case; then deactivate the old one.
 
 Every workflow that applies rules reads them this way. Its own line says which `types` to pass; the steps are here once.
 
-1. Call `list_rules` with those `types`, or with no `types` when the workflow reads all types. Global rules always come back too. A page holds at most 10 rules: call again with `cursor` = `next_cursor` until it is `null`.
+1. Call `list_rules` with those `types`, or with no `types` when the workflow reads all types. Global rules always come back too. A page is not the whole set: call again with `cursor` = `next_cursor` until it is `null`.
 2. An entry `{id, types, requires_detail: true}` has no text (it is too long for a page). Call `get_rule` with its `id`, then again with `cursor` = `next_cursor` until it is `null`. Join the `chunk`s in order and `JSON.parse` the result. Never act on partial JSON.
 3. The rules are complete only when `next_cursor` is `null` and every `requires_detail` entry has been rebuilt. Until then do none of the work that depends on them.
 4. If a call says the rules changed (a stale `rules_revision`), discard everything collected so far and start again from the first page. Never mix pages from two revisions.
-5. After two attempts that fail (stale again, or an error), stop. Report that the rules could not be read, as an incomplete run, and do not do the work that depends on them. Never carry on with the part you did read.
-6. A complete collection made earlier in this run for the same types, or for all types, is reused: do not read again inside a skill that a workflow already prepared.
+5. After two attempts that fail (stale again, or an error), stop. Report `blocked: rules unreadable` and do not do the work that depends on them; never carry on with the part you did read. A subagent returns that token as its result. Anything else says it to the user or at the top of the report, as an incomplete run.
+6. Reuse a complete collection from earlier in this run, for the same types or for all types, only if nothing wrote a rule since (`add_rule`, `set_rule_types`, `deactivate_rule`). After any rule write, read again. A subagent always reads its own.
 
 Why: a sweep that read only the first page missed standing rules and re-queued roles the user had ruled out. This is agent behaviour; the server returns one page per call and never loops for you.

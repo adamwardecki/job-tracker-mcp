@@ -14,7 +14,7 @@ Hard filters first (any miss drops). Then soft preferences (only move the score)
 - **Look up the exchange rate for today; never guess it.** Use a reliable source (e.g. the ECB reference rate or another central bank, via fetch or search). Pass it as `fx_rate` (units of the floor currency per 1 unit of the posting currency) and write the rate, its date and its source in `score_notes`.
 - **Read the per-role stack lines in `profile` before calling anything a gap.** The summary line at the top is not exhaustive. Why: a technology the user had used in two past roles was once scored as a gap from the summary line.
 - **A required bullet with nothing honest to point at is a scoring signal**, usually a drop. Do not plan to write around it in the cover note.
-- **Apply every active rule** from the `scoring` rules plus the global ones, loaded as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). If they cannot be read, score nothing and return `blocked: rules unreadable`. Cite the rule id in `evidence` (`rule:<id>`) when a rule decides a drop.
+- **Apply every active rule** from the `scoring` rules plus the global ones. Rules: load `scoring` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). Cite the rule id in `evidence` (`rule:<id>`) when a rule decides a drop.
 
 ## Procedure
 

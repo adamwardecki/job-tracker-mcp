@@ -9,7 +9,7 @@ Load the employer's own posting, quote it, and decide. This step is the only way
 
 ## Hard rules
 
-- **Load the `scoring` rules** as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`), before recording any `rule:<id>` drop. If they cannot be read, verify nothing and return `blocked: rules unreadable`.
+- **Load the rules first.** Rules: load `scoring` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). Do it before recording any `rule:<id>` drop.
 - **Aggregator tags are leads, never verdicts.** Location, industry, seniority, salary and "Remote" from LinkedIn, boards, brokers or recruiters are unverified. Before writing any drop reason, open the employer's page and **quote it**. Why: wrong drops happened on stale tags, and wrong approvals happened four times on "Remote" tags that the ATS contradicted (e.g. "Hybrid (8 days/month)").
 - **The live employer ATS is the authority.** A careers page, ATS posting or the apply form itself. Not a recruiter's rewrite, not a cached aggregator copy.
 - **Every `verified` needs** `evidence` (the ATS URL plus the verbatim location line), `location_line` (verbatim) and `location_type` (`remote` | `hybrid` | `onsite` | `unknown`).

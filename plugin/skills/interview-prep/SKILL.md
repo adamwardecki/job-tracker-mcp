@@ -21,7 +21,7 @@ Help the user walk in with the right stories ready. Everything they will say mus
 - `find_company` and `open_items`: the role, the interview (`starts_at`, `tz`, `stage`, `people`, `link`, `notes`).
 - The role's posting (employer page), `score_notes`, the cover note and form answers sent (artifacts), and any recruiter emails in the thread.
 - `get_document`: `stories`, `profile`, `reusable-answers`.
-- Rules: load the `inbox` rules, plus `writing` if you draft any text for the employer, as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`).
+- Rules: load `inbox`, plus `writing` if you draft any text for the employer (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`).
 - Web search and fetch: the company site, product docs, changelog or blog, recent funding or launches, engineering blog, public talks by the interviewers.
 
 ## Procedure

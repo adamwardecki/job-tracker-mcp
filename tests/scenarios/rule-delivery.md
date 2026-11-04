@@ -98,3 +98,15 @@ spans two pages) through each consumer, and check the `types` argument and that 
 - Expect: unfiltered `list_rules` followed to `next_cursor: null`; the conflict is shown to the user;
   `add_rule` carries `types: ["scoring"]`; `deactivate_rule` is not called until the user says yes.
 - Result: UNEXECUTED
+
+### 9. A rule written by `/job-tracker:correct` is read again by the next score in the same session
+
+- Seed: a few `scoring` rules; the session first runs `/job-tracker:correct` (which reads all types and then calls
+  `add_rule` with `types: ["scoring"]`), then scores a fake role in the same session without restarting.
+- Input: the role matches only the rule `/correct` just added.
+- Expect: the scorer (or `score-role`) calls `list_rules` again from the first page rather than reusing the
+  collection made before the write; the new rule is in the set and its id is cited as `rule:<id>` on the drop.
+  A subagent always reads its own, so the scorer launched by the sweep is also checked once with a rule added
+  between the sweep's own read and the launch.
+- Must not: reuse the pre-correction collection after `add_rule`, `set_rule_types` or `deactivate_rule`.
+- Result: UNEXECUTED

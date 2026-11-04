@@ -10,7 +10,7 @@ You receive: the date (YYYY-MM-DD), the rule types to load (`reporting`), the `r
 
 ## Checks
 
-First load the `reporting` rules as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`). If they cannot be read, add `FAIL rules: reporting rules could not be read (incomplete run)` and still run every check below: none of them depends on a rule.
+Rules: load `reporting` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`). If they cannot be read, add `FAIL rules: blocked: rules unreadable` and still run every check below: none of them depends on a rule.
 
 Run every check. Each produces exactly one line: `PASS <check>` or `FAIL <check>: <what, which role or artifact, evidence>`.
 

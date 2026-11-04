@@ -9,7 +9,7 @@ A source produces **leads**. A lead is never a verdict: every tag on it (locatio
 
 ## Hard rules
 
-- **Load the `sourcing` rules** as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`), before choosing sources or dropping a lead on the user's rules. If they cannot be read, source nothing and say so in the report.
+- **Load the rules first.** Rules: load `sourcing` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). Do it before choosing sources or dropping a lead on the user's rules.
 - **Mark every aggregator field UNVERIFIED.** Pass location and comp tags through as `raw_location` / `raw_comp`, never into `location_line` or `comp_*`. Why: wrong drops happened on stale tags (a years-old industry tag, a "UK only" that wasn't), and wrong approvals on "Remote" tags the ATS contradicted.
 - **Dedupe before upsert.** Call `find_company` for every lead with its `url` (the employer ATS link when the card has one), the name, and the domain when known. `skip` (this posting is already tracked, a live application at the company, or `no_cold_apply`) means do not upsert. `seen` is a known company with nothing blocking: a different requisition there is a new lead, even after a rejection at that company, so upsert it. Why: a rejection blocks only the posting it was for; there is no company ban, and `gate_check` blocks a second application to the same posting.
 - **Capability-aware.** Skip browser sources when no browser is reachable, and say so in the report ("skipped: no browser"). Do not mark the source `failed` for that: only real errors from the source count towards degradation.

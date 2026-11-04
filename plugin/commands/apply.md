@@ -18,7 +18,7 @@ Apply to one role with the user present. Argument: `$ARGUMENTS`
 
 ## Procedure
 
-1. Call `start_run` with `kind: "apply"` and the detected capabilities. A browser is required for form filling; without one, prepare everything (note, answers) and tell the user which link to open. Load the `forms`, `scoring` and `writing` rules as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`); if they cannot be read, stop and tell the user before any form work.
+1. Call `start_run` with `kind: "apply"` and the detected capabilities. A browser is required for form filling; without one, prepare everything (note, answers) and tell the user which link to open. Rules: load `forms`, `scoring` and `writing` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`). Do it before any form work.
 2. **Resolve the role.**
    - No argument: call `open_items`, list the queued roles (company, title, score, one line), and ask which one with the host's question tool. Show company and title in the options, not ids.
    - A company name: call `open_items` and match it against the queued roles' companies. One match: use it. Several: ask which. None: call `find_company` and say what the tracker has on it.

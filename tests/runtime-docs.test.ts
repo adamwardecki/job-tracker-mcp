@@ -71,27 +71,28 @@ test('the board command opens the browser and the sweep report points to it', ()
   assert.match(read('commands/sweep.md'), /End the report with the line `Board: run \/job-tracker:board`\./);
 });
 
-// Rule delivery (B4): list_rules pages at 10, so a prompt that calls it once sees only part of the rules.
-// The retrieval protocol lives once in templates/rules.md ("Reading rules"); every consumer names its types and points there.
+// Rule delivery (B4): list_rules pages, so a prompt that calls it once sees only part of the rules. The retrieval
+// protocol lives once in templates/rules.md ("Reading rules"); every consumer names its types and points there.
+const SKIP_DIRS = ['node_modules', 'servers', 'scripts']; // not prompts: dependencies, server code, shell scripts
 const shipped = (dir = '', out: string[] = []): string[] => {
   for (const e of readdirSync(new URL(`../plugin/${dir}`, import.meta.url), { withFileTypes: true })) {
-    if (e.name === 'node_modules' || e.name === 'servers' || e.name === 'scripts') continue;
+    if (SKIP_DIRS.includes(e.name)) continue;
     if (e.isDirectory()) shipped(`${dir}${e.name}/`, out);
     else if (e.name.endsWith('.md')) out.push(`${dir}${e.name}`);
   }
   return out;
 };
 
-test('no shipped prompt calls list_rules without the paging protocol', () => {
+test('only templates/rules.md names list_rules: prompts point at it instead of calling the tool bare', () => {
   const callers = shipped().filter((f) => f !== 'templates/rules.md' && read(f).includes('list_rules'));
-  for (const f of callers) assert.match(read(f), /next_cursor|Reading rules/, `${f} mentions list_rules but not how to page it`);
+  assert.deepEqual(callers, [], 'a prompt that says list_rules is one page of rules; use the "Rules: load" line');
 });
 
 test('the shared Reading rules section carries the whole protocol and its reason', () => {
   const rules = read('templates/rules.md');
   const s = rules.slice(rules.indexOf('## Reading rules'));
   assert.ok(rules.includes('## Reading rules'), 'templates/rules.md has a Reading rules section');
-  for (const needle of ['`next_cursor`', '`requires_detail`', '`get_rule`', 'JSON.parse', 'discard', 'two attempts', 'Why: ']) assert.ok(s.includes(needle), needle);
+  for (const needle of ['`next_cursor`', '`requires_detail`', '`get_rule`', 'JSON.parse', 'discard', 'two attempts', '`blocked: rules unreadable`', 'only if nothing wrote a rule since', '`add_rule`, `set_rule_types`, `deactivate_rule`', 'A subagent always reads its own', 'Why: ']) assert.ok(s.includes(needle), needle);
 });
 
 // File -> the rule types its "Reading rules" line names (spec B, consumer mapping). [] means all types.
@@ -118,12 +119,12 @@ const RULE_TYPES = ['global', 'sourcing', 'scoring', 'forms', 'writing', 'inbox'
 
 test('every rules consumer names the types it loads and points at Reading rules with both path forms', () => {
   for (const [f, types] of Object.entries(CONSUMERS)) {
-    const line = read(f).split('\n').find((l) => l.includes('Reading rules')) ?? '';
-    assert.ok(line, `${f} has a Reading rules line`);
-    assert.deepEqual([...line.matchAll(/`([a-z]+)`/g)].map((m) => m[1]).filter((t) => RULE_TYPES.includes(t!)), types, f);
-    if (types.length === 0) assert.match(line, /all types/, f);
-    assert.match(read(f), /\$\{CLAUDE_PLUGIN_ROOT\}\/templates\/rules\.md/, f);
-    assert.match(read(f), /\$\{HERMES_SKILL_DIR\}\/(\.\.\/)+templates\/rules\.md/, f);
+    const m = read(f).match(/Rules: load ([^(\n]*) \(Reading rules: `([^`]*)`; Hermes: `([^`]*)`\)/);
+    assert.ok(m, `${f} has a "Rules: load <types> (Reading rules: ...; Hermes: ...)" sentence`);
+    assert.deepEqual([...m[1]!.matchAll(/`([a-z]+)`/g)].map((t) => t[1]).filter((t) => RULE_TYPES.includes(t!)), types, f);
+    if (types.length === 0) assert.match(m[1]!, /all types/, f);
+    assert.match(m[2]!, /^\$\{CLAUDE_PLUGIN_ROOT\}\/templates\/rules\.md$/, f);
+    assert.match(m[3]!, /^\$\{HERMES_SKILL_DIR\}\/(\.\.\/)+templates\/rules\.md$/, f);
   }
 });
 
@@ -132,6 +133,8 @@ test('the sweep tells each subagent which rule types to load', () => {
   assert.match(sweep, /`sourcer`[^\n]*rule types[^\n]*`sourcing`/);
   assert.match(sweep, /`scorer`[^\n]*rule types[^\n]*`scoring`/);
   assert.match(sweep, /`auditor`[^\n]*rule types[^\n]*`reporting`/);
+  // The sweep's own failed read, or a blocked subagent, makes the run incomplete but the report still goes out.
+  assert.match(sweep, /own read fails, or any subagent returns `blocked: rules unreadable`, the run is incomplete: put that first under \*\*Needs you\*\*, still render and deliver the report/);
 });
 
 test('correct classifies new rules, paginates all types for conflicts and never deactivates on its own', () => {

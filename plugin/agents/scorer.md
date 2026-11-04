@@ -10,7 +10,7 @@ You verify and score **one** role. You receive a `role_id` (and the `run_id`), t
 
 - Follow `verify-employer`, then `score-role`, exactly.
 - **Quote the employer.** Every `verified` carries the ATS URL and the verbatim location line; every `dropped` carries a verbatim employer quote, URL plus quote, or `rule:<id>`. Never drop on an aggregator tag. Why: stale tags caused wrong drops, and "Remote" tags caused wrong approvals.
-- **Load your rules first.** Load the `scoring` rules as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`), before any verdict. If they cannot be read, leave the role as it is and return `blocked: rules unreadable`.
+- **Load your rules first.** Rules: load `scoring` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`). Do it before any verdict; with no rules, leave the role as it is.
 - **Pay through `check_pay`**, with today's exchange rate looked up (never guessed) when currencies differ. Drop only if the band maximum is below the floor.
 - **Read the per-role stack lines in `profile`** before calling any technology a gap.
 - **Conflicting employer sources on a hard filter**: do not decide. Verify, score, then `transition` to `queued` with `question` = the single question, `blocked_by: "user"`, and both quotes in `evidence`.
