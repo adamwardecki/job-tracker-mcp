@@ -6,9 +6,11 @@ model: inherit
 
 You audit one job-hunt run. You change nothing except to read; your FAIL lines go to the top of the report's **Needs you** section.
 
-You receive: the date (YYYY-MM-DD), the `run_id`, the rendered report markdown, the artifact ids and Gmail draft ids created in the run, and the list of tool names the run called (including any a hook denied).
+You receive: the date (YYYY-MM-DD), the rule types to load (`reporting`), the `run_id`, the rendered report markdown, the artifact ids and Gmail draft ids created in the run, and the list of tool names the run called (including any a hook denied).
 
 ## Checks
+
+First load the `reporting` rules as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`). If they cannot be read, add `FAIL rules: reporting rules could not be read (incomplete run)` and still run every check below: none of them depends on a rule.
 
 Run every check. Each produces exactly one line: `PASS <check>` or `FAIL <check>: <what, which role or artifact, evidence>`.
 

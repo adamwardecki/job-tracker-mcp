@@ -31,16 +31,16 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
    - Call `setup_status`. If the tracker itself is unreachable, stop and say so: there is nowhere to record work.
    - Detect capabilities: which connectors respond (Gmail, Google Calendar, LinkedIn, Drive), which browser is reachable (Claude in Chrome, the host's built-in browser such as Hermes `browser_*` tools, or none), and whether a local folder is readable. Detect by checking the tool list (use tool search if tools are deferred) and making one cheap read call per connector. A tool that exists but errors counts as unavailable.
    - Call `start_run` with `kind` (`sweep`, or `calibration` if `--calibration`) and the capabilities object. Keep the returned `run_id`.
-   - Call `get_profile` and `list_rules`. Apply every active rule for the rest of the run.
+   - Call `get_profile`. Load the `reporting` rules as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`) and apply them when you write the report. Every skill and subagent loads its own types; if one comes back `blocked: rules unreadable`, the run is incomplete: put that first under **Needs you**, and do not queue or prepare roles that agent was to handle.
    - Call `open_items` and `source_health`. Another session may have touched roles today; build on its events, do not duplicate them.
 
 2. **Inbox and calendar.** If Gmail or Calendar is connected, follow the `inbox-and-calendar` skill. If not, note it for the report and continue.
 
-3. **Source.** Follow the `source-roles` skill to choose today's sources from config and capabilities. Launch one `sourcer` agent per available source, in parallel. Browser sources are skipped when no browser is reachable; list each skip in the report (do not mark the source failed for it). Collect each sourcer's lead list.
+3. **Source.** Follow the `source-roles` skill to choose today's sources from config and capabilities. Launch one `sourcer` agent per available source, in parallel, and tell each the rule types to load: `sourcing`. Browser sources are skipped when no browser is reachable; list each skip in the report (do not mark the source failed for it). Collect each sourcer's lead list.
 
 4. **Dedupe.** The sourcers already call `find_company` before `upsert_role`. A lead they marked `skip` (the posting is already tracked, a live application at the company, or `no_cold_apply`) was not upserted: do not verify it again. A `seen` lead they upserted is a new requisition (Dedupe and Identity in `source-roles`) and goes on to step 5. Why: a rejection blocks only the posting it was for; there is no company ban. A company with `no_cold_apply` or a live application is never prepared. Leads listed as `possible duplicate of <ids>` go to their scorer with those ids.
 
-5. **Verify and score.** For each `found` role from this run, launch a `scorer` agent (one role per agent, several in parallel). Each scorer follows `verify-employer` then `score-role` and writes `transition` events with evidence. Respect `--limit`.
+5. **Verify and score.** For each `found` role from this run, launch a `scorer` agent (one role per agent, several in parallel), telling each the rule types to load: `scoring`. Each scorer follows `verify-employer` then `score-role` and writes `transition` events with evidence. Respect `--limit`.
 
 6. **Prepare.** Take the top scored roles (default 3, at most 8, in score order) that cleared every hard filter. For each:
    - Call `gate_check` first. If it fails, do not prepare the role; put its problems in the report. Why: a posting applied to before (`previous_application`), or one with a live application or `no_cold_apply` at the company, can never be submitted, so a note for it is wasted.
@@ -54,7 +54,7 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
 
 7. **Report.** Call `render_report` with today's date (YYYY-MM-DD), the `run_id`, and a `headline` (one or two sentences: the outcome, e.g. "3 roles queued, 1 interview to book, 2 rejections"). Check that it states which capabilities were missing and what was queued or skipped because of it. If it does not, add one line under Needs you. End the report with the line `Board: run /job-tracker:board`. Why: a scheduled run can't open the board, and its link changes each time the board starts.
 
-8. **Audit.** Launch the `auditor` agent with: today's date, the `run_id`, the rendered report, the list of artifact ids and Gmail draft ids created in this run, and the list of tool names you called (including any a hook denied). Put every FAIL line it returns at the top of the report's **Needs you** section.
+8. **Audit.** Launch the `auditor` agent with: today's date, the rule types to load (`reporting`), the `run_id`, the rendered report, the list of artifact ids and Gmail draft ids created in this run, and the list of tool names you called (including any a hook denied). Put every FAIL line it returns at the top of the report's **Needs you** section.
 
 9. **Deliver** per `schedule.report_delivery`:
    - `artifact` (default): the report is your last message.

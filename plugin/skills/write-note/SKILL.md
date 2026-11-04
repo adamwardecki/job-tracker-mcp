@@ -23,7 +23,7 @@ Motivation and evidence, in the user's voice, sized to the field, and true.
 - The role: title, employer page, `score_notes`, the form's questions and limits (from `fill-form` step 1 when filling).
 - `get_document`: `profile`, `stories`, `reusable-answers`, and `voice` if present.
 - `get_profile`: `writing` (word limit, humanizer, signature style), `filters.pay_floor`, `filters.pay_rule_with_equity`, `prefs.availability`.
-- `list_rules`: apply every active writing rule.
+- Rules: load the `writing` rules as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`) and apply every one. If they cannot be read, write nothing and say so.
 
 ## Cover note shape
 

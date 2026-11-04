@@ -21,7 +21,7 @@ Turn incoming mail into tracker events and, where a written answer is needed, a 
 ## Procedure
 
 ### 1. Context
-`get_profile` (accounts, writing), `list_rules`, `open_items`, `pipeline_summary`. Note the last sweep date from `source_health` or the previous run.
+`get_profile` (accounts, writing), `open_items`, `pipeline_summary`. Load the `inbox` rules, plus `writing` when you will draft a reply, as Reading rules says in `${CLAUDE_PLUGIN_ROOT}/templates/rules.md` (Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). If they cannot be read, classify and record nothing and say so in the report. Note the last sweep date from `source_health` or the previous run.
 
 ### 2. Gather mail
 - Gmail `search_threads` since the last run (one or two days if unknown), in the recruiter inbox. Useful terms: ATS sender domains (ashbyhq.com, greenhouse.io, lever.co, workable, teamtailor, personio), "application", "interview", "unfortunately", "next steps", "schedule", plus the domains of companies with live processes.
