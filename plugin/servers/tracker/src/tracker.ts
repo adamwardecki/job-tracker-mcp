@@ -6,6 +6,7 @@ import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './con
 import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RuleTypeRow, RunRow, SourceRow } from './db.ts';
 import { now, readTx, tx } from './db.ts';
 import { ToolError } from './errors.ts';
+import { externalIdentity, requireSameFields } from './external.ts';
 import { atsFromUrl, nameScore, normalizeDomain, normalizeName } from './fuzzy.ts';
 import type { LintResult } from './lint.ts';
 import { lintProse } from './lint.ts';
@@ -14,7 +15,7 @@ import type { PostingIdentity, PostingKey } from './posting.ts';
 import { parsePostingUrl, urlIdentity } from './posting.ts';
 import type { RuleListItem, RuleType } from './rules.ts';
 import { assertFreshRevision, decodeDetailCursor, decodeRuleCursor, detailChunk, encodeRuleCursor, normalizeDetailLimit, normalizeRuleLimit, normalizeRuleTypes, packRulePage, RULE_TYPES, resolveRuleFilters } from './rules.ts';
-import { dayBounds, explicitUtcIso, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
+import { dayBounds, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
 import type { ArgsFor } from './tools.ts';
 import { isRecord, oneOf, parseJson } from './util.ts';
 
@@ -72,6 +73,27 @@ export interface EventInput {
   received_at?: string;
 }
 
+// What a repeated external event must repeat. Every EventInput field is decided here, so adding one forces a choice
+// between 'compare' (a difference is a conflict) and 'ignore' (it may differ between a first call and its retry).
+const EVENT_REPEAT = {
+  actor: 'compare',
+  status: 'compare',
+  outcome: 'compare',
+  category: 'compare',
+  question: 'compare',
+  blocked_by: 'compare',
+  evidence: 'compare',
+  ts: 'compare', // the occurrence time, called occurred_at by the caller
+  role_id: 'ignore', // checked on its own, as the canonical role, so an alias id is the same role
+  reason: 'ignore', // prose, reworded on a retry
+  run_id: 'ignore', // which run saw it
+  received_at: 'ignore', // when it reached the tracker
+  source: 'ignore', // the key the earlier row was found by
+  source_account: 'ignore',
+  source_id: 'ignore',
+} as const satisfies Record<keyof EventInput, 'compare' | 'ignore'>;
+const REPEATED = (Object.keys(EVENT_REPEAT) as (keyof EventInput)[]).filter((k) => EVENT_REPEAT[k] === 'compare');
+
 // What scope() returns: the run if any, and SQL conditions as [sql, params].
 // window(col): col lies in the covered time window. rows(alias, tsCol): rows tagged with the run, or in the window.
 export interface Scope {
@@ -114,26 +136,6 @@ function req(cond: unknown, msg: string): asserts cond {
 }
 const marks = (ids: readonly unknown[]) => ids.map(() => '?').join(', ');
 const day = (iso: string | null | undefined) => String(iso || '').slice(0, 10);
-
-// Why: a time far ahead would outrank every later event and pin the role; a day allows for clock skew.
-const FUTURE_SKEW_MS = 24 * 60 * 60 * 1000;
-
-// The external identity of a record call: all four fields or none. Keys are stored trimmed, so a retry with stray
-// whitespace is the same occurrence, and the source name is lowercase so Gmail and gmail are one source. Account and
-// id keep their case: providers may distinguish it. ts is the normalized UTC time the event happened.
-function externalIdentity(f: { source?: string | null; source_account?: string | null; source_id?: string | null; occurred_at?: string | null }): { source: string; source_account: string; source_id: string; ts: string } | null {
-  const given = [f.source, f.source_account, f.source_id, f.occurred_at].filter((v) => v != null);
-  if (!given.length) return null;
-  req(given.length === 4, 'source, source_account, source_id and occurred_at come together: pass all four to record an event from outside (a message or board record), or none.');
-  const key = (name: 'source' | 'source_account' | 'source_id') => {
-    const v = f[name];
-    req(typeof v === 'string' && v.trim(), `${name} must not be empty.`);
-    return v.trim();
-  };
-  const ts = explicitUtcIso(f.occurred_at, 'occurred_at');
-  req(Date.parse(ts) <= Date.now() + FUTURE_SKEW_MS, `occurred_at is in the future (${ts}). Use the time the message or board record itself carries, not a time you expect it to happen. Nothing was written.`);
-  return { source: key('source').toLowerCase(), source_account: key('source_account'), source_id: key('source_id'), ts };
-}
 
 const companyAliases = (aliases: string[] | null | undefined, url: string | null | undefined): string[] => {
   const { slug } = atsFromUrl(url);
@@ -702,7 +704,7 @@ export class Tracker {
     req(oneOf(['user', 'employer', 'pipeline'], a.actor), 'actor: user | employer | pipeline');
     req(a.status !== 'verified', 'Use transition(to: "verified") so verified_at is set with evidence.');
     const { source, source_account, source_id, occurred_at, ...rest } = a;
-    const external = externalIdentity({ source, source_account, source_id, occurred_at });
+    const external = externalIdentity(a);
     return tx(this.db, () => {
       const ev: EventInput = { ...rest, role_id: this.canonicalRoleId(a.role_id) };
       this.validateEvent(ev);
@@ -710,7 +712,8 @@ export class Tracker {
         const event_id = this.insertEvent(ev);
         return { role: this.roleRow(ev.role_id), event_id, duplicate: false, status_applied: !!ev.status };
       }
-      const { ts, ...key } = external;
+      const { ts } = external;
+      const key = { source: external.source, source_account: external.account, source_id: external.id };
       const known = this.one<EventRow>('SELECT * FROM events WHERE source = ? AND source_account = ? AND source_id = ?', key.source, key.source_account, key.source_id);
       if (known) {
         this.requireSameOccurrence(known, { ...ev, ts });
@@ -722,24 +725,11 @@ export class Tracker {
     });
   }
 
-  // A repeated external id must be the same occurrence. What may differ is how it reached us (run, reason, time of
-  // receipt); anything else means two different things share an id, and keeping the first would lose the second.
   private requireSameOccurrence(known: EventRow, next: EventInput & { ts: string }): void {
     const label = `${known.source} id ${known.source_id}`;
     const knownRole = this.canonicalRoleId(known.role_id);
     req(knownRole === next.role_id, `${label} was already recorded for role ${knownRole}, not role ${next.role_id}. Nothing was written. Use the role it was first recorded on, or a source_id that identifies this occurrence.`);
-    const same = (x: string | null | undefined, y: string | null | undefined) => (x ?? null) === (y ?? null);
-    const differs = [
-      ['actor', same(known.actor, next.actor)],
-      ['status', same(known.status, next.status)],
-      ['outcome', same(known.outcome, next.outcome)],
-      ['category', same(known.category, next.category)],
-      ['question', same(known.question, next.question)],
-      ['blocked_by', same(known.blocked_by, next.blocked_by)],
-      ['evidence', same(known.evidence, next.evidence)],
-      ['occurred_at', Date.parse(known.ts) === Date.parse(next.ts)],
-    ].filter(([, ok]) => !ok).map(([field]) => field);
-    req(!differs.length, `${label} was already recorded with different ${differs.join(', ')}. Nothing was written. A source_id names one immutable occurrence: give a new occurrence its own id, and correct a wrong record with a new event.`);
+    requireSameFields(label, known, next, REPEATED, { ts: 'occurred_at' });
   }
 
   // Whether an external event may set the role's status. Only if it happened after every status event of the group
@@ -749,6 +739,7 @@ export class Tracker {
   private projection(ev: EventInput, ts: string): { project: boolean; conflict?: string } {
     if (!ev.status) return { project: false };
     const role = this.mustRole(ev.role_id);
+    // In JS because ts text is not one format ('…:00Z' from older releases, '…:00.000Z' from now), so SQL order is not time order.
     const when = (iso: string) => (Number.isNaN(Date.parse(iso)) ? Number.NEGATIVE_INFINITY : Date.parse(iso));
     const latest = this.q<StatusEvent & Pick<EventRow, 'id'>>(`SELECT id, ts, status, outcome FROM events WHERE status IS NOT NULL AND role_id IN (${marks(this.roleGroupIds(role.id))})`, ...this.roleGroupIds(role.id))
       .reduce<(StatusEvent & Pick<EventRow, 'id'>) | undefined>((best, e) => (!best || when(e.ts) > when(best.ts) || (when(e.ts) === when(best.ts) && e.id > best.id) ? e : best), undefined);

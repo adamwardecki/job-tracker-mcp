@@ -108,7 +108,5 @@ export function explicitUtcIso(value: unknown, field: string): string {
   if (!m) throw new ToolError(`${hint}; got "${s}".`);
   const [y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0] = groups(m);
   if (!validWall(y, mo, d, h, mi, sec) || Number(m[8] ?? 0) > 23 || Number(m[9] ?? 0) > 59) throw new ToolError(`${field} is not a real date and time: "${s}".`);
-  const ms = Date.parse(s.toUpperCase());
-  if (Number.isNaN(ms)) throw new ToolError(`${hint}; got "${s}".`);
-  return new Date(ms).toISOString();
+  return new Date(Date.parse(s.toUpperCase())).toISOString();
 }

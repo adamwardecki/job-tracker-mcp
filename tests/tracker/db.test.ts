@@ -11,6 +11,7 @@ import { openDb, readTx, SCHEMA_V1, SCHEMA_VERSION, tx } from '../../plugin/serv
 import { secureDir, secureFile } from '../../plugin/servers/tracker/src/fsperm.ts';
 import { importLegacy } from '../../plugin/servers/tracker/src/legacy.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
+import { REWIND_TO_V5 } from './helpers.ts';
 
 const tempDb = () => join(mkdtempSync(join(tmpdir(), 'jh-db-')), 'tracker.db');
 const addRule = (db: ReturnType<typeof openDb>, text: string) =>
@@ -224,12 +225,7 @@ function v2Database(path: string): void {
 function v5Database(path: string): void {
   const db = openDb(path);
   db.exec(`
-    DROP INDEX events_external;
-    ALTER TABLE events DROP COLUMN source;
-    ALTER TABLE events DROP COLUMN source_account;
-    ALTER TABLE events DROP COLUMN source_id;
-    ALTER TABLE events DROP COLUMN received_at;
-    PRAGMA user_version = 5;
+    ${REWIND_TO_V5}
     INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z');
     INSERT INTO roles(id, company_id, title, first_seen, updated_at, status) VALUES(1, 1, 'Engineer', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'queued');
     INSERT INTO events(id, role_id, ts, status, actor, reason) VALUES(1, 1, '2026-02-04T00:00:00Z', 'found', 'pipeline', 'Found');

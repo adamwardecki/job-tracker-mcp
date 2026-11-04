@@ -13,6 +13,7 @@ import type { HookOutput } from '../plugin/hooks/lib/types.ts';
 import { boardMove } from '../plugin/servers/tracker/src/board-api.ts';
 import { openDb, SCHEMA_V1 } from '../plugin/servers/tracker/src/db.ts';
 import { Tracker } from '../plugin/servers/tracker/src/tracker.ts';
+import { REWIND_TO_V5 } from './tracker/helpers.ts';
 
 // One tool call in a test transcript: [toolName, input, resultText].
 type Call = [name: string, input: Record<string, unknown>, result?: string];
@@ -286,7 +287,7 @@ test('a database one schema step behind also blocks with the upgrade message', a
   const { verified } = trackerWithRoles();
   // A v5 database: the current schema without the event source columns and index that v6 added.
   const raw = new DatabaseSync(join(home, 'tracker.db'));
-  raw.exec('DROP INDEX events_external; ALTER TABLE events DROP COLUMN source; ALTER TABLE events DROP COLUMN source_account; ALTER TABLE events DROP COLUMN source_id; ALTER TABLE events DROP COLUMN received_at; PRAGMA user_version = 5;');
+  raw.exec(REWIND_TO_V5);
   raw.close();
   const sid = session();
   await markSession(sid);

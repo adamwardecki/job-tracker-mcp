@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type { TestContext } from 'node:test';
 import { test } from 'node:test';
 import { openDb } from '../../plugin/servers/tracker/src/db.ts';
+import { externalIdentity, requireSameFields } from '../../plugin/servers/tracker/src/external.ts';
 import type { RpcResponse } from '../../plugin/servers/tracker/src/mcp.ts';
 import { makeHandler } from '../../plugin/servers/tracker/src/mcp.ts';
 import { renderReport } from '../../plugin/servers/tracker/src/report.ts';
@@ -83,10 +84,12 @@ test('replaying through the MCP tool returns the original event', async (ctx) =>
 test('the event time is the normalized occurrence, and receipt time is kept apart', (ctx) => {
   const t = fresh(ctx);
   const roleId = queued(t);
+  const before = new Date().toISOString();
   const { event_id } = t.record({ ...ACK, role_id: roleId, occurred_at: '2026-10-01T11:00:00+02:00' });
+  const after = new Date().toISOString();
   const ev = t.one<{ ts: string; received_at: string; source: string; source_account: string; source_id: string }>('SELECT * FROM events WHERE id = ?', event_id);
   assert.equal(ev?.ts, '2026-10-01T09:00:00.000Z');
-  assert.ok(ev && ev.received_at > '2026-11-01', `received_at is the time of the call, got ${ev?.received_at}`);
+  assert.ok(ev && ev.received_at >= before && ev.received_at <= after, `received_at is the time of the call (${before} to ${after}), got ${ev?.received_at}`);
   assert.deepEqual([ev.source, ev.source_account, ev.source_id], ['gmail', 'jobs@example.test', 'message-1']);
   // The same instant written in another offset is the same occurrence.
   const again = t.record({ ...ACK, role_id: roleId, occurred_at: '2026-10-01T09:00:00Z' });
@@ -138,9 +141,10 @@ test('a rejection that sits on a linked duplicate still wins over an older ackno
   const duplicate = queued(t, { title: 'Engineer (LinkedIn)', url: null, at: '2026-08-01T00:00:00Z' });
   for (const id of [canonical, duplicate]) t.insertEvent({ role_id: id, status: 'applied', actor: 'user', reason: 'Applied', evidence: 'Sent', ts: '2026-10-05T00:00:00Z' });
   t.linkDuplicateRole({ canonical_role_id: canonical, duplicate_role_id: duplicate, reason: 'Same posting', evidence: `Both link to ${ONE}` });
-  // History left on the duplicate by an older release, after the link; the canonical row never saw it.
+  // History left on the duplicate by an older release, after the link; the canonical row never saw it. Its rejection is
+  // the only status event later than the acknowledgement below, which is itself later than the canonical row's own.
   t.run("INSERT INTO events(role_id, ts, status, outcome, actor, reason, evidence) VALUES(?, '2026-10-25T00:00:00Z', 'closed', 'rejected', 'import', 'Legacy rejection', 'No')", duplicate);
-  const ack = t.record({ ...ACK, role_id: duplicate });
+  const ack = t.record({ ...ACK, role_id: duplicate, occurred_at: '2026-10-10T09:00:00Z' });
   assert.equal(ack.status_applied, false);
   assert.equal(ack.role?.id, canonical);
   assert.equal(status(t, canonical), 'applied', 'the card was not moved by an older event');
@@ -328,11 +332,12 @@ test('an occurrence more than a day in the future is refused', async (ctx) => {
   const before = count(t);
   // A little ahead is clock skew between the mailbox and this machine; a year ahead would pin the role against every later event.
   assert.equal(t.record({ ...ACK, role_id: roleId, occurred_at: '2026-11-05T11:59:00Z' }).duplicate, false);
-  for (const future of ['2026-11-05T12:01:00Z', '2027-10-01T09:00:00Z', '2026-11-05T16:00:00+02:00']) {
+  assert.equal(t.record({ ...ACK, role_id: roleId, source_id: 'edge', occurred_at: '2026-11-05T12:00:00Z' }).duplicate, false, 'exactly 24 hours ahead is allowed');
+  for (const future of ['2026-11-05T12:00:00.001Z', '2026-11-05T12:01:00Z', '2027-10-01T09:00:00Z', '2026-11-05T16:00:00+02:00']) {
     const res = await call(t)('record', { ...ACK, role_id: roleId, source_id: `future-${future}`, occurred_at: future });
     assert.match(res.error, /occurred_at is in the future/, future);
   }
-  assert.equal(count(t), before + 1, 'only the first was written');
+  assert.equal(count(t), before + 2, 'only the two within a day were written');
 });
 
 test('source names are one key whatever their case or padding, accounts and ids are not', (ctx) => {
@@ -347,4 +352,84 @@ test('source names are one key whatever their case or padding, accounts and ids 
   assert.equal(other.duplicate, false, 'source_account keeps its case');
   const id = t.record({ ...ACK, role_id: roleId, source_id: 'Message-1', evidence: 'Another id.' });
   assert.equal(id.duplicate, false, 'source_id keeps its case');
+});
+
+test('a retry that changes any compared field is a conflict naming it', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = queued(t);
+  t.record({ ...ACK, role_id: roleId });
+  const before = count(t);
+  const changes: Record<string, unknown> = { actor: 'employer', status: 'interviewing', outcome: 'withdrawn', category: 'agency', question: 'Which visa?', blocked_by: 'user', evidence: 'Different text.', occurred_at: '2026-10-01T09:00:01Z' };
+  for (const [field, value] of Object.entries(changes)) {
+    assert.throws(() => t.record({ ...ACK, role_id: roleId, [field]: value }), new RegExp(`already recorded with different [a-z_, ]*${field}`), field);
+  }
+  assert.equal(count(t), before);
+});
+
+test('a second acknowledgement of the same status', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = queued(t);
+  t.record({ ...ACK, role_id: roleId });
+  // Newer and the same status: the machine allows staying put, so it is applied without a conflict.
+  const newer = t.record({ ...ACK, role_id: roleId, source_id: 'message-5', occurred_at: '2026-10-05T09:00:00Z' });
+  assert.equal(newer.status_applied, true);
+  assert.equal(newer.conflict, undefined);
+  // At the same instant as the status it repeats, nothing is left to decide: kept as evidence, no conflict, role untouched.
+  t.run("UPDATE roles SET updated_at = '2026-10-06T00:00:00.000Z' WHERE id = ?", roleId);
+  const same = t.record({ ...ACK, role_id: roleId, source_id: 'message-6', occurred_at: '2026-10-05T09:00:00Z' });
+  assert.equal(same.duplicate, false);
+  assert.equal(same.status_applied, false);
+  assert.equal(same.conflict, undefined);
+  assert.equal(same.role?.updated_at, '2026-10-06T00:00:00.000Z');
+  assert.equal(count(t, 'source_id = ?', 'message-6'), 1);
+});
+
+test('a retry through a role that was linked as a duplicate afterwards is the same occurrence', (ctx) => {
+  const t = fresh(ctx);
+  const canonical = queued(t);
+  const duplicate = queued(t, { title: 'Engineer (LinkedIn)', url: null, at: '2026-08-01T00:00:00Z' });
+  const first = t.record({ ...ACK, role_id: duplicate });
+  t.insertEvent({ role_id: canonical, status: 'applied', actor: 'user', reason: 'Applied', evidence: 'Sent', ts: '2026-10-05T00:00:00Z' });
+  t.linkDuplicateRole({ canonical_role_id: canonical, duplicate_role_id: duplicate, reason: 'Same posting', evidence: `Both link to ${ONE}` });
+  assert.equal(t.one<{ role_id: number }>('SELECT role_id FROM events WHERE id = ?', first.event_id)?.role_id, duplicate, 'the event was written before the link');
+  for (const id of [duplicate, canonical]) {
+    const again = t.record({ ...ACK, role_id: id });
+    assert.equal(again.duplicate, true, `retry through ${id}`);
+    assert.equal(again.event_id, first.event_id);
+  }
+  assert.equal(count(t, 'source_id = ?', 'message-1'), 1);
+});
+
+test('the shared checks name the caller\'s own field names', () => {
+  const names = { source: 'cal_source', account: 'calendar', id: 'event_id', at: 'starts' };
+  assert.equal(externalIdentity({}, names), null);
+  assert.deepEqual(externalIdentity({ cal_source: ' Google ', calendar: 'Me@Example.test ', event_id: 'e1', starts: '2026-10-01T11:00:00+02:00' }, names), { source: 'google', account: 'Me@Example.test', id: 'e1', ts: '2026-10-01T09:00:00.000Z' });
+  assert.throws(() => externalIdentity({ cal_source: 'google' }, names), /cal_source, calendar, event_id and starts .* all four, or none/);
+  assert.throws(() => externalIdentity({ cal_source: 'google', calendar: 'a', event_id: ' ', starts: '2026-10-01T09:00:00Z' }, names), /event_id must not be empty/);
+  assert.throws(() => externalIdentity({ cal_source: 'google', calendar: 'a', event_id: 'e', starts: '2026-10-01T09:00' }, names), /starts must be/);
+  assert.throws(() => requireSameFields('google id e1', { a: 'x', b: null, c: 1 }, { a: 'y', c: 2 }, ['a', 'b', 'c'], { c: 'count' }), /google id e1 was already recorded with different a, count\./);
+  requireSameFields('google id e1', { a: 'x', b: null }, { a: 'x' }, ['a', 'b']); // null and absent are the same
+});
+
+test('null external fields count as not given', async (ctx) => {
+  const t = fresh(ctx);
+  const roleId = queued(t);
+  const rpc = call(t);
+  const none = { source: null, source_account: null, source_id: null, occurred_at: null };
+  const plain = await rpc('record', { role_id: roleId, actor: 'user', reason: 'Note', ...none });
+  assert.equal(plain.error, '');
+  assert.equal(count(t, 'source IS NOT NULL'), 0);
+  const partial = await rpc('record', { role_id: roleId, actor: 'user', reason: 'Note', ...none, source: 'gmail' });
+  assert.match(partial.error, /come together/);
+});
+
+test('of two status events at the same time the later row speaks for the role', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = queued(t);
+  const at = '2026-10-10T09:00:00.000Z';
+  t.run("INSERT INTO events(role_id, ts, status, outcome, actor, reason, evidence) VALUES(?, ?, 'closed', 'rejected', 'import', 'Rejected', 'No')", roleId, at);
+  t.run("INSERT INTO events(role_id, ts, status, actor, reason, evidence) VALUES(?, ?, 'applied', 'import', 'Applied', 'Sent')", roleId, at);
+  const ack = t.record({ ...ACK, role_id: roleId, occurred_at: at });
+  assert.equal(ack.conflict, undefined, 'it repeats the status of the later row');
+  assert.equal(ack.status_applied, false);
 });
