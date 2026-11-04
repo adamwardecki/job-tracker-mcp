@@ -192,6 +192,10 @@ export interface EventRow {
   reason: string;
   evidence: string | null;
   run_id: number | null;
+  source: string | null;
+  source_account: string | null;
+  source_id: string | null;
+  received_at: string | null;
 }
 
 export interface ArtifactRow {
@@ -360,7 +364,7 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 // MIGRATIONS[i] takes the schema from version i + 1 to i + 2. Append only; never edit a shipped one.
 const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
@@ -446,6 +450,19 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       );
       INSERT INTO rule_types(rule_id, type) SELECT id, 'global' FROM rules;
       INSERT INTO rule_state(id, revision) VALUES(1, 0);
+    `);
+  },
+  // 6: where an event came from. ts stays the time it happened (for events from a mailbox or board, the message's
+  // own time); received_at is when the tracker heard of it, which for every existing event was ts. The unique index
+  // covers external events only, so the many events without a source stay unconstrained. The SQL is written out here.
+  (db) => {
+    db.exec(`
+      ALTER TABLE events ADD COLUMN source TEXT;
+      ALTER TABLE events ADD COLUMN source_account TEXT;
+      ALTER TABLE events ADD COLUMN source_id TEXT;
+      ALTER TABLE events ADD COLUMN received_at TEXT;
+      UPDATE events SET received_at = ts;
+      CREATE UNIQUE INDEX events_external ON events(source, source_account, source_id) WHERE source IS NOT NULL AND source_account IS NOT NULL AND source_id IS NOT NULL;
     `);
   },
 ];

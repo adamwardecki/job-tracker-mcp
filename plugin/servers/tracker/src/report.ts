@@ -50,8 +50,9 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
   const audit = runAudit(t, { date, run_id });
   const out = [`# Daily report · ${date}`, ''];
 
-  // Only what the plugin submitted; an application the user recorded (e.g. on the board, actor 'user') is theirs.
-  const applied = eventsIn(t, scope, "e.status = 'applied' AND e.actor = 'pipeline'");
+  // Only what the plugin submitted; an application the user recorded (e.g. on the board, actor 'user') is theirs, and
+  // so is one found in a mailbox or board afterwards (source set): a receipt is not a submission.
+  const applied = eventsIn(t, scope, "e.status = 'applied' AND e.actor = 'pipeline' AND e.source IS NULL");
   // Only the board can record applied without confirmation text. Listing these lets the user spot one they didn't make.
   const selfReported = eventsIn(t, scope, "e.status = 'applied' AND e.actor = 'user' AND (e.evidence IS NULL OR trim(e.evidence) = '')");
   const replies = eventsIn(t, scope, "e.actor = 'employer'");
@@ -186,7 +187,7 @@ export function runAudit(t: Tracker, { date, run_id }: ArgsFor<'audit'>) {
     failures.push({ check: 'draft_not_read_back', artifact_id: a.id, detail: `Gmail draft ${a.path_or_ref} not read back.` });
   for (const e of eventsIn(t, scope, `e.status IN (${LIVE.map(() => '?').join(', ')})`, ...LIVE)) {
     const c = t.one<{ no_cold_apply: number; no_cold_apply_reason: string | null }>('SELECT no_cold_apply, no_cold_apply_reason FROM companies WHERE id = ?', e.company_id);
-    if (c?.no_cold_apply && e.status === 'applied' && e.actor === 'pipeline')
+    if (c?.no_cold_apply && e.status === 'applied' && e.actor === 'pipeline' && !e.source)
       failures.push({ check: 'no_cold_apply', role_id: e.card_id, detail: `Applied to ${e.company} despite no_cold_apply (${c.no_cold_apply_reason}).` });
   }
   return { date: run_id != null ? null : (date ?? null), run_id: run_id ?? null, ok: failures.length === 0, failures };

@@ -284,14 +284,14 @@ test('the submit gate fails closed with a clear problem on a database the tracke
 
 test('a database one schema step behind also blocks with the upgrade message', async () => {
   const { verified } = trackerWithRoles();
-  // A v4 database: the current schema without the rule_types and rule_state tables that v5 added.
+  // A v5 database: the current schema without the event source columns and index that v6 added.
   const raw = new DatabaseSync(join(home, 'tracker.db'));
-  raw.exec('DROP TABLE rule_types; DROP TABLE rule_state; PRAGMA user_version = 4;');
+  raw.exec('DROP INDEX events_external; ALTER TABLE events DROP COLUMN source; ALTER TABLE events DROP COLUMN source_account; ALTER TABLE events DROP COLUMN source_id; ALTER TABLE events DROP COLUMN received_at; PRAGMA user_version = 5;');
   raw.close();
   const sid = session();
   await markSession(sid);
   await prompt({ session_id: sid, prompt: `/job-tracker:approve ${verified.id}`, transcript_path: applicationPage(String(verified.url)) });
-  assert.match(outputs[0]?.hookSpecificOutput?.additionalContext ?? '', /was not recorded: The tracker database is at schema v4; start the tracker once to upgrade it\./);
+  assert.match(outputs[0]?.hookSpecificOutput?.additionalContext ?? '', /was not recorded: The tracker database is at schema v5; start the tracker once to upgrade it\./);
 });
 
 test('personal-data fields and consent boxes are blocked', async () => {

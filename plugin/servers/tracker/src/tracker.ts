@@ -14,7 +14,7 @@ import type { PostingIdentity, PostingKey } from './posting.ts';
 import { parsePostingUrl, urlIdentity } from './posting.ts';
 import type { RuleListItem, RuleType } from './rules.ts';
 import { assertFreshRevision, decodeDetailCursor, decodeRuleCursor, detailChunk, encodeRuleCursor, normalizeDetailLimit, normalizeRuleLimit, normalizeRuleTypes, packRulePage, RULE_TYPES, resolveRuleFilters } from './rules.ts';
-import { dayBounds, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
+import { dayBounds, explicitUtcIso, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
 import type { ArgsFor } from './tools.ts';
 import { isRecord, oneOf, parseJson } from './util.ts';
 
@@ -63,7 +63,13 @@ export interface EventInput {
   reason: string;
   evidence?: string | null;
   run_id?: number | null;
+  // When it happened. Defaults to now; an event from outside carries the time its source gives.
   ts?: string;
+  // An event from a mailbox or board: which source and account, the source's own id for it, and when it reached us.
+  source?: string | null;
+  source_account?: string | null;
+  source_id?: string | null;
+  received_at?: string;
 }
 
 // What scope() returns: the run if any, and SQL conditions as [sql, params].
@@ -108,6 +114,20 @@ function req(cond: unknown, msg: string): asserts cond {
 }
 const marks = (ids: readonly unknown[]) => ids.map(() => '?').join(', ');
 const day = (iso: string | null | undefined) => String(iso || '').slice(0, 10);
+
+// The external identity of a record call: all four fields or none. Keys are stored trimmed, so a retry with stray
+// whitespace is the same occurrence. ts is the normalized UTC time the event happened.
+function externalIdentity(f: { source?: string | null; source_account?: string | null; source_id?: string | null; occurred_at?: string | null }): { source: string; source_account: string; source_id: string; ts: string } | null {
+  const given = [f.source, f.source_account, f.source_id, f.occurred_at].filter((v) => v != null);
+  if (!given.length) return null;
+  req(given.length === 4, 'source, source_account, source_id and occurred_at come together: pass all four to record an event from outside (a message or board record), or none.');
+  const key = (name: 'source' | 'source_account' | 'source_id') => {
+    const v = f[name];
+    req(typeof v === 'string' && v.trim(), `${name} must not be empty.`);
+    return v.trim();
+  };
+  return { source: key('source'), source_account: key('source_account'), source_id: key('source_id'), ts: explicitUtcIso(f.occurred_at, 'occurred_at') };
+}
 
 const companyAliases = (aliases: string[] | null | undefined, url: string | null | undefined): string[] => {
   const { slug } = atsFromUrl(url);
@@ -601,14 +621,16 @@ export class Tracker {
 
   // Every event lands on the canonical role, so nothing can move a linked duplicate's status after the link. This
   // covers the event and the status only: callers must resolve the id themselves (cardRow) before any other write to
-  // roles, such as verified_at, score or url.
-  insertEvent({ role_id: requested, status = null, outcome = null, category = null, question = null, blocked_by = null, actor, reason, evidence = null, run_id = null, ts = now() }: EventInput): void {
+  // roles, such as verified_at, score or url. projectStatus: false appends the evidence and leaves the role's status
+  // alone, for history that is not the latest word on the role. Returns the new event's id.
+  insertEvent({ role_id: requested, status = null, outcome = null, category = null, question = null, blocked_by = null, actor, reason, evidence = null, run_id = null, ts = now(), source = null, source_account = null, source_id = null, received_at = ts }: EventInput, { projectStatus = true }: { projectStatus?: boolean } = {}): number {
     const role_id = this.canonicalRoleId(requested);
-    this.run(
-      'INSERT INTO events(role_id, ts, status, outcome, category, question, blocked_by, actor, reason, evidence, run_id) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      role_id, ts, status, outcome, category, question, blocked_by, actor, reason, evidence, run_id,
+    const { lastInsertRowid } = this.run(
+      'INSERT INTO events(role_id, ts, status, outcome, category, question, blocked_by, actor, reason, evidence, run_id, source, source_account, source_id, received_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      role_id, ts, status, outcome, category, question, blocked_by, actor, reason, evidence, run_id, source, source_account, source_id, received_at,
     );
-    if (status) this.run('UPDATE roles SET status = ?, updated_at = ? WHERE id = ?', status, now(), role_id);
+    if (status && projectStatus) this.run('UPDATE roles SET status = ?, updated_at = ? WHERE id = ?', status, now(), role_id);
+    return Number(lastInsertRowid);
   }
 
   // selfReported: the user moved the role on the board themselves. Their own word is the evidence for an
@@ -666,15 +688,75 @@ export class Tracker {
     });
   }
 
+  // Appends an event without the machine check, for outcomes that arrive from outside and for notes. With source,
+  // source_account, source_id and occurred_at the event is external: the same occurrence is recorded once, it is
+  // dated by when it happened rather than when it arrived, and it moves the status only if it is the newest status
+  // event of the role's group and the status machine allows the move. Otherwise it is kept as evidence.
   record(a: ArgsFor<'record'>) {
     req(oneOf(['user', 'employer', 'pipeline'], a.actor), 'actor: user | employer | pipeline');
     req(a.status !== 'verified', 'Use transition(to: "verified") so verified_at is set with evidence.');
+    const { source, source_account, source_id, occurred_at, ...rest } = a;
+    const external = externalIdentity({ source, source_account, source_id, occurred_at });
     return tx(this.db, () => {
-      const ev = { ...a, role_id: this.canonicalRoleId(a.role_id) };
+      const ev: EventInput = { ...rest, role_id: this.canonicalRoleId(a.role_id) };
       this.validateEvent(ev);
-      this.insertEvent(ev);
-      return { role: this.roleRow(ev.role_id) };
+      if (!external) {
+        const event_id = this.insertEvent(ev);
+        return { role: this.roleRow(ev.role_id), event_id, duplicate: false, status_applied: !!ev.status };
+      }
+      const { ts, ...key } = external;
+      const known = this.one<EventRow>('SELECT * FROM events WHERE source = ? AND source_account = ? AND source_id = ?', key.source, key.source_account, key.source_id);
+      if (known) {
+        this.requireSameOccurrence(known, { ...ev, ts });
+        return { role: this.roleRow(ev.role_id), event_id: known.id, duplicate: true, status_applied: false };
+      }
+      const { project, conflict } = this.projection(ev, ts);
+      const event_id = this.insertEvent({ ...ev, ...key, ts, received_at: now() }, { projectStatus: project });
+      return { role: this.roleRow(ev.role_id), event_id, duplicate: false, status_applied: project, ...(conflict ? { conflict } : {}) };
     });
+  }
+
+  // A repeated external id must be the same occurrence. What may differ is how it reached us (run, reason, time of
+  // receipt); anything else means two different things share an id, and keeping the first would lose the second.
+  private requireSameOccurrence(known: EventRow, next: EventInput & { ts: string }): void {
+    const label = `${known.source} id ${known.source_id}`;
+    const knownRole = this.canonicalRoleId(known.role_id);
+    req(knownRole === next.role_id, `${label} was already recorded for role ${knownRole}, not role ${next.role_id}. Nothing was written. Use the role it was first recorded on, or a source_id that identifies this occurrence.`);
+    const same = (x: string | null | undefined, y: string | null | undefined) => (x ?? null) === (y ?? null);
+    const differs = [
+      ['actor', same(known.actor, next.actor)],
+      ['status', same(known.status, next.status)],
+      ['outcome', same(known.outcome, next.outcome)],
+      ['category', same(known.category, next.category)],
+      ['question', same(known.question, next.question)],
+      ['blocked_by', same(known.blocked_by, next.blocked_by)],
+      ['evidence', same(known.evidence, next.evidence)],
+      ['occurred_at', Date.parse(known.ts) === Date.parse(next.ts)],
+    ].filter(([, ok]) => !ok).map(([field]) => field);
+    req(!differs.length, `${label} was already recorded with different ${differs.join(', ')}. Nothing was written. A source_id names one immutable occurrence: give a new occurrence its own id, and correct a wrong record with a new event.`);
+  }
+
+  // Whether an external event may set the role's status. Only if it happened after every status event of the group
+  // (a late-arriving acknowledgement must not reopen a rejection) and the machine allows the move from the current
+  // status. When it does not, the evidence is still kept and the reason comes back as the conflict. An older event
+  // is ordinary backfill, so it carries no conflict.
+  private projection(ev: EventInput, ts: string): { project: boolean; conflict?: string } {
+    if (!ev.status) return { project: false };
+    const role = this.mustRole(ev.role_id);
+    const when = (iso: string) => (Number.isNaN(Date.parse(iso)) ? Number.NEGATIVE_INFINITY : Date.parse(iso));
+    const latest = this.q<StatusEvent & Pick<EventRow, 'id'>>(`SELECT id, ts, status, outcome FROM events WHERE status IS NOT NULL AND role_id IN (${marks(this.roleGroupIds(role.id))})`, ...this.roleGroupIds(role.id))
+      .reduce<(StatusEvent & Pick<EventRow, 'id'>) | undefined>((best, e) => (!best || when(e.ts) > when(best.ts) || (when(e.ts) === when(best.ts) && e.id > best.id) ? e : best), undefined);
+    const at = Date.parse(ts);
+    const label = stateLabel({ ts, status: ev.status, outcome: ev.outcome ?? null });
+    if (latest && at < when(latest.ts)) return { project: false };
+    if (latest && at === when(latest.ts)) {
+      if (latest.status === ev.status && (latest.outcome ?? null) === (ev.outcome ?? null)) return { project: false };
+      return { project: false, conflict: `The role already has ${stateLabel(latest)} at the same time (${ts}), so ${label} was recorded as evidence only and the status stays ${role.status}. Decide which came last, then settle it with transition or record.` };
+    }
+    const from = role.status || 'found';
+    const allowed = oneOf(STATUSES, from) ? MACHINE[from] : [];
+    if (from === ev.status || oneOf(allowed, ev.status)) return { project: true };
+    return { project: false, conflict: `Moving from ${from} to ${ev.status} is not allowed by the status machine (allowed from ${from}: ${allowed.join(', ') || 'none (terminal)'}), so ${label} was recorded as evidence only and the status stays ${from}. If the role really changed, settle it with transition or the user.` };
   }
 
   // Links always point at a root (linkDuplicateRole flattens them), so one lookup finds the canonical role.

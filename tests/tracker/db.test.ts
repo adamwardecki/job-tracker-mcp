@@ -220,6 +220,53 @@ function v2Database(path: string): void {
   raw.close();
 }
 
+// A database as the release before event sources left it (schema v5): the current schema minus what v6 added.
+function v5Database(path: string): void {
+  const db = openDb(path);
+  db.exec(`
+    DROP INDEX events_external;
+    ALTER TABLE events DROP COLUMN source;
+    ALTER TABLE events DROP COLUMN source_account;
+    ALTER TABLE events DROP COLUMN source_id;
+    ALTER TABLE events DROP COLUMN received_at;
+    PRAGMA user_version = 5;
+    INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z');
+    INSERT INTO roles(id, company_id, title, first_seen, updated_at, status) VALUES(1, 1, 'Engineer', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'queued');
+    INSERT INTO events(id, role_id, ts, status, actor, reason) VALUES(1, 1, '2026-02-04T00:00:00Z', 'found', 'pipeline', 'Found');
+    INSERT INTO events(id, role_id, ts, status, actor, reason) VALUES(2, 1, '2026-02-05T00:00:00.000Z', 'queued', 'pipeline', 'Queued');
+  `);
+  db.close();
+}
+
+test('upgrading from v5 keeps every event, dates its receipt by its time, and makes external ids unique', () => {
+  const path = tempDb();
+  v5Database(path);
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.deepEqual(db.prepare('SELECT id, ts, received_at, source, source_account, source_id FROM events ORDER BY id').all().map((r) => ({ ...r })), [
+      { id: 1, ts: '2026-02-04T00:00:00Z', received_at: '2026-02-04T00:00:00Z', source: null, source_account: null, source_id: null },
+      { id: 2, ts: '2026-02-05T00:00:00.000Z', received_at: '2026-02-05T00:00:00.000Z', source: null, source_account: null, source_id: null },
+    ]);
+    const t = new Tracker(db);
+    const ack = { role_id: 1, actor: 'user', status: 'applied', reason: 'Ack', evidence: 'Received', source: 'gmail', source_account: 'jobs@example.test', source_id: 'm1', occurred_at: '2026-03-01T09:00:00Z' };
+    assert.equal(t.record(ack).duplicate, false);
+    assert.equal(t.record(ack).duplicate, true);
+    // The index is the backstop under the check: a second row with the same identity cannot be written at all.
+    assert.throws(() => db.exec("INSERT INTO events(role_id, ts, actor, reason, source, source_account, source_id) VALUES(1, '2026-03-02T00:00:00Z', 'user', 'x', 'gmail', 'jobs@example.test', 'm1')"), /UNIQUE/);
+    // Events without an external identity are not constrained by it.
+    db.exec("INSERT INTO events(role_id, ts, actor, reason) VALUES(1, '2026-03-02T00:00:00Z', 'user', 'a'), (1, '2026-03-02T00:00:00Z', 'user', 'b')");
+  } finally {
+    db.close();
+  }
+  const again = openDb(path);
+  try {
+    assert.equal(again.prepare('SELECT COUNT(*) AS n FROM events').get()?.n, 5, 'reopening adds nothing');
+  } finally {
+    again.close();
+  }
+});
+
 test('migrating keeps every row and indexes every URL, and duplicates become a lookup conflict', () => {
   const path = tempDb();
   v2Database(path);

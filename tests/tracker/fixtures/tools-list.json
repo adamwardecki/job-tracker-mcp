@@ -432,7 +432,7 @@
   },
   {
     "name": "record",
-    "description": "Append a validated event without the state-machine check: outcomes from outside (rejection, invite, user decision) or a note (omit status).",
+    "description": "Append a validated event without the state-machine check: outcomes from outside (rejection, invite, user decision) or a note (omit status). For a message or board record pass source, source_account, source_id and occurred_at: replaying the same occurrence returns the original event_id (duplicate: true), a changed payload under one id is an error, and the status moves only if it is newer than the role's latest status event and the status machine allows it (status_applied; conflict says why not).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -475,6 +475,22 @@
         "run_id": {
           "type": "integer",
           "description": "Current run id"
+        },
+        "source": {
+          "type": "string",
+          "description": "Events from outside only: where it came from, e.g. gmail, linkedin, board. Pass with source_account, source_id and occurred_at, or none of them"
+        },
+        "source_account": {
+          "type": "string",
+          "description": "The mailbox or account, e.g. jobs@example.test. The same source_id in two accounts is two events"
+        },
+        "source_id": {
+          "type": "string",
+          "description": "The source's own id for this one occurrence (message id; board application id plus its original date), not a thread or a mutable card"
+        },
+        "occurred_at": {
+          "type": "string",
+          "description": "When it happened, ISO 8601 with an explicit offset (the message date), not when you read it"
         }
       },
       "required": [

@@ -61,7 +61,7 @@ closed (from queued | applied | interviewing | offer), with outcome: rejected | 
 | `transition` | `role_id`, `to`, `reason`, `evidence?`, `outcome?`, `category?` (drops), `question?` + `blocked_by?` (queued), `location_line?`, `location_type?`, `score?`, `score_notes?`, `run_id?` | Enforces the machine above. |
 | `get_role` | `role_id` | Role, company, full event history, artifacts, interviews, `urls:[{url, normalized_url, evidence}]`, `postings:[{provider, employer_key, posting_id}]`, `requested_role_id`, `linked_role_ids`, `links:[{duplicate_role_id, title, url, status, reason, evidence, created_at}]`. A linked duplicate's id returns its canonical role. Events, artifacts and interviews then cover the whole group, each with its own `role_id`; `urls` and `postings` are the group's, each listed once; `links` keeps each duplicate's own row and why it was linked. See [Duplicate roles](#duplicate-roles). |
 | `link_duplicate_role` | `canonical_role_id`, `duplicate_role_id`, `reason`, `evidence` | `{canonical_role_id, linked_role_ids}`. Links a historical duplicate row to the role kept as its card. See [Duplicate roles](#duplicate-roles). |
-| `record` | `role_id`, `status?`, `reason`, `evidence?`, `outcome?`, `category?`, `question?`, `blocked_by?`, `actor` (`user`\|`employer`\|`pipeline`), `run_id?` | Appends a validated event without the machine check. For outcomes that arrive from outside (rejection, invite, user decision) and for notes (`status` omitted = note). A `question` on the latest event shows under Needs you. |
+| `record` | `role_id`, `status?`, `reason`, `evidence?`, `outcome?`, `category?`, `question?`, `blocked_by?`, `actor` (`user`\|`employer`\|`pipeline`), `run_id?`, `source?`, `source_account?`, `source_id?`, `occurred_at?` | Appends a validated event without the machine check. For outcomes that arrive from outside (rejection, invite, user decision) and for notes (`status` omitted = note). A `question` on the latest event shows under Needs you. Returns `{role, event_id, duplicate, status_applied, conflict?}`. `source`, `source_account`, `source_id` and `occurred_at` come together or not at all, and make the event an external one (see below). |
 | `check_pay` | `comp_min?`, `comp_max`, `currency`, `period` (`year`\|`month`\|`day`\|`hour`), `fx_rate?` (units of floor currency per 1 unit of `currency`), `equity?` | `{verdict: "keep"\|"straddles"\|"drop"\|"unknown", reason}`. Drop only if the band max is below the floor. |
 | `gate_check` | `role_id` | `{ok, role_id, company, title, url, verified, dedupe_clean, no_cold_apply, live_elsewhere, previous_application, matched_role_id?, problems[]}`. Fails when the role is not verified, the company is `no_cold_apply`, another card at the company is applied, interviewing or offer, the role itself is live, dropped or closed, or the posting was applied to before. A posting is applied to once: an `applied`, `interviewing`, `offer`, or `closed` (`rejected` or `withdrawn`) event on any row of its group, or on an unlinked row holding one of its URLs or ATS postings, sets `previous_application` and blocks it even after a board move back to the queue; `matched_role_id` is the row holding the latest such event. An unlinked row holding the same posting also blocks on its own until the rows are linked or corrected. A rejection blocks only that posting: other requisitions at the company stay open. `dedupe_clean` is false on a live application elsewhere, a previous application or an unlinked row for the posting. Hooks call this before a submit click, on a read-only connection that never migrates (an older database blocks, asking for the tracker to be started once), and bind approval to `url`. |
 | `add_artifact` | `role_id`, `kind` (`cover_note`\|`cover_letter_pdf`\|`gmail_draft`\|`form_answers`\|`confirmation`\|`note`), `ref`, `content?` | `{artifact_id}`. Prose kinds are linted; issues are returned. `gmail_draft` starts unverified. |
@@ -104,6 +104,34 @@ A rule that cannot fit a page even alone is listed as `{id, types, requires_deta
 - The cursor binds the rule id, the offset into the serialization (in code points) and `rules_revision`. A cursor for another rule, a malformed or out-of-range one, or one issued before a rule change is an error that says to restart `get_rule` without a cursor. Discard the chunks already read when it says so.
 - An unknown id is an error. Inactive rules can be read, with `active: 0` in the rule.
 - This is the exception: ordinary rules arrive complete in `list_rules` and need no extra call.
+
+## Events from outside
+
+`record` can take an event from a mailbox or board without replaying it or reordering history. Pass `source`
+(`gmail`, `board`, ...), `source_account` (the mailbox or account, which scopes the id), `source_id` (the source's
+own id for one immutable occurrence: a message id, or a board application id with its original date; not a thread or
+a mutable card) and `occurred_at` (ISO 8601 with an explicit offset). All four or none: a partial group, an empty
+key, or a time with no offset or that is not a real date is refused, and nothing is written.
+
+- **Time.** `occurred_at` is stored as UTC and becomes the event's `ts`; the time the tracker heard of it is kept in
+  `received_at`. Receipt time and the role's `updated_at` never decide order. Every existing event has
+  `received_at = ts`.
+- **Idempotent.** `(source, source_account, source_id)` is unique. Repeating a call returns the original `event_id`
+  with `duplicate: true`, `status_applied: false`, and writes nothing, also through a linked duplicate's id. The run,
+  the reason and the receipt time may differ. A different role, actor, status, outcome, category, question,
+  `blocked_by`, evidence or `occurred_at` under the same key is an error, so a changed payload is never discarded.
+  The same `source_id` in another account is another event.
+- **Chronology.** The event is always appended. `roles.status` moves (`status_applied: true`) only when the event
+  happened after every status event of the role's whole group and the status machine allows the move from the
+  current status. An older event (a late acknowledgement of an application that was already rejected) is recorded
+  with `status_applied: false` and no conflict. An event at exactly the time of a different status, or a newer
+  one the machine forbids (for example `interviewing` after a rejection, or `applied` on a role still in
+  `found`), is recorded as evidence with `status_applied: false` and a `conflict` that says why. Nothing is forced,
+  and nothing reopens a closed role. Settle those with `transition` or the user.
+- **Not a submission.** An imported `applied` event keeps its `source`, so reports do not count it as an application
+  the plugin submitted. It still counts for `gate_check`: a posting applied to before stays `previous_application`.
+- Calls without the four fields are unchanged: `event_id` and `status_applied` (whether a status was written) are
+  the only additions to the result, and the status is written through whatever the caller asked for, as before.
 
 ## Duplicate roles
 
