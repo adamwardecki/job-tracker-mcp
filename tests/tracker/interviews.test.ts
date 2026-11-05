@@ -32,6 +32,9 @@ function applied(t: Tracker, company = 'Acme', title = 'Engineer'): number {
   return role.id;
 }
 
+// An interview row as stored, the fields a change can touch plus the identity it is found by.
+const snapshot = (t: Tracker, id: number) => ({ ...t.one<Record<string, unknown>>('SELECT starts_at, tz, stage, people, link, booked_by, notes, state, source, source_account, source_id, last_occurred_at FROM interviews WHERE id = ?', id) });
+
 const count = (t: Tracker, table: string, where = '1 = 1', ...params: (string | number)[]) => t.one<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`, ...params)?.n ?? 0;
 
 test('confirming a booking by id updates the pending row and clears the to-book action', (ctx) => {
@@ -333,4 +336,53 @@ test('a newer external update wins for the fields it carries over a local edit o
   const history = t.q<{ after_json: string }>('SELECT after_json FROM interview_changes ORDER BY id');
   assert.equal(JSON.parse(history[1]?.after_json ?? '{}').starts_at, '2099-11-08T09:00:00.000Z');
   assert.equal(history.length, 3);
+});
+
+test('a change note and the interviewing event keep the real receipt time and the join key of their interview', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const started = new Date().toISOString();
+  const first = t.addInterview({ role_id: roleId, ...EVENT });
+  t.addInterview({ role_id: roleId, ...EVENT, starts_at: '2099-11-06T09:30:00+01:00', occurred_at: '2026-10-03T08:00:00Z' });
+  const local = t.addInterview({ role_id: roleId, stage: 'Screen', link: BOOK });
+  const rows = t.q<{ ts: string; received_at: string; category: string | null; status: string | null; evidence: string | null }>('SELECT ts, received_at, category, status, evidence FROM events WHERE ts >= ? OR received_at >= ? ORDER BY id', '2026-10-01T00:00:00.000Z', started);
+  const written = rows.filter((e) => e.category === 'interview_changed' || e.status === 'interviewing');
+  assert.equal(written.length, 4, 'two notes, the interviewing move, and the note of the local row');
+  for (const e of written) assert.ok(e.received_at >= started, `received_at ${e.received_at} is when the tracker heard of it, not ${e.ts}`);
+  assert.deepEqual(written.filter((e) => e.category === 'interview_changed').map((e) => [e.ts.slice(0, 10), e.evidence]), [
+    ['2026-10-01', `interview:${first.interview_id} google_calendar/me@example.test/evt-1`],
+    ['2026-10-03', `interview:${first.interview_id} google_calendar/me@example.test/evt-1`],
+    [written[3]?.ts.slice(0, 10) ?? '', `interview:${local.interview_id}`],
+  ]);
+  assert.equal(written.find((e) => e.status === 'interviewing')?.ts, '2026-10-01T09:00:00.000Z', 'dated by the occurrence');
+});
+
+test('replaying an identical calendar event after a local edit is a no-op, and a changed one at the same time is still refused', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const first = t.addInterview({ role_id: roleId, ...EVENT });
+  t.addInterview({ role_id: roleId, interview_id: first.interview_id, stage: 'Technical', people: 'Dana Ruiz', link: 'https://meet.example.test/moved' });
+  const edited = snapshot(t, first.interview_id);
+  const changes = count(t, 'interview_changes');
+  const replay = t.addInterview({ role_id: roleId, ...EVENT });
+  assert.deepEqual(replay, { interview_id: first.interview_id, created: false, updated: false, stale: false, state: 'scheduled' });
+  assert.deepEqual(snapshot(t, first.interview_id), edited, 'the local edit is not undone');
+  assert.equal(count(t, 'interview_changes'), changes);
+  assert.throws(() => t.addInterview({ role_id: roleId, ...EVENT, starts_at: '2099-11-06T09:30:00+01:00' }), /different starts_at/);
+  assert.throws(() => t.addInterview({ role_id: roleId, ...EVENT, people: 'Someone Else' }), /different people/);
+  assert.deepEqual(snapshot(t, first.interview_id), edited);
+});
+
+test('adopting a calendar key on a pending row is recorded in the history', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const pending = t.addInterview({ role_id: roleId, stage: 'Screen', link: BOOK });
+  const adopted = t.addInterview({ role_id: roleId, stage: 'Screen', link: BOOK, source: 'google_calendar', source_account: 'me@example.test', source_id: 'evt-7', occurred_at: '2026-10-02T08:00:00Z' });
+  assert.deepEqual(adopted, { interview_id: pending.interview_id, created: false, updated: false, stale: false, state: 'pending' });
+  const history = t.q<{ occurred_at: string; before_json: string; after_json: string }>('SELECT occurred_at, before_json, after_json FROM interview_changes WHERE before_json IS NOT NULL');
+  assert.equal(history.length, 1);
+  assert.equal(history[0]?.occurred_at, '2026-10-02T08:00:00.000Z');
+  assert.equal(JSON.parse(history[0]?.before_json ?? '{}').source_id, null);
+  assert.equal(JSON.parse(history[0]?.after_json ?? '{}').source_id, 'evt-7');
+  assert.equal(snapshot(t, pending.interview_id).source_id, 'evt-7');
 });

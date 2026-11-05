@@ -168,7 +168,13 @@ without.
 - **History.** Each change that is applied (including the first) adds a row to `interview_changes` with the
   occurrence time, the receipt time, the `run_id`, and the interview's fields before (null for a new one) and after.
   It also appends a note event to the role with `category: 'interview_changed'`, the same `run_id`, and the
-  occurrence time as its `ts`; the reason says what changed. Identical retries write neither.
+  occurrence time as its `ts` (`received_at` is when the tracker heard of it); the reason says what changed, and the
+  evidence is `interview:<id>`, followed by ` <source>/<source_account>/<source_id>` when the interview has a calendar
+  key, for joining the note to its interview. The note does not carry the key in the event's own source columns:
+  those are unique per source id and would refuse a second change of one interview. Identical retries write neither.
+  An identical repeat of the newest external update is checked against what that update said, not against the row,
+  so it stays a no-op after a local edit and a changed one at the same time is still refused. A call that only
+  gives a pending row its calendar key adds a history entry (no note).
 - **Status.** A pending or scheduled interview moves the role to `interviewing` only when the status machine allows
   it from the role's status and no later status event exists (so an `applied` role moves; a `queued` one, a closed
   or a dropped one does not, and an older invite cannot reopen a rejection). Cancelling never changes the status.
