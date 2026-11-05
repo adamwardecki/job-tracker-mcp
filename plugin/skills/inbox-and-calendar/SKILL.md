@@ -36,7 +36,7 @@ Classify into one of:
 | Class | Tells | Action |
 |---|---|---|
 | **Rejection** | "unfortunately", "not moving forward", "position filled" | `record` with `status: "closed"`, `outcome: "rejected"` (or `role_closed` if filled/cancelled), `actor: "employer"`, `evidence` = feedback verbatim, or the key sentence if no feedback |
-| **Booking link** | `you.ashbyhq.com/meeting/...`, Calendly, SavvyCal, Google appointment pages, "book a time", "select a time through the link", "direct booking link" | **No draft.** `add_interview` with `stage`, `people`, `link` and **no** `starts_at` (that marks it "to book" and moves the role to interviewing). Read the calendar and list free windows for the report. |
+| **Booking link** | `you.ashbyhq.com/meeting/...`, Calendly, SavvyCal, Google appointment pages, "book a time", "select a time through the link", "direct booking link" | **No draft.** `add_interview` with `stage`, `people`, `link` and **no** `starts_at` (that marks it "to book"; the role moves to interviewing only when the status machine allows it). Read the calendar and list free windows for the report. |
 | **Invite** | Calendar invite or a confirmed time | `add_interview` with `starts_at`, `tz`, `stage`, `people`, `link`, `booked_by`. Check it appears on the invite calendar. |
 | **Reply needing an answer** | A question in prose, request for CV, availability asked in prose with no link, terms | Reply draft (step 4) |
 | **Acknowledgement** | "we received your application" | `record` note, `actor: "employer"`. If the tracker does not show the role as applied (the user applied themselves, or a tool did), `record` `status: "applied"`, `actor: "user"`, evidence = the acknowledgement text |

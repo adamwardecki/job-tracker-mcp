@@ -299,3 +299,38 @@ test('a pending interview from one calendar event is not taken over by another e
   assert.equal(count(t, 'interviews'), 2);
   assert.equal(t.openItems().interviews_to_book.length, 1);
 });
+
+test('a local edit does not move the external order, so an earlier cancellation that arrives later still applies', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const first = t.addInterview({ role_id: roleId, ...EVENT });
+  // The user adds an interviewer by hand, now, after the calendar event was read.
+  const local = t.addInterview({ role_id: roleId, interview_id: first.interview_id, stage: 'Technical', people: 'Dana Ruiz' });
+  assert.equal(local.updated, true);
+  assert.equal(t.one<{ last_occurred_at: string }>('SELECT last_occurred_at FROM interviews')?.last_occurred_at, '2026-10-01T09:00:00.000Z');
+  // The calendar cancelled it on 4 Nov, but the sweep only reads that after the local edit.
+  const cancelled = t.addInterview({ role_id: roleId, ...EVENT, state: 'cancelled', occurred_at: '2026-11-04T08:00:00Z' });
+  assert.deepEqual(cancelled, { interview_id: first.interview_id, created: false, updated: true, stale: false, state: 'cancelled' });
+  assert.equal(t.openItems().upcoming_interviews.length, 0);
+  // The newer event wins for the fields it carries; the local edit stays in the history and on the row.
+  assert.equal(t.one<{ people: string }>('SELECT people FROM interviews')?.people, 'Dana Ruiz');
+  const history = t.q<{ before_json: string | null; after_json: string }>('SELECT before_json, after_json FROM interview_changes ORDER BY id');
+  assert.equal(history.length, 3);
+  assert.equal(JSON.parse(history[1]?.after_json ?? '{}').people, 'Dana Ruiz');
+  assert.equal(JSON.parse(history[2]?.before_json ?? '{}').people, 'Dana Ruiz');
+  // An update older than the last external one is still ignored.
+  assert.equal(t.addInterview({ role_id: roleId, ...EVENT, occurred_at: '2026-10-15T08:00:00Z' }).stale, true);
+});
+
+test('a newer external update wins for the fields it carries over a local edit of them', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const first = t.addInterview({ role_id: roleId, ...EVENT });
+  t.addInterview({ role_id: roleId, interview_id: first.interview_id, stage: 'Technical', starts_at: '2099-11-08T10:00:00+01:00' });
+  const moved = t.addInterview({ role_id: roleId, ...EVENT, starts_at: '2099-11-06T09:30:00+01:00', occurred_at: '2026-10-03T08:00:00Z' });
+  assert.equal(moved.updated, true);
+  assert.equal(t.one<{ starts_at: string }>('SELECT starts_at FROM interviews')?.starts_at, '2099-11-06T08:30:00.000Z');
+  const history = t.q<{ after_json: string }>('SELECT after_json FROM interview_changes ORDER BY id');
+  assert.equal(JSON.parse(history[1]?.after_json ?? '{}').starts_at, '2099-11-08T09:00:00.000Z');
+  assert.equal(history.length, 3);
+});

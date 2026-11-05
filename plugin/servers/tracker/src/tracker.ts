@@ -1174,8 +1174,9 @@ export class Tracker {
         if (external) this.run('UPDATE interviews SET source = ?, source_account = ?, source_id = ?, last_occurred_at = ? WHERE id = ?', key.source, key.source_account, key.source_id, ts, known.id);
         return interviewResult(known.id, known.state);
       }
-      // A local update has no time of its own: it never moves the order back.
-      const last = external || !known.last_occurred_at || known.last_occurred_at < ts ? ts : known.last_occurred_at;
+      // A local update has no occurrence of its own, so it leaves the external order alone: an event that happened
+      // before the edit but is read after it must still apply. The newer external update wins for the fields it carries.
+      const last = external ? ts : known.last_occurred_at;
       this.run('UPDATE interviews SET starts_at = ?, tz = ?, stage = ?, people = ?, link = ?, booked_by = ?, notes = ?, state = ?, updated_at = ?, source = ?, source_account = ?, source_id = ?, last_occurred_at = ? WHERE id = ?',
         next.starts_at, next.tz, next.stage, next.people, next.link, next.booked_by, next.notes, next.state, received, key.source, key.source_account, key.source_id, last, known.id);
       this.logInterviewChange(known.id, before, next, ts, received, a.run_id);

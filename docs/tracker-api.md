@@ -162,7 +162,9 @@ without.
   update older than the newest applied one returns `stale: true` and changes nothing, so a late "booking link" cannot
   undo a scheduling and a late scheduling cannot undo a cancellation. An update at the same time is a no-op if
   identical and an error if it differs. A newer one applies in every direction, including rebooking a cancelled
-  interview. Calls without a key apply in the order they arrive.
+  interview. Calls without a key apply in the order they arrive and never move that order, so an event that
+  happened before a local edit but is read after it still applies, and wins for the fields it carries; the edit stays
+  in `interview_changes`.
 - **History.** Each change that is applied (including the first) adds a row to `interview_changes` with the
   occurrence time, the receipt time, the `run_id`, and the interview's fields before (null for a new one) and after.
   It also appends a note event to the role with `category: 'interview_changed'`, the same `run_id`, and the
