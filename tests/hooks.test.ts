@@ -13,7 +13,7 @@ import type { HookOutput } from '../plugin/hooks/lib/types.ts';
 import { boardMove } from '../plugin/servers/tracker/src/board-api.ts';
 import { openDb, SCHEMA_V1 } from '../plugin/servers/tracker/src/db.ts';
 import { Tracker } from '../plugin/servers/tracker/src/tracker.ts';
-import { REWIND_TO_V6 } from './tracker/helpers.ts';
+import { REWIND_TO_V7 } from './tracker/helpers.ts';
 
 // One tool call in a test transcript: [toolName, input, resultText].
 type Call = [name: string, input: Record<string, unknown>, result?: string];
@@ -285,14 +285,14 @@ test('the submit gate fails closed with a clear problem on a database the tracke
 
 test('a database one schema step behind also blocks with the upgrade message', async () => {
   const { verified } = trackerWithRoles();
-  // A v6 database: the current schema without the source checkpoints table that v7 added.
+  // A v7 database: the current schema without the interview states that v8 added.
   const raw = new DatabaseSync(join(home, 'tracker.db'));
-  raw.exec(REWIND_TO_V6);
+  raw.exec(REWIND_TO_V7);
   raw.close();
   const sid = session();
   await markSession(sid);
   await prompt({ session_id: sid, prompt: `/job-tracker:approve ${verified.id}`, transcript_path: applicationPage(String(verified.url)) });
-  assert.match(outputs[0]?.hookSpecificOutput?.additionalContext ?? '', /was not recorded: The tracker database is at schema v6; start the tracker once to upgrade it\./);
+  assert.match(outputs[0]?.hookSpecificOutput?.additionalContext ?? '', /was not recorded: The tracker database is at schema v7; start the tracker once to upgrade it\./);
 });
 
 test('personal-data fields and consent boxes are blocked', async () => {

@@ -6,6 +6,7 @@ import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './con
 import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RuleTypeRow, RunRow, SourceCheckpointRow, SourceRow } from './db.ts';
 import { now, readTx, tx } from './db.ts';
 import { ToolError } from './errors.ts';
+import type { ExternalIdentity } from './external.ts';
 import { externalIdentity, FUTURE_SKEW_MS, requireKey, requireSameFields } from './external.ts';
 import { atsFromUrl, nameScore, normalizeDomain, normalizeName } from './fuzzy.ts';
 import type { LintResult } from './lint.ts';
@@ -96,6 +97,36 @@ const EVENT_REPEAT = {
   source_id: 'ignore',
 } as const satisfies Record<keyof EventInput, 'compare' | 'ignore'>;
 const REPEATED = (Object.keys(EVENT_REPEAT) as (keyof EventInput)[]).filter((k) => EVENT_REPEAT[k] === 'compare');
+
+export const INTERVIEW_STATES = ['pending', 'scheduled', 'cancelled'] as const;
+
+// The interview columns an update may change, and what is kept of them in the change history.
+type InterviewValues = Pick<InterviewRow, 'starts_at' | 'tz' | 'stage' | 'people' | 'link' | 'booked_by' | 'notes' | 'state'>;
+
+// Every interview column is decided here, so adding one forces a choice between 'compare' (a difference is a change to
+// apply and keep) and 'ignore' (bookkeeping that differs between a call and its retry).
+const INTERVIEW_REPEAT = {
+  starts_at: 'compare',
+  tz: 'compare',
+  stage: 'compare',
+  people: 'compare',
+  link: 'compare',
+  booked_by: 'compare',
+  notes: 'compare',
+  state: 'compare',
+  id: 'ignore',
+  role_id: 'ignore', // checked on its own, as the canonical role
+  created_at: 'ignore',
+  updated_at: 'ignore',
+  source: 'ignore', // the key the row is found by
+  source_account: 'ignore',
+  source_id: 'ignore',
+  last_occurred_at: 'ignore', // the order of updates, checked on its own
+} as const satisfies Record<keyof InterviewRow, 'compare' | 'ignore'>;
+const INTERVIEW_VALUES = (Object.keys(INTERVIEW_REPEAT) as (keyof InterviewRow)[]).filter((k) => INTERVIEW_REPEAT[k] === 'compare') as (keyof InterviewValues)[];
+// What add_interview returns: which interview, whether this call created or changed it, or was ignored as older.
+const interviewResult = (interview_id: number, state: InterviewRow['state'], flags: { created?: true; updated?: true; stale?: true } = {}) => ({ interview_id, created: false, updated: false, stale: false, ...flags, state });
+const interviewSnapshot = (row: InterviewValues): InterviewValues => Object.fromEntries(INTERVIEW_VALUES.map((k) => [k, row[k] ?? null])) as InterviewValues;
 
 // What scope() returns: the run if any, and SQL conditions as [sql, params].
 // window(col): col lies in the covered time window. rows(alias, tsCol): rows tagged with the run, or in the window.
@@ -1106,20 +1137,124 @@ export class Tracker {
 
   addInterview(a: ArgsFor<'add_interview'>) {
     req(a.stage, 'stage is required');
+    const external = externalIdentity(a);
     return tx(this.db, () => {
       const role = this.cardRow(a.role_id);
       req(role, `No role ${a.role_id}`);
-      if (a.tz != null && !isValidTimeZone(a.tz)) throw zoneError(a.tz);
-      const startsAt = a.starts_at ? toUtcIso(a.starts_at, a.tz || this.timezone()) : null;
-      const r = this.run(
-        'INSERT INTO interviews(role_id, starts_at, tz, stage, people, link, booked_by, notes, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        role.id, startsAt, a.tz || null, a.stage, a.people || null, a.link || null, a.booked_by || null, a.notes || null, now(),
-      );
-      if (role.status !== 'interviewing') {
-        this.insertEvent({ role_id: role.id, status: 'interviewing', actor: 'employer', reason: `Interview: ${a.stage}`, evidence: a.link || a.notes || null });
+      if (a.run_id != null) req(this.one('SELECT 1 FROM runs WHERE id = ?', a.run_id), `No run ${a.run_id}`);
+      const known = this.findInterview(role, a, external);
+      const received = now();
+      // When it happened: the source's own time, or now for a call that names none.
+      const ts = external?.ts ?? received;
+      // Updates to one occurrence apply in the order they happened, not the order they arrived. Checked before the
+      // values: an update this old is ignored whatever it says.
+      const newest = external && known?.source ? known.last_occurred_at : null;
+      if (known && newest && ts < newest) return interviewResult(known.id, known.state, { stale: true });
+      const next = this.interviewValues(a, known);
+      const key = external ? { source: external.source, source_account: external.account, source_id: external.id } : { source: known?.source ?? null, source_account: known?.source_account ?? null, source_id: known?.source_id ?? null };
+      if (!known) {
+        const r = this.run(
+          'INSERT INTO interviews(role_id, starts_at, tz, stage, people, link, booked_by, notes, created_at, state, updated_at, source, source_account, source_id, last_occurred_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          role.id, next.starts_at, next.tz, next.stage, next.people, next.link, next.booked_by, next.notes, received, next.state, received, key.source, key.source_account, key.source_id, ts,
+        );
+        const interview_id = Number(r.lastInsertRowid);
+        this.logInterviewChange(interview_id, null, next, ts, received, a.run_id);
+        this.afterInterviewChange(role, interview_id, null, next, ts, a.run_id);
+        return interviewResult(interview_id, next.state, { created: true });
       }
-      return { interview_id: Number(r.lastInsertRowid) };
+      const before = interviewSnapshot(known);
+      const same = INTERVIEW_VALUES.every((k) => (before[k] ?? null) === (next[k] ?? null));
+      if (ts === newest) {
+        requireSameFields(`${known.source} id ${known.source_id}`, before, next, INTERVIEW_VALUES);
+        return interviewResult(known.id, known.state);
+      }
+      if (same) {
+        // Nothing changed, but a repeat that reaches further than any before it moves the order along, and a
+        // row recorded without an identity gains the one it is now found by.
+        if (external) this.run('UPDATE interviews SET source = ?, source_account = ?, source_id = ?, last_occurred_at = ? WHERE id = ?', key.source, key.source_account, key.source_id, ts, known.id);
+        return interviewResult(known.id, known.state);
+      }
+      // A local update has no time of its own: it never moves the order back.
+      const last = external || !known.last_occurred_at || known.last_occurred_at < ts ? ts : known.last_occurred_at;
+      this.run('UPDATE interviews SET starts_at = ?, tz = ?, stage = ?, people = ?, link = ?, booked_by = ?, notes = ?, state = ?, updated_at = ?, source = ?, source_account = ?, source_id = ?, last_occurred_at = ? WHERE id = ?',
+        next.starts_at, next.tz, next.stage, next.people, next.link, next.booked_by, next.notes, next.state, received, key.source, key.source_account, key.source_id, last, known.id);
+      this.logInterviewChange(known.id, before, next, ts, received, a.run_id);
+      this.afterInterviewChange(role, known.id, before, next, ts, a.run_id);
+      return interviewResult(known.id, next.state, { updated: true });
     });
+  }
+
+  // The interview a call is about: by id, or by the source's own id for it. Either must belong to the role's group.
+  private findInterview(role: RoleRow, a: ArgsFor<'add_interview'>, external: ExternalIdentity | null): InterviewRow | undefined {
+    const byKey = external ? this.one<InterviewRow>('SELECT * FROM interviews WHERE source = ? AND source_account = ? AND source_id = ?', external.source, external.account, external.id) : undefined;
+    if (a.interview_id != null) {
+      const row = this.interviewOf(role, a.interview_id);
+      if (external && row.source != null) req(row.source === external.source && row.source_account === external.account && row.source_id === external.id, `Interview ${row.id} was recorded from ${row.source} id ${row.source_id}, not ${external.source} id ${external.id}. Nothing was written. An interview keeps the occurrence it came from.`);
+      req(!byKey || byKey.id === row.id, `${external?.source} id ${external?.id} is interview ${byKey?.id}, not interview ${row.id}. Nothing was written. Use interview_id ${byKey?.id}, or omit interview_id.`);
+      return row;
+    }
+    if (byKey) {
+      const owner = this.canonicalRoleId(byKey.role_id);
+      req(owner === role.id, `${byKey.source} id ${byKey.source_id} was already recorded for role ${owner}, not role ${role.id}. Nothing was written. Use the role it was first recorded on, or a source_id that identifies this occurrence.`);
+      return byKey;
+    }
+    // No id or key: the call names no round, except by its booking link. Exactly one pending row of this stage with
+    // this link is that booking; several are not guessed between. A row from another occurrence is not a candidate for one.
+    const link = a.link?.trim();
+    if (!link) return undefined;
+    const group = this.roleGroupIds(role.id);
+    const candidates = this.q<InterviewRow>(`SELECT * FROM interviews WHERE role_id IN (${marks(group)}) AND state = 'pending' ORDER BY id`, ...group)
+      .filter((i) => i.stage?.trim() === a.stage.trim() && i.link?.trim() === link && (!external || i.source == null));
+    req(candidates.length < 2, `Pending interviews ${candidates.map((i) => i.id).join(', ')} of role ${role.id} all match stage "${a.stage}" and this link. Nothing was written. Pass interview_id to say which one this is.`);
+    return candidates[0];
+  }
+
+  // An interview by id, which must belong to the role's group: an id from another role is never updated.
+  private interviewOf(role: RoleRow, id: number): InterviewRow {
+    const row = this.one<InterviewRow>('SELECT * FROM interviews WHERE id = ?', id);
+    req(row, `No interview ${id}`);
+    req(this.canonicalRoleId(row.role_id) === role.id, `Interview ${id} belongs to role ${this.canonicalRoleId(row.role_id)}, not role ${role.id}. Nothing was written. Pass the interview_id of this role's own interview (get_role lists them), or omit it to add one.`);
+    return row;
+  }
+
+  // What an interview becomes: the call's fields over the stored ones, which stay where the call omits them. A new
+  // interview is scheduled with a time and pending without.
+  private interviewValues(a: ArgsFor<'add_interview'>, known: InterviewRow | undefined): InterviewValues {
+    if (a.tz != null && !isValidTimeZone(a.tz)) throw zoneError(a.tz);
+    const pick = <K extends 'people' | 'link' | 'booked_by' | 'notes'>(k: K): string | null => (a[k] != null ? a[k] || null : (known?.[k] ?? null));
+    const tz = a.tz != null ? a.tz || null : (known?.tz ?? null);
+    const given = a.starts_at ? toUtcIso(a.starts_at, tz || this.timezone()) : null;
+    req(a.state != null || !given || known?.state !== 'cancelled', `Interview ${known?.id} is cancelled. Nothing was written. To rebook it with this time, pass state: "scheduled".`);
+    const state = a.state ?? (given ? 'scheduled' : (known?.state ?? 'pending'));
+    req(oneOf(INTERVIEW_STATES, state), `state must be ${INTERVIEW_STATES.join(' | ')}, got "${state}".`);
+    req(!(state === 'pending' && given), 'A pending interview has no time yet: omit starts_at, or pass state: "scheduled" with it.');
+    const starts_at = state === 'pending' ? null : given ?? known?.starts_at ?? null;
+    req(state !== 'scheduled' || starts_at, 'A scheduled interview needs starts_at.');
+    return { starts_at, tz, stage: a.stage, people: pick('people'), link: pick('link'), booked_by: pick('booked_by'), notes: pick('notes'), state };
+  }
+
+  // What an applied change leaves behind: a role note saying what happened (for the report), and the move to
+  // interviewing when the interview is live and the status machine allows it from where the role is. A closed or
+  // dropped role keeps its status, and so does a role an older event would reopen.
+  private afterInterviewChange(role: RoleRow, id: number, before: InterviewValues | null, after: InterviewValues, ts: string, run_id: number | null | undefined): void {
+    const what = !before
+      ? { pending: 'added, still to book', scheduled: `booked for ${after.starts_at}`, cancelled: 'recorded as cancelled' }[after.state]
+      : after.state === 'cancelled' && before.state !== 'cancelled'
+        ? 'cancelled'
+        : after.state === 'scheduled' && before.state === 'scheduled' && after.starts_at !== before.starts_at
+          ? `rescheduled from ${before.starts_at} to ${after.starts_at}`
+          : after.state !== before.state
+            ? `now ${after.state}${after.starts_at ? ` for ${after.starts_at}` : ''}`
+            : `updated (${INTERVIEW_VALUES.filter((k) => before[k] !== after[k]).join(', ')})`;
+    this.insertEvent({ role_id: role.id, category: 'interview_changed', actor: 'pipeline', reason: `Interview ${id} (${after.stage}) ${what}`, run_id: run_id ?? null, ts });
+    if (after.state === 'cancelled' || role.status === 'interviewing') return;
+    const ev: EventInput = { role_id: role.id, status: 'interviewing', actor: 'employer', reason: `Interview: ${after.stage}`, evidence: after.link || after.notes || null, run_id: run_id ?? null };
+    if (this.projection(ev, ts).project) this.insertEvent({ ...ev, ts });
+  }
+
+  private logInterviewChange(interview_id: number, before: InterviewValues | null, after: InterviewValues, occurred_at: string, received_at: string, run_id: number | null | undefined): void {
+    this.run('INSERT INTO interview_changes(interview_id, occurred_at, received_at, run_id, before_json, after_json) VALUES(?, ?, ?, ?, ?, ?)',
+      interview_id, occurred_at, received_at, run_id ?? null, before && JSON.stringify(before), JSON.stringify(after));
   }
 
   // ---------- views ----------
@@ -1141,8 +1276,8 @@ export class Tracker {
     const stale_queue = all.filter((r) => r.last_event != null && r.last_event < cutoff).map(({ id, company, title, last_event }) => ({ id, company, title, last_event }));
     const drafts = this.q<{ id: number; role_id: number | null; draft_id: string | null; created_at: string; company: string | null }>(`SELECT a.id, a.role_id, a.path_or_ref AS draft_id, a.created_at, c.name AS company FROM artifacts a
       LEFT JOIN roles r ON r.id = ${canonicalOf('a.role_id')} LEFT JOIN companies c ON c.id = r.company_id WHERE a.kind = 'gmail_draft' AND a.verified_at IS NULL`);
-    const to_book = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = ${canonicalOf('i.role_id')} JOIN companies c ON c.id = r.company_id WHERE i.starts_at IS NULL AND r.status NOT IN ('closed', 'dropped')`);
-    const upcoming = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = ${canonicalOf('i.role_id')} JOIN companies c ON c.id = r.company_id WHERE i.starts_at >= ? AND r.status NOT IN ('closed', 'dropped') ORDER BY i.starts_at`, now());
+    const to_book = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = ${canonicalOf('i.role_id')} JOIN companies c ON c.id = r.company_id WHERE i.state = 'pending' AND r.status NOT IN ('closed', 'dropped')`);
+    const upcoming = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = ${canonicalOf('i.role_id')} JOIN companies c ON c.id = r.company_id WHERE i.state = 'scheduled' AND i.starts_at >= ? AND r.status NOT IN ('closed', 'dropped') ORDER BY i.starts_at`, now());
     // Questions raised on roles outside the queue (e.g. an applied role that broke a filter).
     const questions = this.q<Pick<RoleRow, 'id' | 'title' | 'status'> & { company: string; question: string; ts: string }>(`SELECT r.id, c.name AS company, r.title, r.status, e.question, e.ts FROM roles r JOIN companies c ON c.id = r.company_id
       JOIN events e ON e.id = (SELECT id FROM events WHERE role_id IN ${groupOf('r.id')} ORDER BY ts DESC, id DESC LIMIT 1)

@@ -267,6 +267,26 @@ export interface InterviewRow {
   booked_by: string | null;
   notes: string | null;
   created_at: string;
+  // pending: a booking still to make; scheduled: has a time; cancelled: called off.
+  state: 'pending' | 'scheduled' | 'cancelled';
+  updated_at: string | null;
+  // The calendar event or message this row was recorded from, when it came from outside.
+  source: string | null;
+  source_account: string | null;
+  source_id: string | null;
+  // When the newest update applied to it happened (the source's own time for an external one).
+  last_occurred_at: string | null;
+}
+
+// One applied change to an interview: what it was, what it became. before_json is null for a new row.
+export interface InterviewChangeRow {
+  id: number;
+  interview_id: number;
+  occurred_at: string;
+  received_at: string;
+  run_id: number | null;
+  before_json: string | null;
+  after_json: string;
 }
 
 export interface RunRow {
@@ -372,7 +392,7 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 // MIGRATIONS[i] takes the schema from version i + 1 to i + 2. Append only; never edit a shipped one.
 const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
@@ -486,6 +506,31 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
         last_attempt_at TEXT NOT NULL,
         PRIMARY KEY (source, source_account)
       );
+    `);
+  },
+  // 8: an interview has a state, apart from whether it has a time, so a booking can be confirmed in place, rescheduled
+  // or cancelled. A row with a time becomes scheduled, any other pending. The unique index covers rows that came from
+  // outside; interview_changes keeps what each applied update replaced. The SQL is written out here.
+  (db) => {
+    db.exec(`
+      ALTER TABLE interviews ADD COLUMN state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'scheduled', 'cancelled'));
+      ALTER TABLE interviews ADD COLUMN updated_at TEXT;
+      ALTER TABLE interviews ADD COLUMN source TEXT;
+      ALTER TABLE interviews ADD COLUMN source_account TEXT;
+      ALTER TABLE interviews ADD COLUMN source_id TEXT;
+      ALTER TABLE interviews ADD COLUMN last_occurred_at TEXT;
+      UPDATE interviews SET state = CASE WHEN starts_at IS NOT NULL THEN 'scheduled' ELSE 'pending' END, updated_at = created_at;
+      CREATE UNIQUE INDEX interviews_external ON interviews(source, source_account, source_id) WHERE source IS NOT NULL AND source_account IS NOT NULL AND source_id IS NOT NULL;
+      CREATE TABLE interview_changes (
+        id INTEGER PRIMARY KEY,
+        interview_id INTEGER NOT NULL REFERENCES interviews(id),
+        occurred_at TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        run_id INTEGER,
+        before_json TEXT,
+        after_json TEXT NOT NULL
+      );
+      CREATE INDEX interview_changes_interview ON interview_changes(interview_id);
     `);
   },
 ];

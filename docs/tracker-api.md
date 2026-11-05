@@ -73,7 +73,7 @@ closed (from queued | applied | interviewing | offer), with outcome: rejected | 
 | `get_rule` | `id`, `cursor?`, `limit?` (1 to 4000, default 4000) | `{id, chunk, next_cursor, rules_revision}`. One piece of the JSON text of the whole rule; only for a `requires_detail` entry (see [Oversized rules](#oversized-rules)). Works on inactive rules. |
 | `set_rule_types` | `id`, `types` (non-empty) | `{rule_id, types, rules_revision}`. Replaces the rule's classification and nothing else: text, reason, example, author and date stay. Duplicates collapse; an empty list, a non-string or an unknown type is an error and writes nothing. |
 | `source_health` / `set_source_status` | — / `name`, `status` (`ok`\|`degraded`\|`failed`\|`disabled`), `found?`, `applied?`, `error?`, `source_account?`, `checked_through?`, `coverage?` (`complete`\|`partial`\|`unavailable`) | Per-source health; N consecutive failures flips to `degraded`. `source_health` returns `{sources, checkpoints}`; each checkpoint is `{source, source_account, checked_through, last_coverage, last_attempt_at}` for one source account (the source name is trimmed and lowercased, so `Gmail` and `gmail` are one). `coverage` needs `source_account`; `complete` also needs `status` `ok` and `checked_through` (ISO 8601 with an explicit offset, stored as UTC, not more than a day ahead). Only `complete` moves `checked_through`, and only forward; `partial` and `unavailable` record `last_coverage` and `last_attempt_at` and keep the last successful cutoff, which is `null` until the account's first complete scan. `checked_through` is the actual endpoint of what was read: the 48-hour overlap belongs to the caller's next search window. `sources.last_run` still moves on every report, failures included. With `coverage` the result adds `checkpoint`; calls without these fields behave as before. |
-| `add_interview` | `role_id`, `stage`, `starts_at?` (ISO with offset, or a wall time read in `tz`), `tz?` (IANA), `people?`, `link?`, `booked_by?`, `notes?` | Also records an `interviewing` event if needed |
+| `add_interview` | `role_id`, `stage`, `starts_at?` (ISO with offset, or a wall time read in `tz`), `tz?` (IANA), `people?`, `link?`, `booked_by?`, `notes?`, `interview_id?`, `state?` (`pending`\|`scheduled`\|`cancelled`), `source?`, `source_account?`, `source_id?`, `occurred_at?`, `run_id?` | Records an interview or updates one. Returns `{interview_id, created, updated, stale, state}`; an identical retry sets all three booleans false and an ignored older update sets only `stale`. See [Interviews](#interviews). |
 | `render_report` | `date` (YYYY-MM-DD, local day), `run_id?` (preferred: that run only), `headline?` | Markdown daily report (spec §9). Only verified drafts and confirmed submissions are claimed. Missing capabilities and what was queued because of them are listed. Interview times are shown in local time. |
 | `audit` | `run_id?` or `date?` (one is required) | Post-run rule check: excluded industries touched, drops without evidence, applied without confirmation, prose lint failures in artifacts, unverified drafts. `{ok, failures[]}` |
 | `pipeline_summary` | `stale_after_days?` (14) | Counts by status, live processes (interviewing, offer), awaiting reply, rejections, fresh and stale queue |
@@ -134,6 +134,42 @@ nothing is written. `source` is trimmed and lowercased (`Gmail` and `gmail` are 
   the plugin submitted. It still counts for `gate_check`: a posting applied to before stays `previous_application`.
 - Calls without the four fields are unchanged: `event_id` and `status_applied` (whether a status was written) are
   the only additions to the result, and the status is written through whatever the caller asked for, as before.
+
+## Interviews
+
+`add_interview` updates the interview a call is about instead of adding a row each time, so a confirmed booking
+replaces the earlier "to book" row. An interview has a `state`: `pending` (a booking still to make, no time),
+`scheduled` (has a time) or `cancelled`. `open_items` lists `pending` ones under `interviews_to_book` and
+`scheduled` ones in the future under `upcoming_interviews`; a cancelled one is in neither, and neither are the
+interviews of a closed or dropped role. Rows from before states existed became `scheduled` with a time and `pending`
+without.
+
+- **Which interview.** In this order: `interview_id` (it must belong to the role's group, else an error and no
+  write); the external key (`source`, `source_account`, `source_id`, `occurred_at`, all four or none, as for
+  [events from outside](#events-from-outside); `source_id` is the calendar event or message id, and for a recurring
+  event includes the occurrence); otherwise a call with a `link` updates the one pending interview of the role
+  (a linked duplicate's group counts) with exactly that stage and link, and several candidates are an error naming
+  their ids, with nothing written. A call with none of these adds a new interview: a stage alone never identifies a
+  round, so rounds never merge. An `interview_id` together with an external key ties that interview to the key,
+  once. The same key under another role is an error; the same `source_id` in another source or account is another
+  interview.
+- **Fields.** An update keeps the stored value of any field it omits (`link` may change once the interview is
+  found). `state` defaults to `scheduled` with `starts_at` and otherwise stays. `scheduled` needs a time (`starts_at`
+  is read in `tz`, else the stored zone, else `filters.timezone`, and stored as UTC); `pending` has none; giving a
+  time to a `cancelled` interview needs an explicit `state`. An invalid zone, date or state is an error and writes
+  nothing.
+- **Order.** `occurred_at` is when the event happened, not when it was read. For an interview with a key, an
+  update older than the newest applied one returns `stale: true` and changes nothing, so a late "booking link" cannot
+  undo a scheduling and a late scheduling cannot undo a cancellation. An update at the same time is a no-op if
+  identical and an error if it differs. A newer one applies in every direction, including rebooking a cancelled
+  interview. Calls without a key apply in the order they arrive.
+- **History.** Each change that is applied (including the first) adds a row to `interview_changes` with the
+  occurrence time, the receipt time, the `run_id`, and the interview's fields before (null for a new one) and after.
+  It also appends a note event to the role with `category: 'interview_changed'`, the same `run_id`, and the
+  occurrence time as its `ts`; the reason says what changed. Identical retries write neither.
+- **Status.** A pending or scheduled interview moves the role to `interviewing` only when the status machine allows
+  it from the role's status and no later status event exists (so an `applied` role moves; a `queued` one, a closed
+  or a dropped one does not, and an older invite cannot reopen a rejection). Cancelling never changes the status.
 
 ## Duplicate roles
 

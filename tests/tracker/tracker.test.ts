@@ -439,7 +439,7 @@ test('an unparseable legacy interview time is shown as written, not a crash', ()
   const t = fresh();
   const { role } = t.upsertRole({ company: 'Acme', title: 'Eng', source: 'x' });
   // The v1 -> v2 migration leaves free text as is; it sorts after any ISO string, so it counts as upcoming.
-  t.run("INSERT INTO interviews(role_id, starts_at, stage, created_at) VALUES(?, 'Tuesday 10am', 'screen', ?)", role.id, new Date().toISOString());
+  t.run("INSERT INTO interviews(role_id, starts_at, stage, created_at, state) VALUES(?, 'Tuesday 10am', 'screen', ?, 'scheduled')", role.id, new Date().toISOString()); // as the v8 migration leaves a row with a time
   assert.equal(t.openItems().upcoming_interviews.length, 1);
   assert.ok(renderReport(t, { date: today() }).markdown.includes('- Tuesday 10am (Europe/Berlin): **Acme**, screen'));
 });

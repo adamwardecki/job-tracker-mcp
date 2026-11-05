@@ -86,7 +86,7 @@ test('notes, transitions, interviews, artifacts and updates sent through an old 
   assert.equal(t.mustRole(2).status, 'queued', 'the duplicate row keeps its last status');
   assert.equal(t.mustRole(2).stack, null);
   const fresh_ = t.q<{ role_id: number }>("SELECT role_id FROM events WHERE ts > '2026-06-01'");
-  assert.deepEqual(fresh_.map((e) => e.role_id), [1, 1]);
+  assert.deepEqual(fresh_.map((e) => e.role_id), [1, 1, 1], 'the note, the move, and the interview note');
   assert.equal(t.one<{ role_id: number }>('SELECT role_id FROM interviews WHERE stage = ?', 'tech')?.role_id, 1);
   assert.equal(t.one<{ role_id: number }>('SELECT role_id FROM artifacts WHERE id = ?', Number(art.data?.artifact_id))?.role_id, 1);
   assert.equal((await tool('gate_check', { role_id: 2 })).data?.role_id, 1);

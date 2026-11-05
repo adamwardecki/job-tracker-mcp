@@ -11,7 +11,7 @@ import { openDb, readTx, SCHEMA_V1, SCHEMA_VERSION, tx } from '../../plugin/serv
 import { secureDir, secureFile } from '../../plugin/servers/tracker/src/fsperm.ts';
 import { importLegacy } from '../../plugin/servers/tracker/src/legacy.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
-import { REWIND_TO_V5, REWIND_TO_V6 } from './helpers.ts';
+import { REWIND_TO_V5, REWIND_TO_V6, REWIND_TO_V7 } from './helpers.ts';
 
 const tempDb = () => join(mkdtempSync(join(tmpdir(), 'jh-db-')), 'tracker.db');
 const addRule = (db: ReturnType<typeof openDb>, text: string) =>
@@ -288,6 +288,50 @@ test('upgrading from v6 adds source checkpoints, empty, and leaves the sources a
     assert.equal(t.sourceHealth().checkpoints[0]?.checked_through, '2026-03-01T00:00:00.000Z');
     assert.throws(() => db.exec("INSERT INTO source_checkpoints(source, source_account, last_coverage, last_attempt_at) VALUES('gmail', 'jobs@example.test', 'partial', 'now')"), /UNIQUE/);
     assert.throws(() => db.exec("INSERT INTO source_checkpoints(source, source_account, last_coverage, last_attempt_at) VALUES('gmail', 'b@example.test', 'full', 'now')"), /CHECK/);
+  } finally {
+    db.close();
+  }
+  openDb(path).close(); // reopening does not migrate again
+});
+
+// A database as the release before interview states left it (schema v7): the current schema minus what v8 added, with a
+// booked interview that has its own timezone, one whose time is free text, and a booking link not yet used.
+function v7Database(path: string): void {
+  const db = openDb(path);
+  db.exec(`
+    ${REWIND_TO_V7}
+    INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z');
+    INSERT INTO roles(id, company_id, title, first_seen, updated_at, status) VALUES(1, 1, 'Engineer', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'interviewing');
+    INSERT INTO interviews(id, role_id, starts_at, tz, stage, people, link, booked_by, notes, created_at) VALUES(1, 1, '2099-11-02T09:00:00.000Z', 'Europe/Warsaw', 'Screen', 'Dana Ruiz', 'https://meet.example.test/s', 'employer', 'Bring a laptop', '2026-10-01T00:00:00.000Z');
+    INSERT INTO interviews(id, role_id, starts_at, stage, created_at) VALUES(2, 1, 'Tuesday 10am', 'Panel', '2026-10-02T00:00:00.000Z');
+    INSERT INTO interviews(id, role_id, stage, link, created_at) VALUES(3, 1, 'Technical', 'https://calendar.example.test/book/tech', '2026-10-03T00:00:00.000Z');
+  `);
+  db.close();
+}
+
+test('upgrading from v7 gives each interview a state, keeps its time zone, and lets a pending one be confirmed in place', () => {
+  const path = tempDb();
+  v7Database(path);
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.deepEqual(db.prepare('SELECT id, starts_at, tz, stage, people, link, booked_by, notes, created_at, state, updated_at, source, source_account, source_id, last_occurred_at FROM interviews ORDER BY id').all().map((r) => ({ ...r })), [
+      { id: 1, starts_at: '2099-11-02T09:00:00.000Z', tz: 'Europe/Warsaw', stage: 'Screen', people: 'Dana Ruiz', link: 'https://meet.example.test/s', booked_by: 'employer', notes: 'Bring a laptop', created_at: '2026-10-01T00:00:00.000Z', state: 'scheduled', updated_at: '2026-10-01T00:00:00.000Z', source: null, source_account: null, source_id: null, last_occurred_at: null },
+      { id: 2, starts_at: 'Tuesday 10am', tz: null, stage: 'Panel', people: null, link: null, booked_by: null, notes: null, created_at: '2026-10-02T00:00:00.000Z', state: 'scheduled', updated_at: '2026-10-02T00:00:00.000Z', source: null, source_account: null, source_id: null, last_occurred_at: null },
+      { id: 3, starts_at: null, tz: null, stage: 'Technical', people: null, link: 'https://calendar.example.test/book/tech', booked_by: null, notes: null, created_at: '2026-10-03T00:00:00.000Z', state: 'pending', updated_at: '2026-10-03T00:00:00.000Z', source: null, source_account: null, source_id: null, last_occurred_at: null },
+    ]);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM interview_changes').get()?.n, 0);
+    const t = new Tracker(db);
+    assert.deepEqual(t.openItems().interviews_to_book.map((i) => i.id), [3]);
+    assert.deepEqual(t.openItems().upcoming_interviews.map((i) => i.id), [1, 2]);
+    // The pending booking is confirmed by its link, and the migrated booked one keeps its zone when its time moves.
+    const confirmed = t.addInterview({ role_id: 1, stage: 'Technical', link: 'https://calendar.example.test/book/tech', starts_at: '2099-11-09T15:00:00+01:00' });
+    assert.deepEqual(confirmed, { interview_id: 3, created: false, updated: true, stale: false, state: 'scheduled' });
+    t.addInterview({ role_id: 1, interview_id: 1, stage: 'Screen', starts_at: '2099-11-03T10:00' });
+    assert.deepEqual({ ...db.prepare('SELECT starts_at, tz FROM interviews WHERE id = 1').get() }, { starts_at: '2099-11-03T09:00:00.000Z', tz: 'Europe/Warsaw' });
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM interviews').get()?.n, 3);
+    assert.equal(t.openItems().interviews_to_book.length, 0);
+    assert.throws(() => db.exec("INSERT INTO interviews(role_id, stage, created_at, state) VALUES(1, 'x', 'now', 'booked')"), /CHECK/);
   } finally {
     db.close();
   }

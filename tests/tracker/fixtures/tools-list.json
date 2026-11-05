@@ -891,7 +891,7 @@
   },
   {
     "name": "add_interview",
-    "description": "Record an interview (or a booking link still to book: omit starts_at). Moves the role to interviewing.",
+    "description": "Record an interview, or update one. Omit starts_at for a booking link still to book; the same stage and link again, or interview_id, or the calendar event (source, source_account, source_id and occurred_at together) updates that interview instead of adding one. state: pending | scheduled | cancelled. An applied role moves to interviewing. Returns {interview_id, created, updated, stale, state}; stale means an older update was ignored.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -926,6 +926,34 @@
         "notes": {
           "type": "string",
           "description": "Notes"
+        },
+        "interview_id": {
+          "type": "integer",
+          "description": "Update this interview (from an earlier call or get_role) instead of adding one. It must belong to role_id"
+        },
+        "state": {
+          "type": "string",
+          "description": "pending | scheduled | cancelled. Default: scheduled with starts_at, else pending. scheduled needs a time; cancelled records a called-off interview and needs an explicit newer update"
+        },
+        "source": {
+          "type": "string",
+          "description": "Where the booking came from, e.g. google_calendar. With source_account, source_id and occurred_at"
+        },
+        "source_account": {
+          "type": "string",
+          "description": "Account that scopes source_id"
+        },
+        "source_id": {
+          "type": "string",
+          "description": "The calendar event or message id; for a recurring event, the occurrence id. A repeat updates the same interview"
+        },
+        "occurred_at": {
+          "type": "string",
+          "description": "When the event or message happened, ISO 8601 with an explicit offset. An older update than the one applied is ignored"
+        },
+        "run_id": {
+          "type": "integer",
+          "description": "Run id, to attribute the change"
         }
       },
       "required": [
