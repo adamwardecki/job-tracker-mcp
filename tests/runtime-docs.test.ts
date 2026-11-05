@@ -154,7 +154,7 @@ test('the inbox skill reconciles from full threads and checkpoints, with immutab
   assert.match(s, /`set_source_status`[^\n]*`source_account`[^\n]*`coverage`/);
   assert.match(s, /`checked_through`/);
   assert.match(s, /never `complete`/);
-  assert.match(s, /`unavailable`, not omitted/);
+  assert.match(s, /skipped by design[^\n]*is reported, not omitted/);
   assert.match(s, /immutable message ID/);
   assert.match(s, /`occurred_at`/);
   assert.match(s, /`duplicate: true`/);
@@ -162,6 +162,20 @@ test('the inbox skill reconciles from full threads and checkpoints, with immutab
   assert.match(s, /`state: "cancelled"`/);
   assert.match(s, /`interview_id`/);
   assert.match(s, /Why: the sweep read only the LinkedIn inbox preview/);
+});
+
+test('a skipped source is unavailable with status degraded, a real error is failed, and calendar checked_through is the window end', () => {
+  const s = read('skills/inbox-and-calendar/SKILL.md');
+  // A skip is not a failure: `failed` would count toward degradation (source-roles: only real errors do).
+  assert.match(s, /skipped by design[^\n]*`unavailable`[^\n]*`status: "degraded"`/);
+  assert.match(s, /real error[^\n]*`status: "failed"`/);
+  assert.doesNotMatch(s, /skipped by design[^\n]*`status: "failed"`/);
+  assert.match(s, /calendar[^\n]*`checked_through`[^\n]*end of the step 2 search window[^\n]*not[^\n]*14-day/i);
+  assert.match(s, /more than a day ahead/);
+  for (const f of ['skills/triage-tracker/SKILL.md', 'skills/source-roles/reference.md', 'skills/source-roles/SKILL.md']) {
+    assert.doesNotMatch(read(f), /(skipped|no browser)[^\n]*`status: "failed"`/, f);
+  }
+  assert.match(read('skills/triage-tracker/SKILL.md'), /`unavailable` with `status: "degraded"`/);
 });
 
 test('the sweep and the auditor point at the checkpoint and booking rules instead of repeating them', () => {

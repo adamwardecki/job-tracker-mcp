@@ -67,7 +67,7 @@ Most roles here are open only to people who can work in the US. Recommend this g
 
 | ID | Source | Mode | Reliability and quirks | Retry limit |
 |---|---|---|---|---|
-| `jack-and-jill` | Jack & Jill | browser + email | Intro broker. "Jack's take" may describe the recruiter's client, not the employer; salary figures are often its own estimates; cards often have no location. Open intros mean `no_cold_apply`. Reading its dashboard for reconciliation is read-only; report it `unavailable` if it cannot be opened. | 1 |
+| `jack-and-jill` | Jack & Jill | browser + email | Intro broker. "Jack's take" may describe the recruiter's client, not the employer; salary figures are often its own estimates; cards often have no location. Open intros mean `no_cold_apply`. Reading its dashboard for reconciliation is read-only; report it `unavailable` if it cannot be opened (`degraded` if skipped, `failed` only on a real error). | 1 |
 | `jobcopilot` | WWR JobCopilot | browser | **Save-only.** Never enable auto-apply. Reconcile its Applied column every run via `triage-tracker` (read-only; keys and coverage as in `inbox-and-calendar`). Only for users who already have an account. | 1 |
 
 ### Retired by default

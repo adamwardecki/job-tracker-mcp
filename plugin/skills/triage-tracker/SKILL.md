@@ -81,5 +81,5 @@ For each round:
 Delete as you go rather than loading the whole list first; the pile shrinks and scrolling gets cheaper.
 
 ### 7. Finish
-- `set_source_status` for the board with counts, plus `source_account`, `coverage` and, if every card of the Applied column was read, `checked_through` = when you finished reading (`inbox-and-calendar`, Window and coverage). A column you could not read in full, or a board you could not open, is `partial` or `unavailable`, never `complete`.
+- `set_source_status` for the board with counts, plus `source_account`, `coverage` and, if every card of the Applied column was read, `checked_through` = when you finished reading (`inbox-and-calendar`, Window and coverage). A column you could not read in full, or a board that errored, is `partial` or `unavailable` with `status: "failed"` and the verbatim `error`, never `complete`. A board skipped by design (no browser reachable) is `unavailable` with `status: "degraded"`, not a failure.
 - Report: Applied reconciled (count, new), new leads, deleted, protected counts before and after.
