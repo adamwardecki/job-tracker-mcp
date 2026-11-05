@@ -274,7 +274,8 @@ export interface InterviewRow {
   source: string | null;
   source_account: string | null;
   source_id: string | null;
-  // When the newest update applied to it happened (the source's own time for an external one).
+  // When the newest dated update applied to it happened (the message's or event's own time); null until one has, as for
+  // a row made by hand. Hand edits do not move it.
   last_occurred_at: string | null;
 }
 

@@ -7,7 +7,7 @@ import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, Role
 import { now, readTx, tx } from './db.ts';
 import { ToolError } from './errors.ts';
 import type { ExternalIdentity } from './external.ts';
-import { externalIdentity, FUTURE_SKEW_MS, requireKey, requireSameFields } from './external.ts';
+import { externalIdentity, FUTURE_SKEW_MS, occurrenceTime, requireKey, requireSameFields } from './external.ts';
 import { atsFromUrl, nameScore, normalizeDomain, normalizeName } from './fuzzy.ts';
 import type { LintResult } from './lint.ts';
 import { lintProse } from './lint.ts';
@@ -134,10 +134,11 @@ interface InterviewTiming {
   run_id: number | null;
 }
 
-// Where an external update stands among those already applied to its interview: older (ignored), the same time (a
-// repeat) or newer. A call without an external identity, or an interview without one, has no order and is newer.
-function orderOf(known: InterviewRow | undefined, external: ExternalIdentity | null, ts: string): 'older' | 'same' | 'newer' {
-  const newest = external && known?.source ? known.last_occurred_at : null;
+// Where an update with an occurrence time stands among those already applied to its interview: older (ignored), the
+// same time (a repeat) or newer. A call without one (a hand edit), or an interview with no dated update yet, has no
+// order and is newer.
+function orderOf(known: InterviewRow | undefined, occurred: string | null, ts: string): 'older' | 'same' | 'newer' {
+  const newest = occurred ? known?.last_occurred_at : null;
   if (!newest) return 'newer';
   return ts < newest ? 'older' : ts === newest ? 'same' : 'newer';
 }
@@ -1164,7 +1165,12 @@ export class Tracker {
 
   addInterview(a: ArgsFor<'add_interview'>) {
     req(a.stage, 'stage is required');
-    const external = externalIdentity(a);
+    // An occurrence is a full external key with its time, or, for a later sighting of an interview already known by
+    // its id (another message or source), just the time. A source group is whole or absent either way.
+    const keyless = [a.source, a.source_account, a.source_id].every((v) => v == null);
+    req(a.occurred_at == null || a.interview_id != null || !keyless, 'occurred_at identifies an update by when it happened: pass it with interview_id, or with source, source_account and source_id.');
+    const external = a.interview_id != null && a.occurred_at != null && keyless ? null : externalIdentity(a);
+    const occurred = external?.ts ?? (a.occurred_at != null ? occurrenceTime(a.occurred_at, 'occurred_at') : null);
     return tx(this.db, () => {
       const role = this.cardRow(a.role_id);
       req(role, `No role ${a.role_id}`);
@@ -1172,25 +1178,25 @@ export class Tracker {
       const known = this.findInterview(role, a, external);
       const received = now();
       // ts is when it happened: the source's own time, or now for a call that names none.
-      const when: InterviewTiming = { ts: external?.ts ?? received, received, run_id: a.run_id ?? null };
-      const order = orderOf(known, external, when.ts);
+      const when: InterviewTiming = { ts: occurred ?? received, received, run_id: a.run_id ?? null };
+      const order = orderOf(known, occurred, when.ts);
       // Checked before the values: an update this old is ignored whatever it says.
       if (known && order === 'older') return interviewResult(known.id, known.state, { stale: true });
       const next = this.interviewValues(a, known);
       const key: InterviewKey = external ? { source: external.source, source_account: external.account, source_id: external.id } : { source: known?.source ?? null, source_account: known?.source_account ?? null, source_id: known?.source_id ?? null };
-      if (!known) return interviewResult(this.insertInterview(role, next, key, when), next.state, { created: true });
+      if (!known) return interviewResult(this.insertInterview(role, next, key, occurred, when), next.state, { created: true });
       if (order === 'same') {
         this.requireReplay(a, known);
         return interviewResult(known.id, known.state);
       }
-      return this.updateInterview(role, known, next, key, !!external, when);
+      return this.updateInterview(role, known, next, key, occurred != null, when);
     });
   }
 
-  private insertInterview(role: RoleRow, next: InterviewValues, key: InterviewKey, when: InterviewTiming): number {
+  private insertInterview(role: RoleRow, next: InterviewValues, key: InterviewKey, occurred: string | null, when: InterviewTiming): number {
     const r = this.run(
       'INSERT INTO interviews(role_id, starts_at, tz, stage, people, link, booked_by, notes, created_at, state, updated_at, source, source_account, source_id, last_occurred_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      role.id, next.starts_at, next.tz, next.stage, next.people, next.link, next.booked_by, next.notes, when.received, next.state, when.received, key.source, key.source_account, key.source_id, when.ts,
+      role.id, next.starts_at, next.tz, next.stage, next.people, next.link, next.booked_by, next.notes, when.received, next.state, when.received, key.source, key.source_account, key.source_id, occurred,
     );
     const id = Number(r.lastInsertRowid);
     this.logInterviewChange(id, null, { ...next, ...key }, when);
@@ -1198,16 +1204,16 @@ export class Tracker {
     return id;
   }
 
-  private updateInterview(role: RoleRow, known: InterviewRow, next: InterviewValues, key: InterviewKey, external: boolean, when: InterviewTiming) {
+  private updateInterview(role: RoleRow, known: InterviewRow, next: InterviewValues, key: InterviewKey, dated: boolean, when: InterviewTiming) {
     const before = interviewSnapshot(known);
     if (INTERVIEW_VALUES.every((k) => before[k] === next[k])) {
-      // Nothing changed, but an external repeat is still the newest word on the interview.
-      if (external) this.adoptSourceKey(known, key, when);
+      // Nothing changed, but a dated repeat is still the newest word on the interview.
+      if (dated) this.adoptSourceKey(known, key, when);
       return interviewResult(known.id, known.state);
     }
-    // A local update has no occurrence of its own, so it leaves the external order alone: an event that happened
-    // before the edit but is read after it must still apply. The newer external update wins for the fields it carries.
-    const last = external ? when.ts : known.last_occurred_at;
+    // An update without an occurrence time (a hand edit) leaves the order alone: an event that happened before the
+    // edit but is read after it must still apply. The newer dated update wins for the fields it carries.
+    const last = dated ? when.ts : known.last_occurred_at;
     this.run('UPDATE interviews SET starts_at = ?, tz = ?, stage = ?, people = ?, link = ?, booked_by = ?, notes = ?, state = ?, updated_at = ?, source = ?, source_account = ?, source_id = ?, last_occurred_at = ? WHERE id = ?',
       next.starts_at, next.tz, next.stage, next.people, next.link, next.booked_by, next.notes, next.state, when.received, key.source, key.source_account, key.source_id, last, known.id);
     this.logInterviewChange(known.id, { ...before, source: known.source, source_account: known.source_account, source_id: known.source_id }, { ...next, ...key }, when);
@@ -1215,12 +1221,12 @@ export class Tracker {
     return interviewResult(known.id, next.state, { updated: true });
   }
 
-  // An external call that changes none of the interview's fields. A row recorded without an identity (a booking link)
-  // gains the calendar event it turned out to be, and the history says when; a row that has one only moves its order
-  // along, so that an older update is ignored from here on.
+  // A dated call that changes none of the interview's fields. A row recorded without an identity (a booking link)
+  // gains the calendar event it turned out to be, if the call carries one, and the history says when; otherwise it only
+  // moves the order along, so that an older update is ignored from here on.
   private adoptSourceKey(known: InterviewRow, key: InterviewKey, when: InterviewTiming): void {
     this.run('UPDATE interviews SET source = ?, source_account = ?, source_id = ?, last_occurred_at = ? WHERE id = ?', key.source, key.source_account, key.source_id, when.ts, known.id);
-    if (known.source == null) {
+    if (known.source == null && key.source != null) {
       const values = interviewSnapshot(known);
       this.logInterviewChange(known.id, { ...values, source: null, source_account: null, source_id: null }, { ...values, ...key }, when);
     }
@@ -1232,7 +1238,7 @@ export class Tracker {
   private requireReplay(a: ArgsFor<'add_interview'>, known: InterviewRow): void {
     const entry = this.one<{ after_json: string }>('SELECT after_json FROM interview_changes WHERE interview_id = ? AND occurred_at <= ? ORDER BY occurred_at DESC, id DESC LIMIT 1', known.id, known.last_occurred_at);
     const last = entry ? interviewSnapshot(JSON.parse(entry.after_json) as InterviewValues) : interviewSnapshot(known);
-    requireSameFields(`${known.source} id ${known.source_id}`, last, this.interviewValues(a, { ...known, ...last }), INTERVIEW_VALUES);
+    requireSameFields(known.source ? `${known.source} id ${known.source_id}` : `Interview ${known.id}`, last, this.interviewValues(a, { ...known, ...last }), INTERVIEW_VALUES);
   }
 
   // The interview a call is about: by id, or by the source's own id for it. Either must belong to the role's group.

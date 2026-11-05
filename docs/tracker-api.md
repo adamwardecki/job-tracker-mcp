@@ -158,13 +158,19 @@ without.
   is read in `tz`, else the stored zone, else `filters.timezone`, and stored as UTC); `pending` has none; giving a
   time to a `cancelled` interview needs an explicit `state`. An invalid zone, date or state is an error and writes
   nothing.
-- **Order.** `occurred_at` is when the event happened, not when it was read. For an interview with a key, an
-  update older than the newest applied one returns `stale: true` and changes nothing, so a late "booking link" cannot
-  undo a scheduling and a late scheduling cannot undo a cancellation. An update at the same time is a no-op if
-  identical and an error if it differs. A newer one applies in every direction, including rebooking a cancelled
-  interview. Calls without a key apply in the order they arrive and never move that order, so an event that
+- **Order.** `occurred_at` is when the event happened, not when it was read. It comes with the full external key,
+  or alone with `interview_id` for a later sighting of a known interview from another message or source (its
+  `source`, `source_account` and `source_id` are all absent: the source group is whole or absent, and the interview
+  keeps the key it first got). An update older than the newest dated one applied to the interview
+  (`last_occurred_at`, visible on interview rows in `get_role` and `open_items`) returns `stale: true` and changes
+  nothing, so a late "booking link" cannot undo a scheduling, a late scheduling cannot undo a cancellation, and an
+  older mail re-read later cannot revert a reschedule. An update at the same time is a no-op if identical (compared
+  with the newest dated update, not a hand-edited row) and an error if it differs. A newer one applies in every
+  direction, including rebooking a cancelled interview, and moves `last_occurred_at` to its time. An interview made
+  by hand has no `last_occurred_at` until a dated update reaches it, so an earlier-dated message still applies to it.
+  A call without `occurred_at` applies in the order it arrives and never moves that order, so an event that
   happened before a local edit but is read after it still applies, and wins for the fields it carries; the edit stays
-  in `interview_changes`.
+  in `interview_changes`. `occurred_at` without `interview_id` or a key is an error.
 - **History.** Each change that is applied (including the first) adds a row to `interview_changes` with the
   occurrence time, the receipt time, the `run_id`, and the interview's fields before (null for a new one) and after.
   It also appends a note event to the role with `category: 'interview_changed'`, the same `run_id`, and the

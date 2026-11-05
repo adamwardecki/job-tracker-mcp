@@ -40,9 +40,15 @@ export function externalIdentity(args: Readonly<Record<string, unknown>>, names:
   if (!given.length) return null;
   if (given.length !== all.length) throw new ToolError(`${all.slice(0, -1).join(', ')} and ${names.at} identify one occurrence from outside (a message or board record) and come together: pass all four, or none.`);
   const key = (name: string) => requireKey(args[name], name);
-  const ts = explicitUtcIso(args[names.at], names.at);
-  if (Date.parse(ts) > Date.now() + FUTURE_SKEW_MS) throw new ToolError(`${names.at} is in the future (${ts}). Use the time the message or board record itself carries, not a time you expect it to happen. Nothing was written.`);
+  const ts = occurrenceTime(args[names.at], names.at);
   return { source: key(names.source).toLowerCase(), account: key(names.account), id: key(names.id), ts };
+}
+
+// When something from outside happened, as normalized UTC: an explicit-offset ISO time, not in the future.
+export function occurrenceTime(value: unknown, name: string): string {
+  const ts = explicitUtcIso(value, name);
+  if (Date.parse(ts) > Date.now() + FUTURE_SKEW_MS) throw new ToolError(`${name} is in the future (${ts}). Use the time the message or board record itself carries, not a time you expect it to happen. Nothing was written.`);
+  return ts;
 }
 
 // A repeated external id must be the same occurrence. fields are the ones that define it; what may differ is how it

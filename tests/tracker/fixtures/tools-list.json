@@ -891,7 +891,7 @@
   },
   {
     "name": "add_interview",
-    "description": "Record an interview, or update one. Omit starts_at for a booking link still to book; the same stage and link again, or interview_id, or the calendar event (source, source_account, source_id and occurred_at together) updates that interview instead of adding one. state: pending | scheduled | cancelled. An applied role moves to interviewing. Returns {interview_id, created, updated, stale, state}; stale means an older update was ignored.",
+    "description": "Record an interview, or update one. Omit starts_at for a booking link still to book; the same stage and link again, or interview_id, or the calendar event (source, source_account, source_id and occurred_at together) updates that interview instead of adding one. state: pending | scheduled | cancelled. A later message or source about a known interview passes interview_id and its own occurred_at, with no source group. An applied role moves to interviewing. Returns {interview_id, created, updated, stale, state}; stale means an update older than the newest dated one was ignored: do nothing.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -949,7 +949,7 @@
         },
         "occurred_at": {
           "type": "string",
-          "description": "When the event or message happened, ISO 8601 with an explicit offset. An older update than the one applied is ignored"
+          "description": "When the event or message happened, ISO 8601 with an explicit offset, not in the future. With source, source_account and source_id, or alone with interview_id for a later sighting of that interview (another message or source). An update older than the newest dated one applied returns stale and writes nothing"
         },
         "run_id": {
           "type": "integer",

@@ -174,6 +174,10 @@ test('the inbox skill keys every external record by an immutable identity and pa
   assert.match(s, /`occurred_at` is the real time/);
   assert.match(s, /`interview_id`/);
   assert.match(s, /`state: "cancelled"`/);
+  // A later sighting of a keyed interview is ordered by its own time, not by reading the oldest message first.
+  assert.match(s, /pass `interview_id`, the changed fields and that message's own `occurred_at`/);
+  assert.match(s, /`stale: true` result means a newer update is already applied: do nothing/);
+  assert.doesNotMatch(s, /oldest message first/);
 });
 
 test('the inbox skill treats results correctly: replays are no-ops and conflicts go to the user', () => {

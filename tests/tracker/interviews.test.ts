@@ -386,3 +386,96 @@ test('adopting a calendar key on a pending row is recorded in the history', (ctx
   assert.equal(JSON.parse(history[0]?.after_json ?? '{}').source_id, 'evt-7');
   assert.equal(snapshot(t, pending.interview_id).source_id, 'evt-7');
 });
+
+// A later sighting of a keyed interview from another message or source: its id and the message's own time, no key.
+function rescheduled(t: Tracker, roleId: number) {
+  const first = t.addInterview({ role_id: roleId, ...EVENT });
+  t.addInterview({ role_id: roleId, ...EVENT, starts_at: '2099-11-06T09:30:00+01:00', occurred_at: '2026-10-03T08:00:00Z' });
+  return first.interview_id;
+}
+
+test('an older mail about a keyed interview, sent by id with its own time, is stale and changes nothing', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const id = rescheduled(t, roleId);
+  const before = snapshot(t, id);
+  const changes = count(t, 'interview_changes');
+  const notesBefore = notes(t).length;
+  // Re-read in the overlap window: a cancellation mail from 2 Oct, before the 3 Oct reschedule.
+  const old = t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', state: 'cancelled', occurred_at: '2026-10-02T08:00:00Z' });
+  assert.deepEqual(old, { interview_id: id, created: false, updated: false, stale: true, state: 'scheduled' });
+  assert.deepEqual(snapshot(t, id), before);
+  assert.equal(before.last_occurred_at, '2026-10-03T08:00:00.000Z');
+  assert.equal(count(t, 'interview_changes'), changes);
+  assert.equal(notes(t).length, notesBefore);
+  assert.equal(t.openItems().upcoming_interviews.length, 1);
+});
+
+test('a newer mail sent by id with its own time applies, moves the order along and is dated by that time', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const id = rescheduled(t, roleId);
+  const run = t.startRun({ kind: 'sweep', capabilities: { connectors: {} } }).run_id;
+  const cancelled = t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', state: 'cancelled', occurred_at: '2026-10-04T08:00:00Z', run_id: run });
+  assert.deepEqual(cancelled, { interview_id: id, created: false, updated: true, stale: false, state: 'cancelled' });
+  const row = snapshot(t, id);
+  assert.equal(row.last_occurred_at, '2026-10-04T08:00:00.000Z');
+  assert.equal(row.source_id, 'evt-1', 'the row keeps the key it first got');
+  assert.equal(t.openItems().upcoming_interviews.length, 0);
+  const last = t.q<{ occurred_at: string; run_id: number | null }>('SELECT occurred_at, run_id FROM interview_changes ORDER BY id DESC LIMIT 1')[0];
+  assert.deepEqual({ ...last }, { occurred_at: '2026-10-04T08:00:00.000Z', run_id: run });
+  assert.deepEqual(notes(t).at(-1)?.ts, '2026-10-04T08:00:00.000Z');
+  // The calendar event, older than that mail, no longer wins.
+  assert.equal(t.addInterview({ role_id: roleId, ...EVENT, starts_at: '2099-11-08T09:30:00+01:00', state: 'scheduled', occurred_at: '2026-10-03T12:00:00Z' }).stale, true);
+});
+
+test('a mail at the time of the newest update must say the same thing', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const id = rescheduled(t, roleId);
+  const same = { role_id: roleId, interview_id: id, stage: 'Technical', starts_at: '2099-11-06T09:30:00+01:00', occurred_at: '2026-10-03T08:00:00Z' };
+  const changes = count(t, 'interview_changes');
+  assert.deepEqual(t.addInterview(same), { interview_id: id, created: false, updated: false, stale: false, state: 'scheduled' });
+  assert.throws(() => t.addInterview({ ...same, state: 'cancelled' }), /different state/);
+  assert.throws(() => t.addInterview({ ...same, starts_at: '2099-11-07T09:30:00+01:00' }), /different starts_at/);
+  assert.equal(count(t, 'interview_changes'), changes);
+  // After a local edit, the same mail is still a no-op: it is compared with the last external snapshot.
+  t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', people: 'Dana Ruiz' });
+  assert.equal(t.addInterview(same).updated, false);
+  assert.equal(snapshot(t, id).people, 'Dana Ruiz');
+});
+
+test('a plain local edit does not move the order, and the order is visible on interview rows', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const id = rescheduled(t, roleId);
+  assert.equal(t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', people: 'Dana Ruiz' }).updated, true);
+  assert.equal(snapshot(t, id).last_occurred_at, '2026-10-03T08:00:00.000Z');
+  assert.equal(t.roleDetail({ role_id: roleId }).interviews[0]?.last_occurred_at, '2026-10-03T08:00:00.000Z');
+  assert.equal(t.openItems().upcoming_interviews[0]?.last_occurred_at, '2026-10-03T08:00:00.000Z');
+  const pending = t.addInterview({ role_id: roleId, stage: 'Screen', link: BOOK });
+  assert.equal(snapshot(t, pending.interview_id).last_occurred_at, null, 'a row made by hand has no external order yet');
+  assert.equal(t.openItems().interviews_to_book[0]?.last_occurred_at, null);
+});
+
+test('a mail that predates a hand-made row still applies to it, and orders what follows', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const pending = t.addInterview({ role_id: roleId, stage: 'Screen', link: BOOK });
+  const confirm = { role_id: roleId, interview_id: pending.interview_id, stage: 'Screen', starts_at: '2099-11-02T10:00:00+01:00' };
+  assert.equal(t.addInterview({ ...confirm, occurred_at: '2026-10-02T08:00:00Z' }).updated, true);
+  assert.equal(snapshot(t, pending.interview_id).last_occurred_at, '2026-10-02T08:00:00.000Z');
+  assert.equal(t.addInterview({ ...confirm, state: 'cancelled', occurred_at: '2026-10-01T08:00:00Z' }).stale, true);
+  assert.equal(t.openItems().upcoming_interviews.length, 1);
+});
+
+test('an occurrence time alone needs an interview id, and a partial source group is refused', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const id = rescheduled(t, roleId);
+  assert.throws(() => t.addInterview({ role_id: roleId, stage: 'Technical', occurred_at: '2026-10-04T08:00:00Z' }), /occurred_at.*interview_id/);
+  assert.throws(() => t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', source: 'gmail', occurred_at: '2026-10-04T08:00:00Z' }), /come together/);
+  assert.throws(() => t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', occurred_at: '2026-10-04T08:00:00' }), /explicit offset/);
+  assert.throws(() => t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', occurred_at: '2999-01-01T00:00:00Z' }), /in the future/);
+  assert.equal(snapshot(t, id).last_occurred_at, '2026-10-03T08:00:00.000Z');
+});

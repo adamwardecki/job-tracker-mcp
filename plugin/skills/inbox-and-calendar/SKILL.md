@@ -39,7 +39,7 @@ Turn incoming mail into tracker events and, where a written answer is needed, a 
 - Why: only complete coverage may move the checkpoint, so a gap is searched again instead of being skipped for good.
 
 ### 3. Match and classify
-**Identity keys.** Every `record` and `add_interview` from outside carries `source`, `source_account`, `source_id` and `occurred_at` together, or none of them.
+**Identity keys.** Every `record` and `add_interview` from outside carries `source`, `source_account`, `source_id` and `occurred_at` together, or none of them. The one exception is a later sighting of an interview you already have the `interview_id` of: that passes `occurred_at` alone (see Which key an interview gets).
 - `occurred_at` is the real time of the message, application or event (ISO with offset), not now.
 - Gmail: `source: "gmail"`, `source_account` = the mailbox, `source_id` = the immutable message ID of the message that says it (not the thread ID).
 - Board application: the board's application ID plus the original application date.
@@ -50,7 +50,7 @@ Turn incoming mail into tracker events and, where a written answer is needed, a 
 - Look the round up first (`open_items` `interviews_to_book` and `upcoming_interviews`, or `get_role`) and pass its `interview_id` on every call about it. Without the id, a replayed booking-link mail adds a second pending row.
 - A booking-link mail creates the pending row with no key (omit all four). Why: a keyed pending row cannot be updated by the confirmation, which is a different message.
 - The first confirmation ties the key once, with `interview_id`: the calendar event's key when you can see the event (it stays the same across reschedules), otherwise the Gmail message ID of the invite.
-- A later sighting of an already keyed row from another message or source: pass `interview_id` and the changed fields without the key group, oldest message first. If the row already shows that time or state, call nothing. A refusal saying the interview "keeps the occurrence it came from" means you passed another source's key: drop it.
+- A later sighting of an already keyed row from another message or source: pass `interview_id`, the changed fields and that message's own `occurred_at`, without `source`, `source_account` and `source_id` (the source group is never sent partly). The server compares `occurred_at` with the newest dated update on the row (`last_occurred_at` in `get_role` and `open_items`), so messages may be read in any order. A `stale: true` result means a newer update is already applied: do nothing. If the row already shows that time or state, call nothing. Why: without the time, an older mail re-read in the 48-hour overlap would revert a reschedule or cancel a rebooked interview. A refusal saying the interview "keeps the occurrence it came from" means you passed another source's key: drop it.
 
 **Matching.** For each thread: `get_thread` (full messages), then match it to a company with `find_company` (sender domain and name, plus the posting `url` when the mail links one: `exact_role_ids` then names the role).
 - Several roles at the company and no URL: pick the one the mail names by title and req, and `get_role` to confirm before recording on it.
