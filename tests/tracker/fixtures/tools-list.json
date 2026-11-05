@@ -965,7 +965,7 @@
   },
   {
     "name": "render_report",
-    "description": "Markdown daily report. With run_id it covers that run; otherwise the local day. Lead with the outcome via headline. Only read-back drafts and confirmed submissions are claimed.",
+    "description": "Markdown daily report. With run_id it covers that run; otherwise the local day. Lead with the outcome via headline. Only read-back drafts and confirmed submissions are claimed. Also returns queue_activity {new_or_changed, waiting, stale_waiting}: queued role ids whose ask changed in the scope, and the unchanged rest.",
     "inputSchema": {
       "type": "object",
       "properties": {

@@ -68,17 +68,46 @@ closed (from queued | applied | interviewing | offer), with outcome: rejected | 
 | `list_artifacts` | `run_id?`, `date?`, `role_id?`, `kind?` | Artifacts with lint results and read-back state (the auditor uses this). |
 | `verify_artifact` | `artifact_id`, `readback` (the text returned by `get_draft`/`list_drafts`) | Marks verified. The tracker checks the draft id is in the read-back; a hook checks a real `get_draft`/`list_drafts` result in the session contains it. |
 | `lint_prose` | `text`, `max_words?` | `{ok, issues:[{kind, match, hint}]}`: em/en dashes, "not X but Y", fake-candid openers, volunteered gaps, word count. |
-| `open_items` | `stale_after_days?` (14) | Fresh queue, stale queue, questions on non-queued roles, unverified drafts, interviews to book, upcoming interviews |
+| `open_items` | `stale_after_days?` (14) | Fresh queue, stale queue (each entry also carries `question` and `blocked_by`), questions on non-queued roles, unverified drafts, interviews to book, upcoming interviews |
 | `add_rule` / `list_rules` / `deactivate_rule` | `text`, `reason`, `example?`, `types?` / `types?`, `limit?`, `cursor?`, `include_inactive?` / `id` | Rules with provenance. `add_rule` returns `{rule_id}`; `types` is one or more of the rule types below, and omitted or `null` means `global`. **`list_rules` is paginated: a call with no arguments returns at most 10 rules plus a `next_cursor`, and callers must follow it until it is `null` (see [Listing rules](#listing-rules)).** It returns `{rules, next_cursor, total, rules_revision}`; each rule has its stored fields plus `types`; a rule too large to list is a short `{id, types, requires_detail: true}` entry (see [Oversized rules](#oversized-rules)). Rules from before types existed are `global`. `deactivate_rule` returns `{deactivated: id}`. Repeating it on an already inactive rule is a no-op and leaves `rules_revision` alone. |
 | `get_rule` | `id`, `cursor?`, `limit?` (1 to 4000, default 4000) | `{id, chunk, next_cursor, rules_revision}`. One piece of the JSON text of the whole rule; only for a `requires_detail` entry (see [Oversized rules](#oversized-rules)). Works on inactive rules. |
 | `set_rule_types` | `id`, `types` (non-empty) | `{rule_id, types, rules_revision}`. Replaces the rule's classification and nothing else: text, reason, example, author and date stay. Duplicates collapse; an empty list, a non-string or an unknown type is an error and writes nothing. |
 | `source_health` / `set_source_status` | — / `name`, `status` (`ok`\|`degraded`\|`failed`\|`disabled`), `found?`, `applied?`, `error?`, `source_account?`, `checked_through?`, `coverage?` (`complete`\|`partial`\|`unavailable`) | Per-source health; N consecutive failures flips to `degraded`. `source_health` returns `{sources, checkpoints}`; each checkpoint is `{source, source_account, checked_through, last_coverage, last_attempt_at}` for one source account (the source name is trimmed and lowercased, so `Gmail` and `gmail` are one). `coverage` needs `source_account`; `complete` also needs `status` `ok` and `checked_through` (ISO 8601 with an explicit offset, stored as UTC, not more than a day ahead). Only `complete` moves `checked_through`, and only forward; `partial` and `unavailable` record `last_coverage` and `last_attempt_at` and keep the last successful cutoff, which is `null` until the account's first complete scan. `checked_through` is the actual endpoint of what was read: the 48-hour overlap belongs to the caller's next search window. `sources.last_run` still moves on every report, failures included. With `coverage` the result adds `checkpoint`; calls without these fields behave as before. |
 | `add_interview` | `role_id`, `stage`, `starts_at?` (ISO with offset, or a wall time read in `tz`), `tz?` (IANA), `people?`, `link?`, `booked_by?`, `notes?`, `interview_id?`, `state?` (`pending`\|`scheduled`\|`cancelled`), `source?`, `source_account?`, `source_id?`, `occurred_at?`, `run_id?` | Records an interview or updates one. Returns `{interview_id, created, updated, stale, state}`; an identical retry sets all three booleans false and an ignored older update sets only `stale`. See [Interviews](#interviews). |
-| `render_report` | `date` (YYYY-MM-DD, local day), `run_id?` (preferred: that run only), `headline?` | Markdown daily report (spec §9). Only verified drafts and confirmed submissions are claimed. Missing capabilities and what was queued because of them are listed. Interview times are shown in local time. |
+| `render_report` | `date` (YYYY-MM-DD, local day), `run_id?` (preferred: that run only), `headline?` | `{date, markdown, audit_ok, queue_activity}`. Markdown daily report (spec §9). Only verified drafts and confirmed submissions are claimed. Missing capabilities and what was queued because of them are listed. Interview times are shown in local time. See [Report sections](#report-sections). |
 | `audit` | `run_id?` or `date?` (one is required) | Post-run rule check: excluded industries touched, drops without evidence, applied without confirmation, prose lint failures in artifacts, unverified drafts. `{ok, failures[]}` |
 | `pipeline_summary` | `stale_after_days?` (14) | Counts by status, live processes (interviewing, offer), awaiting reply, rejections, fresh and stale queue |
 | `open_board` | `open?` (bool, default false: also open the default browser) | `{reused, opened, url?}`. With `open: true` and the browser opened, no `url`: the token stays out of the model's context. Otherwise `url`, and the text result is `Board: <url>`. Starts the local board for this database, or reuses the running one. See [Board](#board). |
 | `import_legacy` | `applied_log?` (markdown), `preferences?` (markdown), `queue?` (`[{filename, content}]`), `documents?` (`{profile, stories, reusable-answers}`), `path?` (local only: a `pipeline/` folder) | Import counts and unparsed rows. If a queue note's URL matches two roles that are not linked, the import stops with an error naming them and writes nothing. Check them with `get_role`, link them with `link_duplicate_role` if they are one posting, then import again. |
+
+## Report sections
+
+`render_report` separates what changed in its scope (the run with `run_id`, else the local day) from the queue that did not.
+Under **Needs you**:
+
+1. **New or changed today**, in detail: queued roles whose action changed in the scope. A role's action is
+   `(queued, question, blocked_by)`. Its events, across a linked group and in time order, are compared one to the
+   next, including the last event before the scope: the action changed at an event if the role was not queued before
+   it (it entered the queue, again or for the first time) or its `question` or `blocked_by` differs. Repeating the
+   same queued event, refreshing the score or URL, and notes do not count, and a cleared question does. The change
+   event must lie in the scope. A role that left the queue is not listed.
+2. **Other open actions**, whatever their age: questions on roles outside the queue, drafts not read back, bookings
+   still to confirm, and audit failures.
+3. **Still waiting (N)**: the queued roles with no change in the scope, stale ones included. The text gives the
+   count of those untouched for 14+ days, names each of them, and points to `/job-tracker:board` and
+   `/job-tracker:status`. It does not say they were researched or decided today.
+
+`queue_activity` is `{new_or_changed, waiting, stale_waiting}`, canonical role ids. Fresh roles come in `open_items`
+queue order, then the stale ones. `waiting` includes `stale_waiting`; each role is in exactly one of `new_or_changed`
+and `waiting`. The metrics table keeps the current queue total ("Queued for you", stale included) apart from the
+number new or changed.
+
+**Applications and bookings found elsewhere.** An `applied` event with a `source` (a mailbox or board) is listed under
+**Applied** as `Recorded from <source>, applied <date>`, with the date it happened, and is not counted in
+"Applications submitted". It is found by when it was received (`received_at`, or the `run_id`), not by when it
+happened. Replaying it in a later run adds no event, so it is not announced again. An `interview_changed` note is
+listed under **Interviews** as "Booking change" in the scope that received it, whenever the booking itself changed.
+Rendering a report writes nothing.
 
 ## Rule types
 

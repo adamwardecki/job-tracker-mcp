@@ -234,7 +234,7 @@ test('AC2: report names missing capabilities and what was queued because of them
   const { markdown } = renderReport(t, { date: today(), run_id, headline: 'One strong find queued; no browser this run.' });
   assert.match(markdown, /Missing this run: browser, local folder, LinkedIn/);
   assert.match(markdown, /Queued because of it: Acme \(role 1\)/);
-  assert.match(markdown, /## Needs you\n\n1\. \*\*Acme\*\*, Eng \(role 1\): Apply in a browser session\? To apply: `\/job-tracker:apply 1`/);
+  assert.match(markdown, /## Needs you\n\n### New or changed today\n\n1\. \*\*Acme\*\*, Eng \(role 1\): Apply in a browser session\? To apply: `\/job-tracker:apply 1`/);
   assert.match(markdown, /Emails or messages sent \| 0/);
 });
 

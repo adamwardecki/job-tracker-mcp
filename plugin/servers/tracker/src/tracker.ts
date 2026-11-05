@@ -1326,7 +1326,8 @@ export class Tracker {
       FROM roles r JOIN companies c ON c.id = r.company_id WHERE r.status = 'queued' AND ${isCard('r.id')} ORDER BY r.score DESC NULLS LAST, r.updated_at`);
     // A queued role with no events has last_event NULL, which compared false both ways; keep that.
     const queue = all.filter((r) => r.last_event != null && r.last_event >= cutoff);
-    const stale_queue = all.filter((r) => r.last_event != null && r.last_event < cutoff).map(({ id, company, title, last_event }) => ({ id, company, title, last_event }));
+    // question and blocked_by stay on a stale entry: a report for an earlier day can find one changed.
+    const stale_queue = all.filter((r) => r.last_event != null && r.last_event < cutoff).map(({ id, company, title, last_event, question, blocked_by }) => ({ id, company, title, last_event, question, blocked_by }));
     const drafts = this.q<{ id: number; role_id: number | null; draft_id: string | null; created_at: string; company: string | null }>(`SELECT a.id, a.role_id, a.path_or_ref AS draft_id, a.created_at, c.name AS company FROM artifacts a
       LEFT JOIN roles r ON r.id = ${canonicalOf('a.role_id')} LEFT JOIN companies c ON c.id = r.company_id WHERE a.kind = 'gmail_draft' AND a.verified_at IS NULL`);
     const to_book = this.q<Booking>(`SELECT i.*, c.name AS company, r.title FROM interviews i JOIN roles r ON r.id = ${canonicalOf('i.role_id')} JOIN companies c ON c.id = r.company_id WHERE i.state = 'pending' AND r.status NOT IN ('closed', 'dropped')`);

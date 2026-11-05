@@ -5,7 +5,7 @@ import type { SQLInputValue } from 'node:sqlite';
 import type { CapabilitiesConfig } from './config.ts';
 import type { ArtifactRow, EventRow, SourceRow } from './db.ts';
 import { lintProse } from './lint.ts';
-import { formatLocal, isValidTimeZone } from './time.ts';
+import { formatLocal, isValidTimeZone, localDate } from './time.ts';
 import type { ArgsFor } from './tools.ts';
 import type { Scope, Tracker } from './tracker.ts';
 import { canonicalOf, LIVE } from './tracker.ts';
@@ -22,8 +22,18 @@ export interface AuditFailure {
   detail: string;
 }
 
+// The events a scope covers, by when they happened (ts). Events from outside that were found during the scope but
+// happened earlier are found by when they were received instead: see receivedIn.
 function eventsIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLInputValue[]): ScopedEvent[] {
-  const [cond, p] = scope.rows('e', 'ts');
+  return eventsAt(t, scope, 'ts', where, ...params);
+}
+
+function receivedIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLInputValue[]): ScopedEvent[] {
+  return eventsAt(t, scope, 'received_at', where, ...params);
+}
+
+function eventsAt(t: Tracker, scope: Scope, col: 'ts' | 'received_at', where: string, ...params: SQLInputValue[]): ScopedEvent[] {
+  const [cond, p] = scope.rows('e', col);
   return t.q<ScopedEvent>(
     `SELECT e.*, r.id AS card_id, r.title, r.url, r.industry, r.company_id, c.name AS company FROM events e JOIN roles r ON r.id = ${canonicalOf('e.role_id')} JOIN companies c ON c.id = r.company_id
      WHERE ${cond} AND ${where} ORDER BY e.ts, e.id`,
@@ -40,12 +50,64 @@ function artifactsIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLIn
   );
 }
 
+// Canonical role ids of the queued roles, in open_items order (fresh ones, then the 14+ day ones). new_or_changed:
+// the action (queued, question, blocked_by) changed in the report's scope. waiting: everything else, stale included.
+// stale_waiting: the part of waiting with no activity for 14+ days.
+export interface QueueActivity {
+  new_or_changed: number[];
+  waiting: number[];
+  stale_waiting: number[];
+}
+
+// A queued role asks one thing of the user, which is (queued, question, blocked_by). Its events, in the order of
+// their times across the whole group, are replayed from the first: the action changed at an event if the role was not
+// queued before it or the question or blocker differs from the previous queued event. Events before the scope only
+// set what "previous" is; scores, URLs and notes are not part of the action. Another status takes the role out of the
+// queue, so a later queued event is a new entry.
+function changedInScope(t: Tracker, scope: Scope, cardIds: number[]): Set<number> {
+  if (!cardIds.length) return new Set();
+  const [cond, p] = scope.rows('e', 'ts');
+  const rows = t.q<Pick<EventRow, 'id' | 'ts' | 'status' | 'question' | 'blocked_by'> & { card_id: number; in_scope: number }>(
+    `SELECT e.id, e.ts, e.status, e.question, e.blocked_by, ${canonicalOf('e.role_id')} AS card_id, CASE WHEN ${cond} THEN 1 ELSE 0 END AS in_scope FROM events e
+     WHERE e.status IS NOT NULL AND ${canonicalOf('e.role_id')} IN (${cardIds.map(() => '?').join(', ')})`,
+    ...p, ...cardIds,
+  );
+  // In JS because ts text is not one format ('…:00Z' from older releases, '…:00.000Z' from now).
+  const when = (iso: string) => (Number.isNaN(Date.parse(iso)) ? Number.NEGATIVE_INFINITY : Date.parse(iso));
+  rows.sort((a, b) => when(a.ts) - when(b.ts) || a.id - b.id);
+  const previous = new Map<number, string | null>();
+  const changed = new Set<number>();
+  for (const e of rows) {
+    if (e.status !== 'queued') {
+      previous.set(e.card_id, null);
+      continue;
+    }
+    const fingerprint = JSON.stringify([e.question, e.blocked_by]);
+    if (e.in_scope && previous.get(e.card_id) !== fingerprint) changed.add(e.card_id);
+    previous.set(e.card_id, fingerprint);
+  }
+  return changed;
+}
+
+export function queueActivity(t: Tracker, scope: Scope): QueueActivity {
+  const { queue, stale_queue } = t.openItems();
+  const ids = [...queue, ...stale_queue].map((r) => r.id);
+  const changed = changedInScope(t, scope, ids);
+  const stale = new Set(stale_queue.map((r) => r.id));
+  const waiting = ids.filter((id) => !changed.has(id));
+  return { new_or_changed: ids.filter((id) => changed.has(id)), waiting, stale_waiting: waiting.filter((id) => stale.has(id)) };
+}
+
+// The local day of a stored time; text that is not a time (legacy free text) is shown as written.
+const localDay = (iso: string | null, tz: string) => (iso == null || Number.isNaN(Date.parse(iso)) ? String(iso) : localDate(Date.parse(iso), tz));
+
 const CAPABILITY_LABELS: Readonly<Record<string, string>> = { browser: 'browser', local_folder: 'local folder', gmail: 'Gmail', calendar: 'Calendar', linkedin: 'LinkedIn' };
 
 export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'render_report'>) {
   const scope = t.scope({ date, run_id });
   const caps = parseJson<CapabilitiesConfig | null>(scope.run?.capabilities, null);
   const items = t.openItems();
+  const activity = queueActivity(t, scope);
   const tz = t.timezone();
   const audit = runAudit(t, { date, run_id });
   const out = [`# Daily report · ${date}`, ''];
@@ -55,6 +117,11 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
   const applied = eventsIn(t, scope, "e.status = 'applied' AND e.actor = 'pipeline' AND e.source IS NULL");
   // Only the board can record applied without confirmation text. Listing these lets the user spot one they didn't make.
   const selfReported = eventsIn(t, scope, "e.status = 'applied' AND e.actor = 'user' AND (e.evidence IS NULL OR trim(e.evidence) = '')");
+  // An application found in a mailbox or on a board: dated by when it happened, reported in the scope that received it.
+  // Replaying it in a later run adds no event, so it is not announced again.
+  const recorded = receivedIn(t, scope, "e.status = 'applied' AND e.source IS NOT NULL");
+  // A calendar or mail change to a booking is news when it arrives, whenever the meeting itself was changed.
+  const bookingChanges = receivedIn(t, scope, "e.category = 'interview_changed'");
   const replies = eventsIn(t, scope, "e.actor = 'employer'");
   const dropped = eventsIn(t, scope, "e.status = 'dropped' AND e.actor != 'import'");
   const assessed = new Set(eventsIn(t, scope, "e.status IN ('verified', 'scored', 'dropped') AND e.actor != 'import'").map((e) => e.card_id)).size;
@@ -72,21 +139,36 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
   }
   const blockedQueue = items.queue.filter((q) => q.blocked_by === 'browser' || q.blocked_by === 'login');
 
-  // 1. Needs you
-  const needs: string[] = [];
-  for (const q of items.queue) {
+  // 1. Needs you: what changed in this scope in detail, then the other open actions whatever their age, then the
+  // unchanged queue. An old queue decision is never "new"; it is waiting.
+  const queueAction = (q: { id: number; company: string; title: string; question: string | null; blocked_by: string | null }) => {
     const why = q.question || (q.blocked_by === 'browser' ? 'Needs a browser session to apply.' : 'Apply or drop?');
-    needs.push(`**${q.company}**, ${q.title} (role ${q.id}): ${why} To apply: \`/job-tracker:apply ${q.id}\``);
+    return `**${q.company}**, ${q.title} (role ${q.id}): ${why} To apply: \`/job-tracker:apply ${q.id}\``;
+  };
+  const queued = new Map([...items.queue, ...items.stale_queue].map((q) => [q.id, q]));
+  const changedNow = activity.new_or_changed.flatMap((id) => queued.get(id) ?? []);
+  const others: string[] = [];
+  for (const q of items.questions) others.push(`**${q.company}**, ${q.title} (role ${q.id}, ${q.status}): ${q.question}`);
+  for (const d of items.unverified_drafts) others.push(`Draft ${d.draft_id}${d.company ? ` (${d.company})` : ''} was not confirmed by read-back. Check Gmail drafts.`);
+  for (const i of items.interviews_to_book) others.push(`Book **${i.company}** ${i.stage}${i.link ? `: ${i.link}` : ''}`);
+  for (const f of audit.failures) others.push(`Audit: ${f.detail}`);
+  const numbered = (lines: string[]) => lines.map((n, i) => `${i + 1}. ${n}`);
+  if (changedNow.length || others.length || activity.waiting.length) {
+    out.push('## Needs you', '');
+    if (changedNow.length) out.push('### New or changed today', '', ...numbered(changedNow.map(queueAction)), '');
+    if (others.length) out.push('### Other open actions', '', ...numbered(others), '');
+    if (activity.waiting.length) {
+      const staleIds = new Set(activity.stale_waiting);
+      const staleWaiting = items.stale_queue.filter((q) => staleIds.has(q.id));
+      out.push(`### Still waiting (${activity.waiting.length})`, '');
+      out.push(`${activity.waiting.length} queued role(s) have had no change to what they ask of you in this report (${staleWaiting.length} untouched for 14+ days). They were not researched or decided today. The board (\`/job-tracker:board\`) or \`/job-tracker:status\` lists them.`);
+      for (const q of staleWaiting) out.push(`- 14+ days: **${q.company}**, ${q.title} (role ${q.id}, last activity ${localDay(q.last_event, tz)}). Apply or drop it.`);
+      out.push('');
+    }
   }
-  for (const q of items.questions) needs.push(`**${q.company}**, ${q.title} (role ${q.id}, ${q.status}): ${q.question}`);
-  for (const d of items.unverified_drafts) needs.push(`Draft ${d.draft_id}${d.company ? ` (${d.company})` : ''} was not confirmed by read-back. Check Gmail drafts.`);
-  for (const i of items.interviews_to_book) needs.push(`Book **${i.company}** ${i.stage}${i.link ? `: ${i.link}` : ''}`);
-  for (const f of audit.failures) needs.push(`Audit: ${f.detail}`);
-  if (items.stale_queue.length) needs.push(`${items.stale_queue.length} queued role(s) untouched for 14+ days. Run /job-tracker:status to apply or drop them.`);
-  if (needs.length) out.push('## Needs you', '', ...needs.map((n, i) => `${i + 1}. ${n}`), '');
 
   // 2. Interviews
-  if (items.upcoming_interviews.length || items.interviews_to_book.length) {
+  if (items.upcoming_interviews.length || items.interviews_to_book.length || bookingChanges.length) {
     out.push('## Interviews', '');
     for (const i of items.upcoming_interviews) {
       const zone = isValidTimeZone(i.tz) ? i.tz : tz;
@@ -94,14 +176,17 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
       out.push(`- ${i.starts_at ? formatLocal(i.starts_at, zone) : 'TBD'} (${zone}): **${i.company}**, ${i.stage}${i.people ? ` with ${i.people}` : ''}`);
     }
     for (const i of items.interviews_to_book) out.push(`- To book: **${i.company}**, ${i.stage}${i.link ? ` (${i.link})` : ''}`);
+    for (const e of bookingChanges) out.push(`- Booking change: **${e.company}**, ${e.title}: ${e.reason}`);
     out.push('');
   }
 
-  // 3. Applied today (only with captured confirmation), then what the user marked applied on the board
-  if (applied.length || selfReported.length) {
+  // 3. Applied today (only with captured confirmation), then what the user marked applied on the board, then what was
+  // found elsewhere (not a submission by the plugin)
+  if (applied.length || selfReported.length || recorded.length) {
     out.push('## Applied', '');
     for (const e of applied) out.push(`- **${e.company}**, ${e.title}. Confirmation: "${String(e.evidence).replace(/\s+/g, ' ').slice(0, 140)}"`);
     for (const e of selfReported) out.push(`- **${e.company}**, ${e.title}. Marked applied by you on the board, without confirmation text.`);
+    for (const e of recorded) out.push(`- **${e.company}**, ${e.title}. Recorded from ${e.source}, applied ${localDay(e.ts, tz)}: "${String(e.evidence ?? '').replace(/\s+/g, ' ').slice(0, 140)}"`);
     out.push('');
   }
 
@@ -149,12 +234,14 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
 
   out.push('| | |', '|---|---|');
   out.push(`| Applications submitted | ${applied.length} |`);
-  out.push(`| Queued for you | ${items.queue.length} |`);
+  out.push(`| Queued for you | ${activity.new_or_changed.length + activity.waiting.length} |`);
+  out.push(`| New or changed today | ${activity.new_or_changed.length} |`);
+  out.push(`| Applications recorded from mail or boards | ${recorded.length} |`);
   out.push(`| Roles assessed today | ${assessed} |`);
   out.push(`| Drafts created (read back) | ${drafts.length} (${verifiedDrafts.length}) |`);
   out.push(`| Emails or messages sent | 0 (sending is blocked) |`);
   out.push(`| Audit | ${audit.ok ? 'pass' : `${audit.failures.length} failure(s)`} |`);
-  return { date, markdown: out.join('\n'), audit_ok: audit.ok };
+  return { date, markdown: out.join('\n'), audit_ok: audit.ok, queue_activity: activity };
 }
 
 export function runAudit(t: Tracker, { date, run_id }: ArgsFor<'audit'>) {
