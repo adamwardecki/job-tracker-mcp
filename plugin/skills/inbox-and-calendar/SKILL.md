@@ -26,36 +26,59 @@ Turn incoming mail into tracker events and, where a written answer is needed, a 
 `get_profile` (accounts, writing), `open_items`, `pipeline_summary`. Rules: load `inbox`, plus `writing` when you will draft a reply (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). Call `source_health` and keep `checkpoints` for step 2.
 
 ### 2. Gather mail
-**Window and coverage** (the one place these mechanics live; sweep, auditor and the board readers point here). For each source account you scan (the recruiter mailbox, LinkedIn, each calendar, each enabled board):
-- Search from that account's `checked_through` in `source_health.checkpoints` minus 48 hours, to now. Why: a mail that landed during the last scan, or a late booking, is picked up on the next one. No checkpoint: the last 30 days. A historical backfill needs an explicit date range from the user; never say you searched everything.
-- Follow every connector page (`next_page_token` or equivalent) to the end before calling the scan complete. Page two failing means the scan is `partial`.
-- Afterwards call `set_source_status` with `name` (`gmail`, `linkedin`, `calendar`, or the board's ID), `source_account`, `coverage` and, for `complete`, `status: "ok"` and `checked_through` = the actual end of the window you searched. A real error (page 2 failed, a connector call was denied, a board errored) is `partial` (some pages read) or `unavailable` (nothing read) with `status: "failed"` and the verbatim `error`: never `complete`, no `checked_through`. A connected source skipped by design (no browser reachable, connector not available this run) is `unavailable` with `status: "degraded"`, which does not count as a failure (Capability-aware in `source-roles`), and is reported, not omitted. Why: only complete coverage may move the checkpoint, so a gap is searched again instead of being skipped for good.
-- A calendar's `checked_through` is the end of the step 2 search window (now), not the end of the 14-day lookahead of step 6. Why: the server refuses a `checked_through` more than a day ahead, and events after now were not read as history.
-
-- Gmail `search_threads` over that window, in the recruiter inbox. Useful terms: ATS sender domains (ashbyhq.com, greenhouse.io, lever.co, workable, teamtailor, personio), "application", "interview", "unfortunately", "next steps", "schedule", plus the domains of companies with live processes.
+- Gmail `search_threads` over the window below, in the recruiter inbox. Useful terms: ATS sender domains (ashbyhq.com, greenhouse.io, lever.co, workable, teamtailor, personio), "application", "interview", "unfortunately", "next steps", "schedule", plus the domains of companies with live processes.
 - Third-party tools: auto-apply recap emails, broker intro emails. Take board URLs from these emails rather than guessing.
 - LinkedIn connector (if present): read the inbox list, then open each job-related conversation in full (`get_conversation`). A jobs-search failure is not a logout if the inbox works.
 
-### 3. Match and classify
-**Identity keys.** Every `record` and `add_interview` from outside carries `source`, `source_account`, `source_id` and `occurred_at` together, with `occurred_at` the real time of the message, application or event (ISO with offset), not now. Gmail: `source: "gmail"`, `source_account` = the mailbox, `source_id` = the immutable message ID of the message that says it (not the thread ID). Board application: the board's application ID plus the original application date. Calendar event: account + calendar + event ID, with the occurrence for a recurring event. If the identity or the date is unknown, `record` a note with the evidence instead and say what is uncertain; never invent metadata.
+**Window and coverage.** This is the one place these mechanics live; the sweep, the auditor, the calendar step and the board readers point here. Apply it to every source account you scan (the recruiter mailbox, LinkedIn, each calendar, each enabled board).
+- **Window.** From that account's `checked_through` in `source_health.checkpoints` minus 48 hours, to now. No checkpoint: the last 30 days. A historical backfill needs an explicit date range from the user; never say you searched everything. Why: a mail that landed during the last scan, or a late booking, is picked up on the next one.
+- **Pages.** Follow every connector page (`next_page_token` or equivalent) to the end before calling the scan complete. Page two failing makes the scan `partial`.
+- **Report each scan** with `set_source_status`: `name` (`gmail`, `linkedin`, `calendar`, or the board's ID), `source_account`, `coverage`, and for `complete` also `status: "ok"` and `checked_through` = the actual end of the window you searched.
+- **A real error** (page two failed, a connector call was denied, a board errored): `partial` (some pages read) or `unavailable` (nothing read), with `status: "failed"` and the verbatim `error`. Never `complete`, no `checked_through`.
+- **Skipped by design** (no browser reachable, connector not available this run): `unavailable` with `status: "degraded"`, which does not count as a failure (Capability-aware in `source-roles`). Report it; never omit a connected source.
+- Why: only complete coverage may move the checkpoint, so a gap is searched again instead of being skipped for good.
 
-For each thread: `get_thread` (full messages), then match it to a company with `find_company` (sender domain and name, plus the posting `url` when the mail links one: `exact_role_ids` then names the role). Several roles at the company and no URL: pick the one the mail names by title and req, and `get_role` to confirm before recording on it. No role in the tracker but clearly about one: `upsert_role` with `source: "inbound"` and the posting `url` when the mail has one; if it returns `possible_role_ids`, check them as in Identity in `source-roles` and record the outcome on the role that is this posting. Match at role level even when another role at the company is live, and a `find_company` verdict of `skip` for a tracked posting does not stop you recording external evidence on that existing role. Why: a URL-less upsert always creates a new role, so an outcome recorded on it would miss the role that holds the application.
+### 3. Match and classify
+**Identity keys.** Every `record` and `add_interview` from outside carries `source`, `source_account`, `source_id` and `occurred_at` together, or none of them.
+- `occurred_at` is the real time of the message, application or event (ISO with offset), not now.
+- Gmail: `source: "gmail"`, `source_account` = the mailbox, `source_id` = the immutable message ID of the message that says it (not the thread ID).
+- Board application: the board's application ID plus the original application date.
+- Calendar event: account + calendar + event ID, with the occurrence for a recurring event.
+- Identity or date unknown: `record` a note with the evidence and say what is uncertain; never invent metadata.
+
+**Which key an interview gets.** The server updates the row it resolves by `interview_id`, then by key, then by a unique pending stage+link match. A row keeps the first key it gets, and a call carrying a different key for it is refused.
+- Look the round up first (`open_items` `interviews_to_book` and `upcoming_interviews`, or `get_role`) and pass its `interview_id` on every call about it. Without the id, a replayed booking-link mail adds a second pending row.
+- A booking-link mail creates the pending row with no key (omit all four). Why: a keyed pending row cannot be updated by the confirmation, which is a different message.
+- The first confirmation ties the key once, with `interview_id`: the calendar event's key when you can see the event (it stays the same across reschedules), otherwise the Gmail message ID of the invite.
+- A later sighting of an already keyed row from another message or source: pass `interview_id` and the changed fields without the key group, oldest message first. If the row already shows that time or state, call nothing. A refusal saying the interview "keeps the occurrence it came from" means you passed another source's key: drop it.
+
+**Matching.** For each thread: `get_thread` (full messages), then match it to a company with `find_company` (sender domain and name, plus the posting `url` when the mail links one: `exact_role_ids` then names the role).
+- Several roles at the company and no URL: pick the one the mail names by title and req, and `get_role` to confirm before recording on it.
+- Match at role level even when another role at the company is live. A `find_company` verdict of `skip` for a tracked posting does not stop you recording external evidence on that existing role.
+- No role in the tracker but clearly about one: `upsert_role` with `source: "inbound"` and the posting `url` when the mail has one. If it returns `possible_role_ids`, check them as in Identity in `source-roles` and record the outcome on the role that is this posting. Why: a URL-less upsert always creates a new role, so an outcome recorded on it would miss the role that holds the application.
 
 Classify into one of:
 
 | Class | Tells | Action |
 |---|---|---|
 | **Rejection** | "unfortunately", "not moving forward", "position filled" | `record` with `status: "closed"`, `outcome: "rejected"` (or `role_closed` if filled/cancelled), `actor: "employer"`, `evidence` = feedback verbatim, or the key sentence if no feedback |
-| **Booking link** | `you.ashbyhq.com/meeting/...`, Calendly, SavvyCal, Google appointment pages, "book a time", "select a time through the link", "direct booking link" | **No draft.** `add_interview` with `stage`, `people`, `link`, the message's key and `occurred_at`, and **no** `starts_at` (that marks it "to book"; the role moves to interviewing only when the status machine allows it). Before reporting it as to book, check the full threads and calendars for a confirmed time. List free windows for the report. |
-| **Invite** | Calendar invite or a confirmed time | `add_interview` with `starts_at`, `tz`, `stage`, `people`, `link`, `booked_by`, the key and `occurred_at`. It updates the pending row for that round: never add a second row for it, and pass `interview_id` when you know the booking. Check it appears on the invite calendar. |
-| **Cancellation** | "cancelled", "need to rebook", a deleted invite | `add_interview` with `state: "cancelled"`, the booking's `interview_id` or key, and `occurred_at`. It leaves the to-book list; a new time later is a new update, not a new round. |
+| **Booking link** | `you.ashbyhq.com/meeting/...`, Calendly, SavvyCal, Google appointment pages, "book a time", "select a time through the link", "direct booking link" | **No draft.** `add_interview` with `stage`, `people`, `link` and **no** `starts_at` and no key (that marks it "to book"; the role moves to interviewing only when the status machine allows it). Hold the "to book" claim until step 6 has checked the calendars and the full threads for a confirmed time. |
+| **Invite** | Calendar invite or a confirmed time | `add_interview` with `starts_at`, `tz`, `stage`, `people`, `link`, `booked_by`, `interview_id` when the round has a row, and the key per Which key an interview gets. Never add a second row for a round. Check it appears on the invite calendar. |
+| **Cancellation** | "cancelled", "need to rebook", a deleted invite | `add_interview` with `state: "cancelled"` and the round's `interview_id` (key per Which key an interview gets). It leaves the to-book list; a new time later is a new update, not a new round. |
 | **Reply needing an answer** | A question in prose, request for CV, availability asked in prose with no link, terms | Reply draft (step 4) |
 | **Acknowledgement** | "we received your application" | If the tracker does not show the role as applied (the user applied themselves, or a tool did), `record` `status: "applied"`, `actor: "user"`, evidence = the acknowledgement text, `occurred_at` = when it arrived. Otherwise `record` a note, `actor: "employer"`. This records the external application as it happened, never a new submission. |
 | **Holding note** | "still reviewing", "we'll be in touch" | `record` note, `actor: "employer"` |
 | **Intro or direct conversation** | Broker intro in progress, a founder or hiring manager writing directly | Mark the company no-cold-apply (step 5) and `record` a note |
 | **Not job-related** | Other projects, newsletters, social digests | Ignore |
 
-**Results of `record` and `add_interview`.** `duplicate: true` (or all of `created`, `updated`, `stale` false) is a replay: a no-op, say nothing new. `stale: true` means a newer update is already stored: leave it. `status_applied: false` with a `conflict` (for example an acknowledgement for a role still in found, verified or scored, or equal-time statuses): do not retry or force a status; list it under Needs you with the role and the conflict text. `status_applied: false` with no `conflict` is older evidence, kept. A ToolError that lists several candidate interviews: ask the user which round, listing the IDs. If the role is still `queued` or `found` when an invite arrives, the application happened outside the tracker: `record` the application evidence (sourced) first, then `add_interview`; do not skip the evidence. Why: the booking is then attached to a role whose history shows how it got there.
+**Results of `record` and `add_interview`.**
+- `duplicate: true`, or `created`, `updated` and `stale` all false: a replay. A no-op; say nothing new.
+- `stale: true`: a newer update is already stored. Leave it.
+- `status_applied: false` with a `conflict` (for example an acknowledgement for a role still in found, verified or scored, or equal-time statuses): do not retry or force a status. List it under Needs you with the role and the conflict text.
+- `status_applied: false` with no `conflict`: older evidence, kept.
+- A ToolError listing several candidate interviews: ask the user which round, listing the IDs.
+- A ToolError saying a cancelled interview needs `state: "scheduled"` to rebook: do not rebook. List it under Needs you with both sightings.
+- Role still `queued` or `found` when an invite arrives: the application happened outside the tracker. `record` the application evidence (sourced) first, then `add_interview`; do not skip the evidence. Why: the booking is then attached to a role whose history shows how it got there.
 
 ### 4. Reply drafts
 1. Write the reply with `write-note` rules: short, answers the question asked, no gaps volunteered, signature name only, no bare URLs.
@@ -68,9 +91,10 @@ Classify into one of:
 A company with an open broker intro, a recruiter-run process, or a direct conversation with a founder or hiring manager must never get a cold application. Call `set_no_cold_apply` with the `company_id` (from `find_company`; `upsert_role` the company's role first if it is new), `on: true` and a `reason` naming the channel (e.g. "broker intro open", "recruiter process", "direct thread with the CTO"). `find_company` then returns `skip` and `gate_check` blocks a submit. When the intro or process closes, call it again with `on: false` and `record` a note.
 
 ### 6. Calendar
-- `list_events` on the connected calendar for the window of step 2 and the next 14 days, following every page. Match interviews from `open_items`; a match updates that interview (`interview_id`), and an invite with no matching row is added with its calendar key.
+- `list_events` on the connected calendar over the window above and the next 14 days, following every page. Match interviews from `open_items`: a match is passed with its `interview_id`, and an invite with no matching row is added with its calendar key.
+- Then `set_source_status` for each calendar read (`name: "calendar"`, `source_account` = account and calendar, per Window and coverage). Its `checked_through` is the end of the search window (now), not the end of the 14-day lookahead. Why: the server refuses a `checked_through` more than a day ahead, and events after now were not read as history.
 - Compare the connected account with `accounts.invite_calendar`. Different: say so once in the report, and list interviews as "not visible on the connected calendar".
-- For booking links, list free windows during working hours over the next few working days.
+- Settle the "to book" items from step 3 now: still no confirmed time in the threads or calendars read, then report it as to book, with free windows during working hours over the next few working days.
 - Do not create or accept events in an unattended run. If the user asks for a hold in a session and `create_event` is refused (connector read-only), report the slot and ask them to add it.
 
 ## Output

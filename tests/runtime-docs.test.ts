@@ -146,63 +146,116 @@ test('correct classifies new rules, paginates all types for conflicts and never 
 });
 
 // External reconciliation (C4): the shared mechanics live once in the inbox skill; the others point at it.
-test('the inbox skill reconciles from full threads and checkpoints, with immutable identity keys', () => {
+// One fact per assertion, so rewording a sentence breaks only the guard for the fact it moved.
+test('the inbox skill reads full threads and says why', () => {
   const s = read('skills/inbox-and-calendar/SKILL.md');
-  assert.match(s, /`source_health\.checkpoints`[^\n]*minus 48 hours/);
-  assert.match(s, /30 days/);
-  assert.match(s, /every connector page/i);
-  assert.match(s, /`set_source_status`[^\n]*`source_account`[^\n]*`coverage`/);
-  assert.match(s, /`checked_through`/);
-  assert.match(s, /never `complete`/);
-  assert.match(s, /skipped by design[^\n]*is reported, not omitted/);
-  assert.match(s, /immutable message ID/);
-  assert.match(s, /`occurred_at`/);
-  assert.match(s, /`duplicate: true`/);
-  assert.match(s, /`status_applied: false`[^\n]*`conflict`[^\n]*Needs you/);
-  assert.match(s, /`state: "cancelled"`/);
-  assert.match(s, /`interview_id`/);
+  assert.match(s, /Read full threads, not previews/);
   assert.match(s, /Why: the sweep read only the LinkedIn inbox preview/);
 });
 
-test('a skipped source is unavailable with status degraded, a real error is failed, and calendar checked_through is the window end', () => {
+test('the inbox skill takes its window from the checkpoint and reports coverage per account', () => {
   const s = read('skills/inbox-and-calendar/SKILL.md');
-  // A skip is not a failure: `failed` would count toward degradation (source-roles: only real errors do).
-  assert.match(s, /skipped by design[^\n]*`unavailable`[^\n]*`status: "degraded"`/);
-  assert.match(s, /real error[^\n]*`status: "failed"`/);
-  assert.doesNotMatch(s, /skipped by design[^\n]*`status: "failed"`/);
-  assert.match(s, /calendar[^\n]*`checked_through`[^\n]*end of the step 2 search window[^\n]*not[^\n]*14-day/i);
-  assert.match(s, /more than a day ahead/);
-  for (const f of ['skills/triage-tracker/SKILL.md', 'skills/source-roles/reference.md', 'skills/source-roles/SKILL.md']) {
-    assert.doesNotMatch(read(f), /(skipped|no browser)[^\n]*`status: "failed"`/, f);
-  }
-  assert.match(read('skills/triage-tracker/SKILL.md'), /`unavailable` with `status: "degraded"`/);
+  assert.match(s, /`checked_through` in `source_health\.checkpoints` minus 48 hours/);
+  assert.match(s, /last 30 days/);
+  assert.match(s, /explicit date range from the user/);
+  assert.match(s, /Follow every connector page/);
+  assert.match(s, /`set_source_status`[^\n]*`source_account`/);
+  assert.match(s, /`coverage`/);
+  assert.match(s, /`checked_through` = the actual end of the window you searched/);
+  assert.match(s, /Never `complete`, no `checked_through`/);
+  assert.match(s, /never omit a connected source/);
 });
 
-test('the sweep and the auditor point at the checkpoint and booking rules instead of repeating them', () => {
+test('the inbox skill keys every external record by an immutable identity and passes the real time', () => {
+  const s = read('skills/inbox-and-calendar/SKILL.md');
+  assert.match(s, /immutable message ID/);
+  assert.match(s, /not the thread ID/);
+  assert.match(s, /application ID plus the original application date/);
+  assert.match(s, /`occurred_at` is the real time/);
+  assert.match(s, /`interview_id`/);
+  assert.match(s, /`state: "cancelled"`/);
+});
+
+test('the inbox skill treats results correctly: replays are no-ops and conflicts go to the user', () => {
+  const s = read('skills/inbox-and-calendar/SKILL.md');
+  assert.match(s, /`duplicate: true`/);
+  assert.match(s, /`status_applied: false` with a `conflict`/);
+  assert.match(s, /Needs you/);
+  assert.match(s, /do not retry or force a status/);
+});
+
+test('the inbox skill reads calendars before holding a to-book claim, and checkpoints them at the window end', () => {
+  const s = read('skills/inbox-and-calendar/SKILL.md');
+  const gather = s.indexOf('### 2. Gather mail');
+  assert.ok(gather > -1 && s.indexOf('`search_threads`') > gather && s.indexOf('`search_threads`') < s.indexOf('**Window and coverage.**'), 'the gather bullets come before the coverage rules');
+  assert.match(s, /Hold the "to book" claim until step 6/);
+  const calendar = s.slice(s.indexOf('### 6. Calendar'));
+  assert.match(calendar, /`set_source_status`/);
+  assert.match(calendar, /end of the search window \(now\), not the end of the 14-day lookahead/);
+  assert.match(calendar, /more than a day ahead/);
+});
+
+test('a skipped source is unavailable with status degraded; only a real error is failed', () => {
+  const s = read('skills/inbox-and-calendar/SKILL.md');
+  // `failed` counts toward degradation, and source-roles says only real errors may.
+  assert.match(s, /Skipped by design[^\n]*`unavailable` with `status: "degraded"`/);
+  assert.match(s, /A real error[^\n]*`status: "failed"`/);
+  assert.doesNotMatch(s, /Skipped by design[^\n]*`status: "failed"`/);
+  for (const f of ['skills/triage-tracker/SKILL.md', 'skills/source-roles/reference.md', 'skills/source-roles/SKILL.md', 'commands/sweep.md']) {
+    assert.doesNotMatch(read(f), /(skipped|no browser)[^\n]*`status: "failed"`/, f);
+    assert.doesNotMatch(read(f), /`unavailable`[^\n]*`status: "failed"`/, f);
+  }
+});
+
+test('the other prompts point at Window and coverage instead of restating it', () => {
+  for (const f of ['skills/triage-tracker/SKILL.md', 'skills/source-roles/reference.md', 'skills/source-roles/SKILL.md']) {
+    assert.match(read(f), /Window and coverage/, f);
+  }
+  assert.match(read('skills/triage-tracker/SKILL.md'), /application ID plus the original date/);
+  assert.match(read('skills/source-roles/reference.md'), /application ID plus the original date/);
+});
+
+test('the sweep passes the run start time and the auditor checks coverage and bookings against it', () => {
   const sweep = read('commands/sweep.md');
-  assert.match(sweep, /`source_health`[^\n]*checkpoints/);
-  assert.match(sweep, /`inbox-and-calendar` skill[^\n]*`coverage`/);
+  assert.match(sweep, /`source_health`/);
+  assert.match(sweep, /checkpoints/);
+  assert.match(sweep, /`inbox-and-calendar` skill/);
+  assert.match(sweep, /run's start time \(`capabilities\.detected_at` from `start_run`\)/);
   const auditor = read('agents/auditor.md');
-  assert.match(auditor, /checkpoint attempt/);
+  assert.match(auditor, /run's start time/);
+  assert.match(auditor, /`last_attempt_at` must be at or after the run's start time/);
+  assert.match(auditor, /`source_account`/);
+  assert.match(auditor, /`last_error`/);
   assert.match(auditor, /`last_coverage: complete`/);
   assert.match(auditor, /claimed checked, no checkpoint attempt/);
   assert.match(auditor, /`open_items`/);
+  assert.doesNotMatch(auditor, /you were told about/);
 });
 
-test('board readers report coverage and never write to a board', () => {
-  const triage = read('skills/triage-tracker/SKILL.md');
-  assert.match(triage, /`set_source_status`[^\n]*`source_account`[^\n]*`coverage`/);
-  assert.match(triage, /application ID plus the original date/);
-  const ref = read('skills/source-roles/reference.md');
-  assert.match(ref, /application ID plus the original date/);
-});
-
-// The delete guard and delete rounds are safety text: the reconciliation edits must not touch a byte of them.
+// The delete guard and delete rounds are safety text. AGENTS.md makes anything touching delete gates "ask first", so
+// these pins exist to stop a reconciliation edit from changing a byte of them by accident.
 test('triage-tracker hard rules, guard and delete rounds are unchanged by the reconciliation edits', () => {
   const s = read('skills/triage-tracker/SKILL.md');
   const sha = (t: string) => createHash('sha256').update(t).digest('hex');
-  const rules = s.slice(s.indexOf('## Hard rules'), s.indexOf('## Procedure'));
-  const rounds = s.slice(s.indexOf('### 6. Delete in rounds'), s.indexOf('### 7. Finish'));
-  assert.equal(sha(rules), '52e64f52998b2a3d40ef7fbd83629c44dd39555f3c67d911b45006575d1712f2');
-  assert.equal(sha(rounds), '75d87a15fbdd2c41e4eb2932210dcef6afa4c0d46c5ef8e64159d08a5f757cde');
+  const section = (from: string, to: string) => {
+    const a = s.indexOf(from);
+    const b = s.indexOf(to);
+    assert.ok(a >= 0 && b > a, `section "${from}" to "${to}" not found: the headings were renamed or moved`);
+    return s.slice(a, b);
+  };
+  const rules = section('## Hard rules', '## Procedure');
+  const rounds = section('### 6. Delete in rounds', '### 7. Finish');
+  // The rules the hash covers, checked directly so a failure names the rule that changed.
+  assert.match(rules, /Resolve every column by its header text, never by index or class/);
+  assert.match(rules, /Run the guard before every delete round/);
+  assert.match(rules, /Selection must exactly equal the intended list/);
+  assert.match(rules, /Never enable auto-apply, change board settings, or withdraw applications/);
+  assert.match(rules, /Hook denials are final for that click/);
+  assert.match(rules, /Deletes need the user: agree the delete criteria with them before the first round/);
+  assert.match(rounds, /Run the guard with `column`, `protectedColumns` and the round's `intended` titles\. Require `ok: true`\./);
+  assert.match(rounds, /No other clicks in between/);
+  const why = (name: string, text: string, expected: string) =>
+    assert.equal(sha(text), expected, `${name} of triage-tracker changed (hash ${sha(text)}). These delete-gate sections are ask-first in AGENTS.md ("anything touching send, submit, consent or delete gates"). If the change was approved, replace the hash in this test; otherwise revert it.`);
+  why('Hard rules and guard', rules, '52e64f52998b2a3d40ef7fbd83629c44dd39555f3c67d911b45006575d1712f2');
+  why('Delete rounds (step 6)', rounds, '75d87a15fbdd2c41e4eb2932210dcef6afa4c0d46c5ef8e64159d08a5f757cde');
 });

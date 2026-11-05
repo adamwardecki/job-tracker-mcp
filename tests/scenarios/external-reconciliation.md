@@ -29,10 +29,13 @@ the prompt.
 - Input: the LinkedIn inbox preview reads "Please book a slot with Rhea"; the full Gmail thread (message `m-201`)
   confirms Tuesday 14:00 Europe/Berlin; the invite calendar on a second account (`work@example.test`) holds the
   event.
-- Expect: the full thread and LinkedIn conversation are read; `add_interview` with `interview_id` (or the key),
-  `starts_at`, `source: "gmail"`, `source_account`, `source_id: "m-201"`, `occurred_at` = the message time; one
-  interview row, now `scheduled`; the report lists the interview, not "waiting on you".
-- Must not: report the booking as waiting on the user; add a second interview row.
+- Expect: the full thread and LinkedIn conversation are read; the booking-link mail creates the pending row with
+  no key; the confirmation calls `add_interview` with that row's `interview_id`, `starts_at` and the calendar
+  event's key (or, with no visible event, `source: "gmail"`, `source_id: "m-201"`) and `occurred_at` = the message
+  time; one interview row, now `scheduled`; the report lists the interview, not "waiting on you", and the "to book"
+  claim waited until the calendars were read in step 6.
+- Must not: report the booking as waiting on the user; add a second interview row; key the pending row to the
+  booking-link message (a later confirmation could not update it).
 - Result: UNEXECUTED
 
 ### 2. Calendar on a different account
@@ -85,8 +88,9 @@ the prompt.
 ### 7. A connected source that was not checked
 
 - Input: Gmail, LinkedIn and Calendar are connected; the run skips LinkedIn (no time).
-- Expect: LinkedIn is reported `unavailable` (a `set_source_status` with `coverage: "unavailable"` and the reason),
-  and listed in the report; the auditor's source-coverage check FAILs if it is omitted.
+- Expect: LinkedIn is reported `unavailable` with `status: "degraded"` (a skip by design is not a failure, so
+  `consecutive_failures` does not move) and listed in the report; the auditor's source-coverage check FAILs if it
+  is omitted. A variant where the LinkedIn call errors records `status: "failed"` and the verbatim error instead.
 - Result: UNEXECUTED
 
 ### 8. Two possible roles
@@ -102,9 +106,10 @@ the prompt.
 
 - Seed: the scheduled interview from case 1.
 - Input: `m-520`, a later message, cancels the call.
-- Expect: `add_interview` with `state: "cancelled"`, the `interview_id` or key and `occurred_at` of `m-520`; the
-  interview leaves both `upcoming_interviews` and `interviews_to_book`; the role status is unchanged; a replay of
-  the older confirmation `m-201` returns `stale`.
+- Expect: `add_interview` with `state: "cancelled"` and the row's `interview_id` (no key if the row is already
+  keyed to the calendar event); the interview leaves both `upcoming_interviews` and `interviews_to_book`; the role
+  status is unchanged; replaying the older confirmation does not rebook it (a refusal naming `state: "scheduled"`
+  goes under Needs you).
 - Result: UNEXECUTED
 
 ### 10. Claude Code and Hermes / DeepSeek Harness parity

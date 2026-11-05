@@ -34,7 +34,7 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
    - Call `get_profile`. Rules: load `reporting` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`). Apply them when you write the report. Every skill and subagent loads its own types. If your own read fails, or any subagent returns `blocked: rules unreadable`, the run is incomplete: put that first under **Needs you**, still render and deliver the report, and do not queue or prepare roles the blocked agent was to handle.
    - Call `open_items` and `source_health` (its `checkpoints` say where each mailbox, calendar and board was last fully read). Another session may have touched roles today; build on its events, do not duplicate them.
 
-2. **Inbox and calendar.** If Gmail or Calendar is connected, follow the `inbox-and-calendar` skill: full threads, a window from each checkpoint, and a `set_source_status` with `coverage` for every account. A booking or outcome is reported only after that reconciliation. List any connected source that was `partial` or `unavailable` in the report. If not connected, note it for the report and continue. Why: the report must not say "waiting on you" for an interview the full thread or the calendar shows booked.
+2. **Inbox and calendar.** If Gmail or Calendar is connected, follow the `inbox-and-calendar` skill (windows from the checkpoints, coverage for every account). Report any connected source it lists as `partial` or `unavailable`. If not connected, note it for the report and continue.
 
 3. **Source.** Follow the `source-roles` skill to choose today's sources from config and capabilities. Launch one `sourcer` agent per available source, in parallel, and tell each the rule types to load: `sourcing`. Browser sources are skipped when no browser is reachable; list each skip in the report (do not mark the source failed for it). Collect each sourcer's lead list.
 
@@ -54,7 +54,7 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
 
 7. **Report.** Call `render_report` with today's date (YYYY-MM-DD), the `run_id`, and a `headline` (one or two sentences: the outcome, e.g. "3 roles queued, 1 interview to book, 2 rejections"). Check that it states which capabilities were missing and what was queued or skipped because of it. If it does not, add one line under Needs you. End the report with the line `Board: run /job-tracker:board`. Why: a scheduled run can't open the board, and its link changes each time the board starts.
 
-8. **Audit.** Launch the `auditor` agent with: today's date, the rule types to load (`reporting`), the `run_id`, the rendered report, the list of artifact ids and Gmail draft ids created in this run, and the list of tool names you called (including any a hook denied). Put every FAIL line it returns at the top of the report's **Needs you** section.
+8. **Audit.** Launch the `auditor` agent with: today's date, the rule types to load (`reporting`), the `run_id`, the run's start time (`capabilities.detected_at` from `start_run`), the rendered report, the list of artifact ids and Gmail draft ids created in this run, and the list of tool names you called (including any a hook denied). Put every FAIL line it returns at the top of the report's **Needs you** section.
 
 9. **Deliver** per `schedule.report_delivery`:
    - `artifact` (default): the report is your last message.

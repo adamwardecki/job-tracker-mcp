@@ -61,7 +61,10 @@ What the delete hook accepts after a passing guard: the delete control and then 
   - `upsert_role` with `source` = this board and the card's link as `url`. If it returns `possible_role_ids`, check them as in Identity in `source-roles`: when one is this posting, record on that role and link the new row under it with `link_duplicate_role`. Why: a second row would split the application's history, and the submit gate reads that history. Then `record` with `status: "applied"`, `actor: "user"`, reason "Filed by <tool> in the user's name", evidence = the card text verbatim.
   - Check it against hard filters from the card and, if cheap, the employer page. Any violation: `record` a note with the quote and a `question` (e.g. "Withdraw?"), and tell the user in the session. The application is already out; only the user can decide to withdraw.
 - Report how many Applied cards there are and how many were new to the tracker.
-- Reconciliation here is read-only: it only reads cards and records tracker events. A card is identified by its application ID plus the original date (never the card's position or title alone). Record the card's actual occurrence: `record` carries `source` = this board, `source_account` = the board login, `source_id` = that key and `occurred_at` = the original date (windows, identity keys and results as in `inbox-and-calendar`). A card the tracker already holds as applied, or that a recruiter's email already acknowledged, is evidence on the existing role, not a new application. If the application ID or date is unreadable, `record` a note with the card text and say what is uncertain. Why: a replayed scan must not duplicate events, and a card's move date is not when the application was filed.
+- Reconciliation here is read-only: it reads cards and writes tracker events only. Identity keys, window and results are as in `inbox-and-calendar`.
+- A card's identity is its application ID plus the original date, never its position or title alone.
+- A card for a role the tracker already holds as applied: `record` a sourced `applied` event (`source` = this board, `source_account` = the board login, `source_id` = the application ID plus the original date, `occurred_at` = that date). It is evidence on the existing role, not a new application. If the application ID or the date is unreadable, `record` a note with the card text and say what is uncertain.
+- Why: a replayed scan must not duplicate events, and a card's move date is not when the application was filed.
 
 ### 4. Harvest the Saved column
 - Read cards inside the Saved column only. The list may be virtualised: it can advance only on real scroll events (the browser's scroll action), not `scrollTop` or synthetic wheel events. Budget roughly one scroll per few cards; do not loop JS scrolling (it can freeze the renderer).
@@ -81,5 +84,5 @@ For each round:
 Delete as you go rather than loading the whole list first; the pile shrinks and scrolling gets cheaper.
 
 ### 7. Finish
-- `set_source_status` for the board with counts, plus `source_account`, `coverage` and, if every card of the Applied column was read, `checked_through` = when you finished reading (`inbox-and-calendar`, Window and coverage). A column you could not read in full, or a board that errored, is `partial` or `unavailable` with `status: "failed"` and the verbatim `error`, never `complete`. A board skipped by design (no browser reachable) is `unavailable` with `status: "degraded"`, not a failure.
+- `set_source_status` for the board with counts, plus `source_account`, `coverage` and `checked_through` as in `inbox-and-calendar` (Window and coverage; see it for a failed or skipped board).
 - Report: Applied reconciled (count, new), new leads, deleted, protected counts before and after.
