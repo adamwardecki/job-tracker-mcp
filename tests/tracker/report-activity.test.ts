@@ -321,3 +321,55 @@ test('a role that went back to the queue today is new again even with the same q
   requeue(t, id, { at: '2026-10-31T09:00:00.000Z', question: 'Visa sponsorship?' });
   assert.deepEqual(waitingIds(t), { new_or_changed: [id], waiting: [], stale_waiting: [] });
 });
+
+const REJECTION = { actor: 'employer', status: 'closed', outcome: 'rejected', reason: 'Rejection email', evidence: 'We will not be moving forward.', source: 'gmail', source_account: 'jobs@example.test', source_id: 'message-9', occurred_at: '2026-10-28T09:00:00Z' };
+const LATE_REJECTION = /## Replies\n\n- \*\*Late Acme\*\*, Engineer: closed \(rejected, 2026-10-28\)\. Rejection email Feedback: "We will not be moving forward\."/;
+
+test('a rejection read today that happened three days ago is reported today with its original date', (ctx) => {
+  const t = fresh(ctx);
+  const id = queued(t, 'Late Acme', { at: '2026-09-01T10:00:00.000Z' });
+  t.record({ ...REJECTION, role_id: id }); // no run_id
+  assert.match(renderReport(t, { date: '2026-10-31' }).markdown, LATE_REJECTION);
+  assert.doesNotMatch(renderReport(t, { date: '2026-10-28' }).markdown, /Late Acme/);
+});
+
+test('the same late rejection is found in a run-scoped report', (ctx) => {
+  const t = fresh(ctx);
+  const r = run(t, '2026-10-31T10:00:00.000Z', '2026-10-31T13:00:00.000Z');
+  const id = queued(t, 'Late Acme', { at: '2026-09-01T10:00:00.000Z' });
+  t.record({ ...REJECTION, role_id: id, run_id: r });
+  assert.match(renderReport(t, { date: '2026-10-31', run_id: r }).markdown, LATE_REJECTION);
+});
+
+test('replaying a late rejection in a later run does not show it again', (ctx) => {
+  const t = fresh(ctx);
+  const first = run(t, '2026-10-31T10:00:00.000Z', '2026-10-31T13:00:00.000Z');
+  const id = queued(t, 'Late Acme', { at: '2026-09-01T10:00:00.000Z' });
+  t.record({ ...REJECTION, role_id: id, run_id: first });
+  ctx.mock.timers.setTime(Date.parse('2026-11-01T10:00:00.000Z'));
+  const second = run(t, '2026-11-01T09:00:00.000Z', '2026-11-01T11:00:00.000Z');
+  assert.equal(t.record({ ...REJECTION, role_id: id, run_id: second }).duplicate, true);
+  for (const args of [{ date: '2026-11-01', run_id: second }, { date: '2026-11-01' }]) assert.doesNotMatch(renderReport(t, args).markdown, /Late Acme/);
+  assert.match(renderReport(t, { date: '2026-10-31', run_id: first }).markdown, LATE_REJECTION);
+});
+
+test('a drop read late from outside is listed with its original date', (ctx) => {
+  const t = fresh(ctx);
+  const id = queued(t, 'Late Acme', { at: '2026-09-01T10:00:00.000Z' });
+  t.record({ actor: 'employer', status: 'dropped', category: 'closed_posting', reason: 'Posting withdrawn', evidence: '"This position has been filled"', source: 'gmail', source_account: 'jobs@example.test', source_id: 'message-10', occurred_at: '2026-10-28T09:00:00Z', role_id: id });
+  assert.match(renderReport(t, { date: '2026-10-31' }).markdown, /## Dropped\n\n- closed_posting: Late Acme \(Posting withdrawn, 2026-10-28\)/);
+});
+
+test('replies and drops that did not come from outside are still found by when they happened', (ctx) => {
+  const t = fresh(ctx);
+  const replied = queued(t, 'Today Acme', { at: '2026-09-01T10:00:00.000Z' });
+  const old = queued(t, 'Old Acme', { at: '2026-09-01T10:00:00.000Z' });
+  const dropped = queued(t, 'Drop Acme', { at: '2026-09-01T10:00:00.000Z' });
+  t.record({ role_id: replied, actor: 'employer', reason: 'Recruiter wrote back', status: 'closed', outcome: 'rejected', evidence: 'Not this time.' });
+  t.insertEvent({ role_id: old, status: 'closed', outcome: 'rejected', actor: 'employer', reason: 'Old rejection', evidence: 'No.', ts: '2026-10-20T09:00:00.000Z' }); // written today, dated earlier
+  t.transition({ role_id: dropped, to: 'dropped', reason: 'Pay too low', evidence: '"EUR 40k"', category: 'pay' });
+  const markdown = renderReport(t, { date: '2026-10-31' }).markdown;
+  assert.match(markdown, /- \*\*Today Acme\*\*, Engineer: closed \(rejected\)\. Recruiter wrote back Feedback: "Not this time\."/);
+  assert.doesNotMatch(markdown, /Old Acme/);
+  assert.match(markdown, /- pay: Drop Acme \(Pay too low\)/);
+});

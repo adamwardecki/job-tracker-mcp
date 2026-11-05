@@ -32,6 +32,14 @@ function receivedIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLInp
   return eventsAt(t, scope, 'received_at', where, ...params);
 }
 
+// Events dated by when they happened, except those from outside, which are found by when they were received: a
+// rejection read today may be days old, and reading it again in a later run adds no event.
+function eventsOrReceived(t: Tracker, scope: Scope, where: string, ...params: SQLInputValue[]): ScopedEvent[] {
+  const own = eventsIn(t, scope, `e.source IS NULL AND ${where}`, ...params);
+  const outside = receivedIn(t, scope, `e.source IS NOT NULL AND ${where}`, ...params);
+  return [...own, ...outside].sort((a, b) => a.ts.localeCompare(b.ts) || a.id - b.id);
+}
+
 function eventsAt(t: Tracker, scope: Scope, col: 'ts' | 'received_at', where: string, ...params: SQLInputValue[]): ScopedEvent[] {
   const [cond, p] = scope.rows('e', col);
   return t.q<ScopedEvent>(
@@ -122,8 +130,8 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
   const recorded = receivedIn(t, scope, "e.status = 'applied' AND e.source IS NOT NULL");
   // A calendar or mail change to a booking is news when it arrives, whenever the meeting itself was changed.
   const bookingChanges = receivedIn(t, scope, "e.category = 'interview_changed'");
-  const replies = eventsIn(t, scope, "e.actor = 'employer'");
-  const dropped = eventsIn(t, scope, "e.status = 'dropped' AND e.actor != 'import'");
+  const replies = eventsOrReceived(t, scope, "e.actor = 'employer'");
+  const dropped = eventsOrReceived(t, scope, "e.status = 'dropped' AND e.actor != 'import'");
   const assessed = new Set(eventsIn(t, scope, "e.status IN ('verified', 'scored', 'dropped') AND e.actor != 'import'").map((e) => e.card_id)).size;
   const drafts = artifactsIn(t, scope, "a.kind = 'gmail_draft'");
   const verifiedDrafts = drafts.filter((d) => d.verified_at);
@@ -194,7 +202,9 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
   if (replies.length || verifiedDrafts.length) {
     out.push('## Replies', '');
     for (const e of replies) {
-      const label = e.status === 'closed' ? `closed (${e.outcome})` : e.status || 'note';
+      // An event from outside says when it happened: it may be older than the report that finds it.
+      const when = e.source ? localDay(e.ts, tz) : '';
+      const label = e.status === 'closed' ? `closed (${e.outcome}${when ? `, ${when}` : ''})` : `${e.status || 'note'}${when ? ` (${when})` : ''}`;
       out.push(`- **${e.company}**, ${e.title}: ${label}. ${e.reason}${e.evidence && e.status === 'closed' ? ` Feedback: "${String(e.evidence).replace(/\s+/g, ' ').slice(0, 300)}"` : ''}`);
     }
     if (verifiedDrafts.length) out.push(`- Reply drafts created and read back: ${verifiedDrafts.map((d) => d.path_or_ref).join(', ')}`);
@@ -213,7 +223,7 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
         group = [];
         groups.set(key, group);
       }
-      group.push(`${e.company} (${e.reason})`);
+      group.push(`${e.company} (${e.reason}${e.source ? `, ${localDay(e.ts, tz)}` : ''})`);
     }
     for (const [k, v] of groups) out.push(`- ${k}: ${v.join('; ')}`);
     out.push('');
