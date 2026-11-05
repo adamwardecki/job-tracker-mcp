@@ -58,6 +58,7 @@ test('a role queued today or with a new question is detailed; one unchanged sinc
   assert.match(report.markdown, /Still waiting \(1\)/);
   assert.doesNotMatch(report.markdown, /Unchanged Acme.*Apply or drop/);
   assert.match(report.markdown, /job-tracker:board|job-tracker:status/);
+  assert.match(report.markdown, /\| Queued for you \| 3 \|\n\| New or changed today \| 2 \|/);
 });
 
 const waitingIds = (t: Tracker, date = '2026-10-31') => renderReport(t, { date }).queue_activity;
@@ -93,7 +94,7 @@ test('a changed blocker brings the role back', (ctx) => {
   requeue(t, id, { at: '2026-10-31T09:00:00.000Z', blocked_by: 'login' });
   const report = renderReport(t, { date: '2026-10-31' });
   assert.deepEqual(report.queue_activity, { new_or_changed: [id], waiting: [], stale_waiting: [] });
-  assert.match(report.markdown, /### New or changed today\n\n1\. \*\*Blocked Acme\*\*, Engineer \(role \d+\): Apply or drop\?/);
+  assert.match(report.markdown, /### New or changed today\n\n1\. \*\*Blocked Acme\*\*, Engineer \(role \d+\): Blocked by login\./);
   assert.doesNotMatch(report.markdown, /Still waiting/);
 });
 
@@ -125,8 +126,8 @@ test('a role untouched for 14+ days is waiting and stale, and named in the repor
   // Fresh ones first, then the stale ones, each in open_items order.
   assert.deepEqual(report.queue_activity, { new_or_changed: [], waiting: [fresher, stale], stale_waiting: [stale] });
   assert.match(report.markdown, /### Still waiting \(2\)/);
-  assert.match(report.markdown, /1 untouched for 14\+ days/);
-  assert.match(report.markdown, new RegExp(`14\\+ days: \\*\\*Stale Acme\\*\\*, Engineer \\(role ${stale}, last activity 2026-10-10\\)`));
+  assert.match(report.markdown, /2 queued role\(s\) are unchanged in this report, 1 of them with no activity for 14\+ days\./);
+  assert.match(report.markdown, new RegExp(`\\n\\n- \\*\\*Stale Acme\\*\\*, Engineer \\(role ${stale}, 14\\+ days, last activity 2026-10-10\\): Apply or drop\\?`));
   assert.doesNotMatch(report.markdown, /Fresh Acme/);
   assert.doesNotMatch(report.markdown, /Needs you\n\n### New or changed today/);
 });
@@ -372,4 +373,59 @@ test('replies and drops that did not come from outside are still found by when t
   assert.match(markdown, /- \*\*Today Acme\*\*, Engineer: closed \(rejected\)\. Recruiter wrote back Feedback: "Not this time\."/);
   assert.doesNotMatch(markdown, /Old Acme/);
   assert.match(markdown, /- pay: Drop Acme \(Pay too low\)/);
+});
+
+test('a note between two identical queue events does not make the second one a change', (ctx) => {
+  const t = fresh(ctx);
+  const id = queued(t, 'Note Acme', { score: 7, question: 'Visa sponsorship?', at: '2026-10-20T10:00:00.000Z' });
+  t.insertEvent({ role_id: id, actor: 'user', reason: 'Recruiter called, nothing decided', ts: '2026-10-25T09:00:00.000Z' });
+  requeue(t, id, { at: '2026-10-31T09:00:00.000Z', question: 'Visa sponsorship?' });
+  assert.deepEqual(waitingIds(t), { new_or_changed: [], waiting: [id], stale_waiting: [] });
+});
+
+test('a question on a role outside the queue is listed under Other open actions', (ctx) => {
+  const t = fresh(ctx);
+  const { role } = t.upsertRole({ company: 'Asked Acme', title: 'Engineer' });
+  t.insertEvent({ role_id: role.id, status: 'applied', actor: 'user', reason: 'Setup', evidence: 'Received', ts: '2026-09-01T00:00:00.000Z' });
+  t.record({ role_id: role.id, actor: 'pipeline', reason: 'Form changed', question: 'The form now asks for a work permit. Still apply?' });
+  const markdown = renderReport(t, { date: '2026-10-31' }).markdown;
+  assert.match(markdown, new RegExp(`### Other open actions\\n\\n1\\. \\*\\*Asked Acme\\*\\*, Engineer \\(role ${role.id}, applied\\): The form now asks for a work permit\\. Still apply\\?`));
+});
+
+test('a stale waiting role shows its question or blocker, not a generic line', (ctx) => {
+  const t = fresh(ctx);
+  const asked = queued(t, 'Asked Acme', { score: 9, question: 'Visa sponsorship?', at: '2026-10-01T10:00:00.000Z' });
+  const blocked = queued(t, 'Blocked Acme', { score: 8, blocked_by: 'login', at: '2026-10-01T10:00:00.000Z' });
+  const browser = queued(t, 'Browser Acme', { score: 7, blocked_by: 'browser', at: '2026-10-01T10:00:00.000Z' });
+  const plain = queued(t, 'Plain Acme', { score: 6, at: '2026-10-01T10:00:00.000Z' });
+  const { markdown } = renderReport(t, { date: '2026-10-31' });
+  const line = (name: string, id: number, why: string) => new RegExp(`- \\*\\*${name}\\*\\*, Engineer \\(role ${id}, 14\\+ days, last activity 2026-10-01\\): ${why}\\n`);
+  assert.match(markdown, line('Asked Acme', asked, 'Visa sponsorship\\?'));
+  assert.match(markdown, line('Blocked Acme', blocked, 'Blocked by login\\.'));
+  assert.match(markdown, line('Browser Acme', browser, 'Needs a browser session to apply\\.'));
+  assert.match(markdown, line('Plain Acme', plain, 'Apply or drop\\?'));
+});
+
+test('events at the same instant are replayed in the order they were written', (ctx) => {
+  const t = fresh(ctx);
+  const at = '2026-10-31T09:00:00.000Z';
+  const left = queued(t, 'Left Acme', { score: 9, question: 'Visa sponsorship?', at: '2026-10-20T10:00:00.000Z' });
+  const back = queued(t, 'Back Acme', { score: 8, question: 'Visa sponsorship?', at: '2026-10-20T10:00:00.000Z' });
+  // Left Acme: the same question, then moved out at that instant. Nothing re-enters the queue after it.
+  requeue(t, left, { at, question: 'Visa sponsorship?' });
+  t.insertEvent({ role_id: left, status: 'scored', actor: 'user', reason: 'Moved on the board', ts: at });
+  // Back Acme: moved out, then queued again at the same instant: that is an entry.
+  t.insertEvent({ role_id: back, status: 'scored', actor: 'user', reason: 'Moved on the board', ts: at });
+  requeue(t, back, { at, question: 'Visa sponsorship?' });
+  t.run("UPDATE roles SET status = 'queued' WHERE id IN (?, ?)", left, back); // as the report finds them: queued now
+  assert.deepEqual(waitingIds(t), { new_or_changed: [back], waiting: [left], stale_waiting: [] });
+});
+
+test('timestamps from an older release are ordered by the time they name, not by their text', (ctx) => {
+  const t = fresh(ctx);
+  const id = queued(t, 'Legacy Acme', { score: 7, question: 'Visa sponsorship?', at: '2026-10-20T10:00:00.000Z' });
+  // The same instant in two spellings: as text '…:00.000Z' sorts before '…:00Z', but the first was written first.
+  t.insertEvent({ role_id: id, status: 'scored', actor: 'user', reason: 'Moved on the board', ts: '2026-10-31T09:00:00Z' });
+  requeue(t, id, { at: '2026-10-31T09:00:00.000Z', question: 'Visa sponsorship?' });
+  assert.deepEqual(waitingIds(t), { new_or_changed: [id], waiting: [], stale_waiting: [] });
 });

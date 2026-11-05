@@ -22,31 +22,29 @@ export interface AuditFailure {
   detail: string;
 }
 
-// The events a scope covers, by when they happened (ts). Events from outside that were found during the scope but
-// happened earlier are found by when they were received instead: see receivedIn.
-function eventsIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLInputValue[]): ScopedEvent[] {
-  return eventsAt(t, scope, 'ts', where, ...params);
-}
-
-function receivedIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLInputValue[]): ScopedEvent[] {
-  return eventsAt(t, scope, 'received_at', where, ...params);
-}
-
-// Events dated by when they happened, except those from outside, which are found by when they were received: a
-// rejection read today may be days old, and reading it again in a later run adds no event.
-function eventsOrReceived(t: Tracker, scope: Scope, where: string, ...params: SQLInputValue[]): ScopedEvent[] {
-  const own = eventsIn(t, scope, `e.source IS NULL AND ${where}`, ...params);
-  const outside = receivedIn(t, scope, `e.source IS NOT NULL AND ${where}`, ...params);
-  return [...own, ...outside].sort((a, b) => a.ts.localeCompare(b.ts) || a.id - b.id);
-}
-
-function eventsAt(t: Tracker, scope: Scope, col: 'ts' | 'received_at', where: string, ...params: SQLInputValue[]): ScopedEvent[] {
+// The events a scope covers, found by column col: when they happened (ts), or, for events from outside that were read
+// during the scope but happened earlier, when they were received (received_at).
+function eventsAt(t: Tracker, scope: Scope, col: 'ts' | 'received_at', where = '1 = 1', ...params: SQLInputValue[]): ScopedEvent[] {
   const [cond, p] = scope.rows('e', col);
   return t.q<ScopedEvent>(
     `SELECT e.*, r.id AS card_id, r.title, r.url, r.industry, r.company_id, c.name AS company FROM events e JOIN roles r ON r.id = ${canonicalOf('e.role_id')} JOIN companies c ON c.id = r.company_id
      WHERE ${cond} AND ${where} ORDER BY e.ts, e.id`,
     ...p, ...params,
   );
+}
+
+const eventsIn = (t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLInputValue[]) => eventsAt(t, scope, 'ts', where, ...params);
+
+// In JS because ts text is not one format ('…:00Z' from older releases, '…:00.000Z' from now), so SQL order is not time order.
+const timeOf = (iso: string) => (Number.isNaN(Date.parse(iso)) ? Number.NEGATIVE_INFINITY : Date.parse(iso));
+const byTime = (a: Pick<EventRow, 'id' | 'ts'>, b: Pick<EventRow, 'id' | 'ts'>) => timeOf(a.ts) - timeOf(b.ts) || a.id - b.id;
+
+// Events dated by when they happened, except those from outside, which are found by when they were received: a
+// rejection read today may be days old, and reading it again in a later run adds no event.
+function eventsOrReceived(t: Tracker, scope: Scope, where: string, ...params: SQLInputValue[]): ScopedEvent[] {
+  const own = eventsIn(t, scope, `e.source IS NULL AND ${where}`, ...params);
+  const outside = eventsAt(t, scope, 'received_at', `e.source IS NOT NULL AND ${where}`, ...params);
+  return [...own, ...outside].sort(byTime);
 }
 
 function artifactsIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLInputValue[]): ScopedArtifact[] {
@@ -61,6 +59,8 @@ function artifactsIn(t: Tracker, scope: Scope, where = '1 = 1', ...params: SQLIn
 // Canonical role ids of the queued roles, in open_items order (fresh ones, then the 14+ day ones). new_or_changed:
 // the action (queued, question, blocked_by) changed in the report's scope. waiting: everything else, stale included.
 // stale_waiting: the part of waiting with no activity for 14+ days.
+type OpenItems = ReturnType<Tracker['openItems']>;
+
 export interface QueueActivity {
   new_or_changed: number[];
   waiting: number[];
@@ -74,15 +74,15 @@ export interface QueueActivity {
 // queue, so a later queued event is a new entry.
 function changedInScope(t: Tracker, scope: Scope, cardIds: number[]): Set<number> {
   if (!cardIds.length) return new Set();
+  // Not canonicalOf in the WHERE: the group's ids as a list lets events_role find the rows.
+  const marks = cardIds.map(() => '?').join(', ');
   const [cond, p] = scope.rows('e', 'ts');
   const rows = t.q<Pick<EventRow, 'id' | 'ts' | 'status' | 'question' | 'blocked_by'> & { card_id: number; in_scope: number }>(
     `SELECT e.id, e.ts, e.status, e.question, e.blocked_by, ${canonicalOf('e.role_id')} AS card_id, CASE WHEN ${cond} THEN 1 ELSE 0 END AS in_scope FROM events e
-     WHERE e.status IS NOT NULL AND ${canonicalOf('e.role_id')} IN (${cardIds.map(() => '?').join(', ')})`,
-    ...p, ...cardIds,
+     WHERE e.status IS NOT NULL AND (e.role_id IN (${marks}) OR e.role_id IN (SELECT duplicate_role_id FROM role_links WHERE canonical_role_id IN (${marks})))`,
+    ...p, ...cardIds, ...cardIds,
   );
-  // In JS because ts text is not one format ('…:00Z' from older releases, '…:00.000Z' from now).
-  const when = (iso: string) => (Number.isNaN(Date.parse(iso)) ? Number.NEGATIVE_INFINITY : Date.parse(iso));
-  rows.sort((a, b) => when(a.ts) - when(b.ts) || a.id - b.id);
+  rows.sort(byTime);
   const previous = new Map<number, string | null>();
   const changed = new Set<number>();
   for (const e of rows) {
@@ -97,8 +97,8 @@ function changedInScope(t: Tracker, scope: Scope, cardIds: number[]): Set<number
   return changed;
 }
 
-export function queueActivity(t: Tracker, scope: Scope): QueueActivity {
-  const { queue, stale_queue } = t.openItems();
+export function queueActivity(t: Tracker, scope: Scope, items: OpenItems = t.openItems()): QueueActivity {
+  const { queue, stale_queue } = items;
   const ids = [...queue, ...stale_queue].map((r) => r.id);
   const changed = changedInScope(t, scope, ids);
   const stale = new Set(stale_queue.map((r) => r.id));
@@ -111,11 +111,40 @@ const localDay = (iso: string | null, tz: string) => (iso == null || Number.isNa
 
 const CAPABILITY_LABELS: Readonly<Record<string, string>> = { browser: 'browser', local_folder: 'local folder', gmail: 'Gmail', calendar: 'Calendar', linkedin: 'LinkedIn' };
 
+// What a queued role asks of the user: its question, else its blocker, else the decision itself.
+const ask = (q: { question: string | null; blocked_by: string | null }) => q.question || (q.blocked_by === 'browser' ? 'Needs a browser session to apply.' : q.blocked_by ? `Blocked by ${q.blocked_by}.` : 'Apply or drop?');
+
+// The "Needs you" section: what changed in this scope in detail, then the other open actions whatever their age, then
+// the unchanged queue. An old queue decision is never "new"; it is waiting.
+function needsYou(items: OpenItems, activity: QueueActivity, audit: ReturnType<typeof runAudit>, tz: string): string[] {
+  const queued = new Map([...items.queue, ...items.stale_queue].map((q) => [q.id, q]));
+  const changedNow = activity.new_or_changed.flatMap((id) => queued.get(id) ?? []);
+  const others: string[] = [];
+  for (const q of items.questions) others.push(`**${q.company}**, ${q.title} (role ${q.id}, ${q.status}): ${q.question}`);
+  for (const d of items.unverified_drafts) others.push(`Draft ${d.draft_id}${d.company ? ` (${d.company})` : ''} was not confirmed by read-back. Check Gmail drafts.`);
+  for (const i of items.interviews_to_book) others.push(`Book **${i.company}** ${i.stage}${i.link ? `: ${i.link}` : ''}`);
+  for (const f of audit.failures) others.push(`Audit: ${f.detail}`);
+  if (!changedNow.length && !others.length && !activity.waiting.length) return [];
+  const numbered = (lines: string[]) => lines.map((n, i) => `${i + 1}. ${n}`);
+  const out = ['## Needs you', ''];
+  if (changedNow.length) out.push('### New or changed today', '', ...numbered(changedNow.map((q) => `**${q.company}**, ${q.title} (role ${q.id}): ${ask(q)} To apply: \`/job-tracker:apply ${q.id}\``)), '');
+  if (others.length) out.push('### Other open actions', '', ...numbered(others), '');
+  if (activity.waiting.length) {
+    const staleIds = new Set(activity.stale_waiting);
+    const stale = items.stale_queue.filter((q) => staleIds.has(q.id));
+    out.push(`### Still waiting (${activity.waiting.length})`, '');
+    out.push(`${activity.waiting.length} queued role(s) are unchanged in this report, ${stale.length} of them with no activity for 14+ days. Nothing here was researched or decided today. \`/job-tracker:board\` or \`/job-tracker:status\` lists them all.`, '');
+    for (const q of stale) out.push(`- **${q.company}**, ${q.title} (role ${q.id}, 14+ days, last activity ${localDay(q.last_event, tz)}): ${ask(q)}`);
+    if (stale.length) out.push('');
+  }
+  return out;
+}
+
 export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'render_report'>) {
   const scope = t.scope({ date, run_id });
   const caps = parseJson<CapabilitiesConfig | null>(scope.run?.capabilities, null);
   const items = t.openItems();
-  const activity = queueActivity(t, scope);
+  const activity = queueActivity(t, scope, items);
   const tz = t.timezone();
   const audit = runAudit(t, { date, run_id });
   const out = [`# Daily report · ${date}`, ''];
@@ -127,9 +156,9 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
   const selfReported = eventsIn(t, scope, "e.status = 'applied' AND e.actor = 'user' AND (e.evidence IS NULL OR trim(e.evidence) = '')");
   // An application found in a mailbox or on a board: dated by when it happened, reported in the scope that received it.
   // Replaying it in a later run adds no event, so it is not announced again.
-  const recorded = receivedIn(t, scope, "e.status = 'applied' AND e.source IS NOT NULL");
+  const recorded = eventsAt(t, scope, 'received_at', "e.status = 'applied' AND e.source IS NOT NULL");
   // A calendar or mail change to a booking is news when it arrives, whenever the meeting itself was changed.
-  const bookingChanges = receivedIn(t, scope, "e.category = 'interview_changed'");
+  const bookingChanges = eventsAt(t, scope, 'received_at', "e.category = 'interview_changed'");
   const replies = eventsOrReceived(t, scope, "e.actor = 'employer'");
   const dropped = eventsOrReceived(t, scope, "e.status = 'dropped' AND e.actor != 'import'");
   const assessed = new Set(eventsIn(t, scope, "e.status IN ('verified', 'scored', 'dropped') AND e.actor != 'import'").map((e) => e.card_id)).size;
@@ -147,33 +176,7 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
   }
   const blockedQueue = items.queue.filter((q) => q.blocked_by === 'browser' || q.blocked_by === 'login');
 
-  // 1. Needs you: what changed in this scope in detail, then the other open actions whatever their age, then the
-  // unchanged queue. An old queue decision is never "new"; it is waiting.
-  const queueAction = (q: { id: number; company: string; title: string; question: string | null; blocked_by: string | null }) => {
-    const why = q.question || (q.blocked_by === 'browser' ? 'Needs a browser session to apply.' : 'Apply or drop?');
-    return `**${q.company}**, ${q.title} (role ${q.id}): ${why} To apply: \`/job-tracker:apply ${q.id}\``;
-  };
-  const queued = new Map([...items.queue, ...items.stale_queue].map((q) => [q.id, q]));
-  const changedNow = activity.new_or_changed.flatMap((id) => queued.get(id) ?? []);
-  const others: string[] = [];
-  for (const q of items.questions) others.push(`**${q.company}**, ${q.title} (role ${q.id}, ${q.status}): ${q.question}`);
-  for (const d of items.unverified_drafts) others.push(`Draft ${d.draft_id}${d.company ? ` (${d.company})` : ''} was not confirmed by read-back. Check Gmail drafts.`);
-  for (const i of items.interviews_to_book) others.push(`Book **${i.company}** ${i.stage}${i.link ? `: ${i.link}` : ''}`);
-  for (const f of audit.failures) others.push(`Audit: ${f.detail}`);
-  const numbered = (lines: string[]) => lines.map((n, i) => `${i + 1}. ${n}`);
-  if (changedNow.length || others.length || activity.waiting.length) {
-    out.push('## Needs you', '');
-    if (changedNow.length) out.push('### New or changed today', '', ...numbered(changedNow.map(queueAction)), '');
-    if (others.length) out.push('### Other open actions', '', ...numbered(others), '');
-    if (activity.waiting.length) {
-      const staleIds = new Set(activity.stale_waiting);
-      const staleWaiting = items.stale_queue.filter((q) => staleIds.has(q.id));
-      out.push(`### Still waiting (${activity.waiting.length})`, '');
-      out.push(`${activity.waiting.length} queued role(s) have had no change to what they ask of you in this report (${staleWaiting.length} untouched for 14+ days). They were not researched or decided today. The board (\`/job-tracker:board\`) or \`/job-tracker:status\` lists them.`);
-      for (const q of staleWaiting) out.push(`- 14+ days: **${q.company}**, ${q.title} (role ${q.id}, last activity ${localDay(q.last_event, tz)}). Apply or drop it.`);
-      out.push('');
-    }
-  }
+  out.push(...needsYou(items, activity, audit, tz));
 
   // 2. Interviews
   if (items.upcoming_interviews.length || items.interviews_to_book.length || bookingChanges.length) {

@@ -94,7 +94,7 @@ Under **Needs you**:
 2. **Other open actions**, whatever their age: questions on roles outside the queue, drafts not read back, bookings
    still to confirm, and audit failures.
 3. **Still waiting (N)**: the queued roles with no change in the scope, stale ones included. The text gives the
-   count of those untouched for 14+ days, names each of them, and points to `/job-tracker:board` and
+   count of those untouched for 14+ days, names each of them with what it asks (its question, blocker, or the decision itself), and points to `/job-tracker:board` and
    `/job-tracker:status`. It does not say they were researched or decided today.
 
 `queue_activity` is `{new_or_changed, waiting, stale_waiting}`, canonical role ids. Fresh roles come in `open_items`
