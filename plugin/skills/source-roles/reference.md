@@ -110,12 +110,14 @@ All of these are read-only lead sources. Build 2 to 4 title queries from `prefs.
 - The card's summary can describe the recruiter's client while the posting belongs to a recruiting agency. The employer is whoever the ATS says.
 - Salary on the card is often the broker's estimate (small print says so). Never use it for a pay verdict.
 - Cards in an intro or "in process" state: the company is `no_cold_apply` (see `inbox-and-calendar` for how to record it).
+- Reading the dashboard for reconciliation is read-only. A card's identity is its application ID plus the original date; record applications and `source_account` as in `inbox-and-calendar` (identity keys, window and coverage), and report the board `unavailable` if you cannot open it.
 
 ## WWR JobCopilot
 
 - **Save-only.** Never enable auto-apply, never change the copilot's settings.
 - The tracker URL comes from the daily recap email's "View Job Applications" link. Do not guess the hostname.
 - Sweeping it means reconciling the Applied column and harvesting Saved cards. Both are done by the `triage-tracker` skill, interactively.
+- Reconciling the Applied column is read-only. A card's identity is its application ID plus the original date; a card the user's email already acknowledged is evidence on that existing role, not a new application. Coverage and keys are as in `inbox-and-calendar`.
 
 ## Retired by default
 

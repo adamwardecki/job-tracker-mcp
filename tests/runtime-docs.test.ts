@@ -1,6 +1,7 @@
 // The markdown that tells the model what to do when Node.js is missing (spec 2026-10-17, parts 2 and 3).
 
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
@@ -142,4 +143,52 @@ test('correct classifies new rules, paginates all types for conflicts and never 
   assert.match(c, /`types`/);
   assert.match(c, /`set_rule_types`/);
   assert.match(c, /Never `deactivate_rule` without the user's yes/);
+});
+
+// External reconciliation (C4): the shared mechanics live once in the inbox skill; the others point at it.
+test('the inbox skill reconciles from full threads and checkpoints, with immutable identity keys', () => {
+  const s = read('skills/inbox-and-calendar/SKILL.md');
+  assert.match(s, /`source_health\.checkpoints`[^\n]*minus 48 hours/);
+  assert.match(s, /30 days/);
+  assert.match(s, /every connector page/i);
+  assert.match(s, /`set_source_status`[^\n]*`source_account`[^\n]*`coverage`/);
+  assert.match(s, /`checked_through`/);
+  assert.match(s, /never `complete`/);
+  assert.match(s, /`unavailable`, not omitted/);
+  assert.match(s, /immutable message ID/);
+  assert.match(s, /`occurred_at`/);
+  assert.match(s, /`duplicate: true`/);
+  assert.match(s, /`status_applied: false`[^\n]*`conflict`[^\n]*Needs you/);
+  assert.match(s, /`state: "cancelled"`/);
+  assert.match(s, /`interview_id`/);
+  assert.match(s, /Why: the sweep read only the LinkedIn inbox preview/);
+});
+
+test('the sweep and the auditor point at the checkpoint and booking rules instead of repeating them', () => {
+  const sweep = read('commands/sweep.md');
+  assert.match(sweep, /`source_health`[^\n]*checkpoints/);
+  assert.match(sweep, /`inbox-and-calendar` skill[^\n]*`coverage`/);
+  const auditor = read('agents/auditor.md');
+  assert.match(auditor, /checkpoint attempt/);
+  assert.match(auditor, /`last_coverage: complete`/);
+  assert.match(auditor, /claimed checked, no checkpoint attempt/);
+  assert.match(auditor, /`open_items`/);
+});
+
+test('board readers report coverage and never write to a board', () => {
+  const triage = read('skills/triage-tracker/SKILL.md');
+  assert.match(triage, /`set_source_status`[^\n]*`source_account`[^\n]*`coverage`/);
+  assert.match(triage, /application ID plus the original date/);
+  const ref = read('skills/source-roles/reference.md');
+  assert.match(ref, /application ID plus the original date/);
+});
+
+// The delete guard and delete rounds are safety text: the reconciliation edits must not touch a byte of them.
+test('triage-tracker hard rules, guard and delete rounds are unchanged by the reconciliation edits', () => {
+  const s = read('skills/triage-tracker/SKILL.md');
+  const sha = (t: string) => createHash('sha256').update(t).digest('hex');
+  const rules = s.slice(s.indexOf('## Hard rules'), s.indexOf('## Procedure'));
+  const rounds = s.slice(s.indexOf('### 6. Delete in rounds'), s.indexOf('### 7. Finish'));
+  assert.equal(sha(rules), '52e64f52998b2a3d40ef7fbd83629c44dd39555f3c67d911b45006575d1712f2');
+  assert.equal(sha(rounds), '75d87a15fbdd2c41e4eb2932210dcef6afa4c0d46c5ef8e64159d08a5f757cde');
 });

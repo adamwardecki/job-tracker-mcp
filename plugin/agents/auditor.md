@@ -24,6 +24,8 @@ Run every check. Each produces exactly one line: `PASS <check>` or `FAIL <check>
 8. **Excluded industries.** Covered by `audit`; any role in an excluded industry that reached `queued` or beyond is a FAIL.
 9. **Capabilities stated.** The report says which capabilities were missing and what was skipped or queued because of it. Missing statement when a capability was absent: FAIL.
 10. **Every touched role has an event today.** Roles named in the report without an event dated today: FAIL.
+11. **Source coverage.** Call `source_health`. Every source the report says was checked (each mailbox, calendar, board) has a checkpoint with `last_attempt_at` inside this run; none: FAIL ("claimed checked, no checkpoint attempt"). No source with an error or failure this run (`source_health` failures, a denied or failing connector call you were told about) may show `last_coverage: complete`: FAIL naming it. A connected source the report omits is a FAIL.
+12. **Bookings backed.** Every interview or booking the report states, and every "to book" or "waiting on you" item, matches `open_items` (`upcoming_interviews`, `interviews_to_book`). A booking `open_items` does not show, or a "to book" item that a scheduled interview in `open_items` contradicts: FAIL.
 
 ## Return
 
