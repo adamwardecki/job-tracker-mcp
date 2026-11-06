@@ -253,11 +253,17 @@ const APPLIED_SQL = "(status IN ('applied', 'interviewing', 'offer') OR (status 
 // a root id and its group's status events, oldest first. Nothing here ranks states: the canonical role must already
 // show the latest state itself, and the normal evidence-backed workflow corrects it first when it does not.
 function checkHistories(canonical: { id: number; status: RoleRow['status']; events: StatusEvent[] }, duplicate: { id: number; status: RoleRow['status']; events: StatusEvent[] }): void {
-  const latest = (root: typeof canonical) => substantiveStatusEvents(root.events).at(-1) ?? root.events.at(-1);
-  const c = latest(canonical);
-  const d = latest(duplicate);
+  const canonicalSubstantive = substantiveStatusEvents(canonical.events);
+  const duplicateSubstantive = substantiveStatusEvents(duplicate.events);
+  const c = canonicalSubstantive.at(-1) ?? canonical.events.at(-1);
+  const d = duplicateSubstantive.at(-1) ?? duplicate.events.at(-1);
   for (const [root, claimed] of [[canonical, c], [duplicate, d]] as const) {
     req(!claimed || claimed.status === root.status, `Roles ${canonical.id} (actual ${canonical.status ?? 'no status'}) and ${duplicate.id} (actual ${duplicate.status ?? 'no status'}) need reconciliation: role ${root.id}'s latest evidence claims ${claimed ? stateLabel(claimed) : 'no status'}. Nothing was written. Reconcile with transition or record, or choose a canonical card that already holds the state.`);
+  }
+  // Discovery timestamps describe bookkeeping order, not competing decisions about the posting.
+  if (!canonicalSubstantive.length && !duplicateSubstantive.length) {
+    req(canonical.status === duplicate.status, `The actual card statuses disagree: role ${canonical.id} is ${canonical.status ?? 'no status'} and role ${duplicate.id} is ${duplicate.status ?? 'no status'}. Nothing was written. Reconcile the cards before linking.`);
+    return;
   }
   const canonicalHistory = hasEmployerHistory(canonical.events);
   const duplicateHistory = hasEmployerHistory(duplicate.events);

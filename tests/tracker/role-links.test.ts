@@ -546,13 +546,56 @@ test('the preparatory exception cannot bypass reconciliation of the canonical ca
   assert.equal(t.canonicalRoleId(2), 2);
 });
 
-test('discovery-only groups use their discovery history when choosing the canonical card', (ctx) => {
+test('discovery-only role cards link despite a later duplicate discovery marker', async (ctx) => {
   const t = fresh(ctx);
-  legacyRole(t, 1, [['2026-01-01T00:00:00Z', 'found']]);
-  legacyRole(t, 2, [['2026-01-02T00:00:00Z', 'found']]);
-  t.run("UPDATE events SET actor = 'pipeline'");
+  const canonical = t.upsertRole({ company: 'Acme', title: 'Engineer', url: ONE }).role.id;
+  const duplicate = t.upsertRole({ company: 'Acme', title: 'Engineer copy' }).role.id;
+  t.run("UPDATE events SET ts = '2026-11-01T00:00:00.000Z' WHERE role_id = ?", canonical);
+  t.run("UPDATE events SET ts = '2026-11-01T00:00:00.001Z' WHERE role_id = ?", duplicate);
+  const events = t.q('SELECT * FROM events ORDER BY id');
   const before = storedCounts(t);
-  assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), /after role 1/);
-  assert.deepEqual(storedCounts(t), before);
-  assert.deepEqual(t.linkDuplicateRole({ canonical_role_id: 2, duplicate_role_id: 1, ...LINK }), { canonical_role_id: 2, linked_role_ids: [1] });
+  const result = await call(t)('link_duplicate_role', { canonical_role_id: canonical, duplicate_role_id: duplicate, ...LINK });
+  assert.equal(result.error, '');
+  assert.deepEqual(result.data, { canonical_role_id: canonical, linked_role_ids: [duplicate] });
+  assert.equal(boardView(t).roles.length, 1);
+  assert.deepEqual(t.q('SELECT * FROM events ORDER BY id'), events);
+  assert.deepEqual(storedCounts(t).slice(0, 4), before.slice(0, 4));
+  assert.deepEqual(t.roleDetail({ role_id: canonical }).events.map((e) => e.role_id), [canonical, duplicate]);
+  assert.deepEqual([t.mustRole(canonical).status, t.mustRole(duplicate).status], ['found', 'found']);
 });
+
+for (const mismatchedRoot of [1, 2]) {
+  test(`discovery-only linking refuses a mismatching actual state on root ${mismatchedRoot}`, (ctx) => {
+    const t = fresh(ctx);
+    legacyRole(t, 1, [['2026-11-01T00:00:00.000Z', 'found']]);
+    legacyRole(t, 2, [['2026-11-01T00:00:00.001Z', 'found']]);
+    t.run("UPDATE events SET actor = 'pipeline'");
+    t.run("UPDATE roles SET status = 'verified' WHERE id = ?", mismatchedRoot);
+    const before = storedCounts(t);
+    const rows = t.q('SELECT * FROM roles ORDER BY id');
+    assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), /actual|reconcile/i);
+    assert.deepEqual(storedCounts(t), before);
+    assert.deepEqual(t.q('SELECT * FROM roles ORDER BY id'), rows);
+    assert.equal(t.canonicalRoleId(2), 2);
+  });
+}
+
+for (const decisionRoot of [1, 2]) {
+  for (const [actor, status] of [['user', 'found'], ['import', 'found'], ['pipeline', 'found'], ['pipeline', 'verified']] as const) {
+    test(`a substantive ${actor} ${status} decision on root ${decisionRoot} retains link chronology`, (ctx) => {
+      const t = fresh(ctx);
+      legacyRole(t, 1, [['2026-11-01T00:00:00.000Z', 'found']]);
+      legacyRole(t, 2, [['2026-11-03T00:00:00.000Z', 'found']]);
+      t.run("UPDATE events SET actor = 'pipeline'");
+      t.insertEvent({ role_id: decisionRoot, ts: '2026-11-02T00:00:00.000Z', actor, status, reason: 'Explicit status decision' });
+      const before = storedCounts(t);
+      const rows = t.q('SELECT * FROM roles ORDER BY id');
+      const events = t.q('SELECT * FROM events ORDER BY id');
+      assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), /after role 1/);
+      assert.deepEqual(storedCounts(t), before);
+      assert.deepEqual(t.q('SELECT * FROM roles ORDER BY id'), rows);
+      assert.deepEqual(t.q('SELECT * FROM events ORDER BY id'), events);
+      assert.equal(t.canonicalRoleId(2), 2);
+    });
+  }
+}
