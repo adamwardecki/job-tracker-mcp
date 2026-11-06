@@ -197,6 +197,19 @@ test('the inbox skill reconciles clear missing-role evidence and surfaces strand
   assert.doesNotMatch(s, /for example an acknowledgement for a role still in found/);
 });
 
+test('acknowledgement classification does not depend on current role status', () => {
+  const s = read('skills/inbox-and-calendar/SKILL.md');
+  const acknowledgement = s.split('\n').find((line) => line.startsWith('| **Acknowledgement**')) ?? '';
+  assert.match(acknowledgement, /For a new receipt, always `record` `actor: "user"`, `status: "applied"`/);
+  assert.match(acknowledgement, /regardless of the role's current status/);
+  assert.doesNotMatch(s, /Otherwise `record` a note/);
+  assert.match(s, /inspect `get_role`'s `events` for the same `source`, `source_account` and `source_id`/);
+  assert.match(s, /legacy employer note, keep its stored actor, status, outcome, evidence and occurrence time/);
+  assert.match(s, /Why: replay identity belongs to the message, not the role's current status/);
+  assert.match(s, /Ordering prevents an older receipt from reopening a rejection/);
+  assert.match(s, /Surface a genuine immutable-payload mismatch under Needs you; never invent an id or time/);
+});
+
 test('the inbox skill reads calendars before holding a to-book claim, and checkpoints them at the window end', () => {
   const s = read('skills/inbox-and-calendar/SKILL.md');
   const gather = s.indexOf('### 2. Gather mail');

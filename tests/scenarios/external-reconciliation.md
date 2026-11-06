@@ -53,8 +53,9 @@ the prompt.
 - Expect: the board is read only. In the `queued` variant, `record` `applied` from the acknowledgement
   (`source: "gmail"`, `source_id: "m-310"`, `occurred_at` 2026-10-20), then the board card is recorded as evidence
   with its own key (`source: "jobcopilot"`, `source_id` = `jc-77` plus the date); no second application, no new
-  role. In the `found` variant, `record` returns `status_applied: false` with a `conflict`, and it appears under
-  Needs you with the role.
+  role. In the `found` variant with no substantive local decisions, the sourced acknowledgement establishes
+  `applied` even when its occurrence predates discovery; the discovery timestamp stays unchanged. A variant with
+  a substantive local decision returns `status_applied: false` with a `conflict` under Needs you.
 - Must not: retry the record or force a status; click anything on the board.
 - Result: UNEXECUTED
 
@@ -62,8 +63,9 @@ the prompt.
 
 - Seed: the state after case 3.
 - Input: run the scan again over the same window.
-- Expect: every `record` and `add_interview` returns `duplicate: true` (or no create/update/stale); the report adds
-  nothing new; the checkpoint moves forward only.
+- Expect: already-recorded messages are skipped after checking their keys in `get_role.events`, or replayed
+  with the immutable stored payload. Every replayed `record` and `add_interview` returns `duplicate: true` (or no
+  create/update/stale); the report adds nothing new; the checkpoint moves forward only.
 - Must not: report the replayed events again as new actions.
 - Result: UNEXECUTED
 
@@ -119,3 +121,40 @@ the prompt.
   (`${HERMES_SKILL_DIR}/../../templates/rules.md` on Hermes); the auditor subagent (Hermes `delegate_task`, DSH
   `subagent`) receives the run id and report and returns its coverage and booking checks.
 - Result: UNEXECUTED
+
+### 11. Stable acknowledgement across three scans
+
+- Run both variants on each host: an Acme role initially `queued`, and a missing role discovered by the scan
+  as `found`. Use an isolated scratch database for each variant.
+- Input: Gmail `source: "gmail"`, `source_account: "jobs@example.test"`, immutable `source_id: "ack-601"`,
+  `occurred_at: "2026-10-01T09:00:00Z"`, evidence exactly "Your application for Acme Engineer was received."
+- Scan 1: expect the model to check `get_role.events`, then `record` the new receipt with `actor: "user"`,
+  `status: "applied"`, `role_id`, `reason`, the exact evidence and all four identity fields. The missing variant
+  must preserve its real discovery timestamp. Capture the actual arguments and returned `event_id`.
+- Scan 2: present the identical receipt after the card becomes `applied`. Expect a key check in `get_role.events`,
+  then either skip the recorded message or replay the identical immutable payload. A replay must return the first
+  `event_id`, `duplicate: true`, `status_applied: false`; event count stays unchanged.
+- Before scan 3, record a sourced rejection at `2026-10-20T09:00:00Z` with a distinct message ID. Present the
+  original receipt again. Expect the same key check and skip or identical replay; the rejection stays current,
+  event count stays unchanged, and any replay returns the first receipt's event id with `duplicate: true`.
+- Must not: change actor/status according to the current card, rewrite evidence, invent an id/time, reopen the
+  rejection, or count a plugin submission. Ordering preserves the rejection without reclassifying the receipt.
+- Capture per host and variant: actual `get_role`/`record` calls, receipt and rejection event ids, duplicate flags,
+  event counts before/after each retry, final role status, and the report. Unit MCP tests verify API behavior;
+  only an actual host run establishes that the model chose the stable payload.
+- Results: Claude Code UNEXECUTED; Hermes UNEXECUTED; DeepSeek Harness UNEXECUTED.
+
+### 12. Legacy keyed employer note
+
+- Seed through the scratch MCP server: the acknowledgement from case 11 already recorded as `actor: "employer"`
+  with no status/outcome, the same evidence, source fields and occurrence time. Save its `event_id`.
+- Input: the same receipt is seen again, including after a subsequent rejection.
+- Expect: inspect `get_role.events` and identify the matching source/account/message key; skip it or replay its
+  stored employer-note payload, omitting null status/outcome. An identical replay returns the original `event_id`
+  and `duplicate: true`, with no event or card change. Capture the actual arguments and returned ids.
+- API negative control on the scratch server: converting that key to `actor: "user"`, `status: "applied"` must
+  return an immutable-payload error and leave history unchanged. The model must choose the stable note/skip path;
+  surface a genuine mismatch under Needs you, without inventing another id or time.
+- Capture per host: stored event, actual `get_role`/`record` calls or skip decision, event ids and counts, final
+  status and report. Keep the API negative-control outcome separate from the model's behavior.
+- Results: Claude Code UNEXECUTED; Hermes UNEXECUTED; DeepSeek Harness UNEXECUTED.

@@ -13,6 +13,7 @@ import type { RpcResponse } from '../../plugin/servers/tracker/src/mcp.ts';
 import { makeHandler } from '../../plugin/servers/tracker/src/mcp.ts';
 import { renderReport } from '../../plugin/servers/tracker/src/report.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
+import { isRecord } from '../../plugin/servers/tracker/src/util.ts';
 
 function fresh(ctx: TestContext) {
   const db = openDb(':memory:');
@@ -108,6 +109,85 @@ test('replaying through the MCP tool returns the original event', async (ctx) =>
   assert.equal(second.data?.event_id, first.data?.event_id);
   assert.equal(second.data?.status_applied, false);
   assert.equal(count(t, 'source_id = ?', 'message-1'), 1);
+});
+
+for (const initial of ['queued', 'missing'] as const) {
+  test(`MCP acknowledgement stays identical across three scans from a ${initial} role`, async (ctx) => {
+    ctx.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-06T12:00:00Z') });
+    const t = fresh(ctx);
+    const rpc = call(t);
+    const discovered = initial === 'missing' ? await rpc('upsert_role', { company: 'Acme', title: 'Engineer', source: 'inbound', url: ONE }) : undefined;
+    if (discovered) assert.equal(discovered.error, '');
+    const roleId = discovered ? discovered.data?.role?.id : queued(t);
+    assert.ok(roleId);
+    const receipt = { ...ACK, role_id: roleId };
+    const first = await rpc('record', receipt);
+    assert.equal(first.error, '');
+    assert.equal(first.data?.duplicate, false);
+    assert.equal(first.data?.status_applied, true);
+    assert.equal(first.data?.role?.status, 'applied');
+    assert.equal(typeof first.data?.event_id, 'number');
+    const afterReceipt = count(t);
+
+    const second = await rpc('record', receipt);
+    assert.equal(second.error, '');
+    assert.equal(second.data?.event_id, first.data?.event_id);
+    assert.equal(second.data?.duplicate, true);
+    assert.equal(second.data?.status_applied, false);
+    assert.equal(second.data?.role?.status, 'applied');
+    assert.equal(count(t), afterReceipt);
+
+    const rejection = await rpc('record', { ...REJECTION, role_id: roleId });
+    assert.equal(rejection.error, '');
+    assert.equal(rejection.data?.role?.status, 'closed');
+    const beforeThird = await rpc('get_role', { role_id: roleId });
+    assert.equal(beforeThird.error, '');
+    const afterRejection = count(t);
+    const third = await rpc('record', receipt);
+    assert.equal(third.error, '');
+    assert.equal(third.data?.event_id, first.data?.event_id);
+    assert.equal(third.data?.duplicate, true);
+    assert.equal(third.data?.status_applied, false);
+    assert.equal(third.data?.role?.status, 'closed');
+    assert.equal(count(t), afterRejection);
+    const afterThird = await rpc('get_role', { role_id: roleId });
+    assert.equal(afterThird.error, '');
+    assert.deepEqual(afterThird.data, beforeThird.data, 'replay preserves rejection and the complete event history');
+    assert.equal(count(t, 'source_id = ?', 'message-1'), 1);
+  });
+}
+
+test('MCP legacy keyed employer-note replay preserves its stored payload', async (ctx) => {
+  const t = fresh(ctx);
+  const rpc = call(t);
+  const roleId = queued(t);
+  const { status: _status, ...receipt } = ACK;
+  const first = await rpc('record', { ...receipt, actor: 'employer', role_id: roleId });
+  assert.equal(first.error, '');
+  const detail = await rpc('get_role', { role_id: roleId });
+  assert.equal(detail.error, '');
+  assert.ok(Array.isArray(detail.data?.events));
+  const stored = detail.data.events.find((event: unknown) => isRecord(event) && event.source_id === 'message-1');
+  assert.ok(isRecord(stored));
+  assert.equal(stored.actor, 'employer');
+  assert.equal(stored.status, null);
+  assert.equal(stored.outcome, null);
+  const before = count(t);
+  const replay = await rpc('record', {
+    role_id: roleId, actor: stored.actor, evidence: stored.evidence, reason: stored.reason,
+    source: stored.source, source_account: stored.source_account, source_id: stored.source_id, occurred_at: stored.ts,
+  });
+  assert.equal(replay.error, '');
+  assert.equal(replay.data?.duplicate, true);
+  assert.equal(replay.data?.event_id, first.data?.event_id);
+  assert.equal(replay.data?.status_applied, false);
+  assert.equal(count(t), before);
+  const converted = await rpc('record', { ...ACK, role_id: roleId });
+  assert.match(converted.error, /already recorded with different (actor|status)/);
+  assert.equal(count(t), before);
+  const after = await rpc('get_role', { role_id: roleId });
+  assert.equal(after.error, '');
+  assert.deepEqual(after.data, detail.data, 'neither replay nor rejected conversion rewrites immutable history');
 });
 
 test('the event time is the normalized occurrence, and receipt time is kept apart', (ctx) => {
