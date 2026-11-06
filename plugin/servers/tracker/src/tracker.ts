@@ -1275,7 +1275,7 @@ export class Tracker {
     const entry = this.one<{ snapshot_json: string }>('SELECT snapshot_json FROM interview_external_state WHERE interview_id = ? AND occurred_at = ?', known.id, known.last_occurred_at);
     req(entry, `Interview ${known.id} replay baseline is unknown after upgrade. Nothing was written. Surface this uncertainty under Needs you for reconciliation. Do not alter the key or occurrence time to force a replay; a genuinely newer dated update can establish the baseline.`);
     const last = interviewSnapshot(JSON.parse(entry.snapshot_json) as InterviewValues);
-    requireSameFields(known.source ? `${known.source} id ${known.source_id}` : `Interview ${known.id}`, last, this.interviewValues(a, { ...known, ...last }), INTERVIEW_VALUES);
+    requireSameFields(known.source ? `${known.source} id ${known.source_id}` : `Interview ${known.id}`, last, this.interviewValues({ ...a, state: a.state ?? last.state }, { ...known, ...last }), INTERVIEW_VALUES);
   }
 
   // The interview a call is about: by id, or by the source's own id for it. Either must belong to the role's group.

@@ -605,3 +605,30 @@ test('upgraded interviews replay proven history and surface unknown baselines un
   assert.equal(t.addInterview(ambiguousEvent).stale, true);
   assert.equal(t.addInterview({ role_id: roleId, interview_id: local, stage: 'Screen', notes: 'Still usable' }).updated, true);
 });
+
+test('a cancelled occurrence replay inherits omitted state from its accepted snapshot', async (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const id = t.addInterview({ role_id: roleId, ...EVENT }).interview_id;
+  const cancellation = { role_id: roleId, ...EVENT, occurred_at: '2026-10-04T08:00:00Z' };
+  t.addInterview({ ...cancellation, state: 'cancelled' });
+  const before = snapshot(t, id);
+  const baseline = externalState(t, id);
+  const history = t.q('SELECT * FROM interview_changes ORDER BY id');
+  const events = t.q('SELECT * FROM events ORDER BY id');
+  const bookingNotes = notes(t);
+  const replay = await call(t)('add_interview', cancellation);
+  assert.equal(replay.error, '');
+  assert.deepEqual(replay.data, { interview_id: id, created: false, updated: false, stale: false, state: 'cancelled' });
+  assert.deepEqual(snapshot(t, id), before);
+  assert.deepEqual(externalState(t, id), baseline);
+  assert.deepEqual(t.q('SELECT * FROM interview_changes ORDER BY id'), history);
+  assert.deepEqual(t.q('SELECT * FROM events ORDER BY id'), events);
+  assert.deepEqual(notes(t), bookingNotes);
+  const conflict = await call(t)('add_interview', { ...cancellation, state: 'scheduled' });
+  assert.match(conflict.error, /different state/);
+  assert.deepEqual(snapshot(t, id), before);
+  assert.deepEqual(externalState(t, id), baseline);
+  assert.deepEqual(t.q('SELECT * FROM interview_changes ORDER BY id'), history);
+  assert.deepEqual(t.q('SELECT * FROM events ORDER BY id'), events);
+});
