@@ -15,7 +15,7 @@ import { checkPay } from './pay.ts';
 import type { PostingIdentity, PostingKey } from './posting.ts';
 import { parsePostingUrl, urlIdentity } from './posting.ts';
 import type { RuleListItem, RuleType } from './rules.ts';
-import { assertFreshRevision, decodeDetailCursor, decodeRuleCursor, detailChunk, encodeRuleCursor, normalizeDetailLimit, normalizeRuleLimit, normalizeRuleTypes, packRulePage, RULE_TYPES, resolveRuleFilters } from './rules.ts';
+import { assertFreshDetailRevision, assertFreshRevision, decodeDetailCursor, decodeRuleCursor, detailChunk, detailRevisionMismatch, encodeRuleCursor, normalizeDetailLimit, normalizeRuleLimit, normalizeRuleTypes, packRulePage, RULE_TYPES, resolveRuleFilters } from './rules.ts';
 import { dayBounds, explicitUtcIso, isValidTimeZone, toUtcIso, zoneError } from './time.ts';
 import type { ArgsFor } from './tools.ts';
 import { isRecord, oneOf, parseJson } from './util.ts';
@@ -1063,10 +1063,10 @@ export class Tracker {
     return readTx(this.db, () => {
       const revision = this.rulesRevision();
       if (expected_revision != null) {
-        if (after && expected_revision !== after.revision) throw new ToolError('expected_revision disagrees with the detail cursor revision. Restart list_rules without a cursor and discard all collected pages and chunks.');
-        assertFreshRevision('get_rule', expected_revision, revision);
+        if (after && expected_revision !== after.revision) throw detailRevisionMismatch(expected_revision, after.revision);
+        assertFreshDetailRevision(expected_revision, revision);
       }
-      if (after) assertFreshRevision('get_rule', after.revision, revision);
+      if (after) assertFreshDetailRevision(after.revision, revision);
       const rule = this.one<RuleRow>('SELECT * FROM rules WHERE id = ?', id);
       req(rule, `No rule ${id}`);
       const item: RuleListItem = { ...rule, types: this.ruleTypesFor([id]).get(id)! };

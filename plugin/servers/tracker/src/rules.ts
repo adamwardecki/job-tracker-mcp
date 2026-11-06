@@ -85,6 +85,20 @@ export function assertFreshRevision(tool: string, cursorRevision: number, curren
   }
 }
 
+// get_rule's chunks are only valid against the listing they came from, so a stale detail read restarts the
+// whole collection; restarting get_rule alone would re-hit this error or mix revisions.
+const RESTART_RULE_COLLECTION = 'Discard the rule list and every detail chunk already read, restart list_rules without a cursor from the first page, then fetch each oversized rule again with get_rule passing the new rules_revision as expected_revision.';
+
+export function assertFreshDetailRevision(seenRevision: number, current: number): void {
+  if (seenRevision !== current) {
+    throw new ToolError(`Rules changed since the rule list was read (revision ${seenRevision}, now ${current}). ${RESTART_RULE_COLLECTION}`);
+  }
+}
+
+export function detailRevisionMismatch(expectedRevision: number, cursorRevision: number): ToolError {
+  return new ToolError(`expected_revision ${expectedRevision} disagrees with the detail cursor revision ${cursorRevision}. ${RESTART_RULE_COLLECTION}`);
+}
+
 const RULE_CURSOR_KEYS = ['after_id', 'revision', 'types', 'include_inactive'];
 
 export function encodeRuleCursor({ after_id, revision, types, include_inactive }: RuleCursor): string {

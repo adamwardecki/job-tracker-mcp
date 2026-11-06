@@ -21,6 +21,13 @@ const wellFormed = (s: string) => !/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud8
 // For assert.throws: a ToolError (the kind the model can act on) whose message matches.
 const expectToolError = (re: RegExp) => (e: unknown) => e instanceof ToolError && re.test(e.message);
 const size = (v: unknown) => Buffer.byteLength(JSON.stringify(v, null, 2), 'utf8');
+// A stale detail read must send the model back to the first list page, not to get_rule: a get_rule restart
+// re-hits the same error or mixes a detail from one revision with a listing from another.
+const RESTART_LIST = /discard the rule list and every detail chunk.*restart list_rules without a cursor from the first page.*new rules_revision as expected_revision/is;
+const sendsBackToList = (message: string) => {
+  assert.match(message, RESTART_LIST);
+  assert.doesNotMatch(message, /Restart get_rule/i);
+};
 
 function fresh(ctx: TestContext) {
   const db = openDb(':memory:');
@@ -223,12 +230,17 @@ test('a rules change between chunks refuses the next chunk and says to restart',
   const id = t.addRule({ text: 'q'.repeat(9000), reason: 'r' }).rule_id;
   const first = t.getRule({ id, limit: 1000 });
   t.addRule({ text: 'another', reason: 'r' });
-  assert.throws(() => t.getRule({ id, cursor: first.next_cursor, limit: 1000 }), expectToolError(/Rules changed.*Restart get_rule without a cursor/));
+  assert.throws(() => t.getRule({ id, cursor: first.next_cursor, limit: 1000 }), (e: unknown) => {
+    assert.ok(e instanceof ToolError);
+    assert.match(e.message, /Rules changed/);
+    sendsBackToList(e.message);
+    return true;
+  });
   // Starting over works and reads the new revision.
   const again = t.getRule({ id, limit: 1000 });
   assert.equal(again.rules_revision, first.rules_revision + 1);
   t.setRuleTypes({ id, types: ['forms'] });
-  assert.throws(() => t.getRule({ id, cursor: again.next_cursor }), expectToolError(/Restart get_rule/));
+  assert.throws(() => t.getRule({ id, cursor: again.next_cursor }), expectToolError(RESTART_LIST));
 });
 
 test('a rule that does not exist is an error the model can act on', (ctx) => {
@@ -319,7 +331,8 @@ test('a rule added through a second connection after the final list page rejects
   assert.equal(listed.next_cursor, null);
   const added = other.addRule({ text: 'New applicable rule', reason: 'r', types: ['scoring'] }).rule_id;
   const detail = await call('get_rule', { id, expected_revision: listed.rules_revision });
-  assert.match(JSON.parse(detail.content[0].text).error ?? '', /Rules changed.*Restart/);
+  assert.match(JSON.parse(detail.content[0].text).error ?? '', /Rules changed/);
+  sendsBackToList(JSON.parse(detail.content[0].text).error ?? '');
   assert.equal(detail.isError, true);
   assert.equal(detail.structuredContent, undefined, 'no usable chunk on a stale collection');
   const restarted = await call('list_rules', { types: ['scoring'] });
@@ -340,11 +353,40 @@ for (const mutation of ['deactivation', 'reclassification'] as const) {
     else other.setRuleTypes({ id, types: ['forms'] });
     const detail = await call('get_rule', { id, expected_revision: listed.rules_revision });
     assert.equal(detail.isError, true);
-    assert.match(JSON.parse(detail.content[0].text).error, /Rules changed.*Restart/);
+    assert.match(JSON.parse(detail.content[0].text).error, /Rules changed/);
+    sendsBackToList(JSON.parse(detail.content[0].text).error);
     assert.equal(detail.structuredContent, undefined);
     assert.deepEqual((await call('list_rules', { types: ['scoring'] })).structuredContent!.rules, []);
   });
 }
+
+test('a rule added between the list and the first detail chunk sends the model back to list_rules', (ctx) => {
+  const t = fresh(ctx);
+  const id = t.addRule({ text: 'x'.repeat(25000), reason: 'r', types: ['scoring'] }).rule_id;
+  const listed = t.listRules({ types: ['scoring'] });
+  t.addRule({ text: 'New applicable rule', reason: 'r', types: ['scoring'] });
+  assert.throws(() => t.getRule({ id, expected_revision: listed.rules_revision }), (e: unknown) => {
+    assert.ok(e instanceof ToolError);
+    assert.match(e.message, new RegExp(`Rules changed.*revision ${listed.rules_revision}, now ${listed.rules_revision + 1}`));
+    sendsBackToList(e.message);
+    return true;
+  });
+});
+
+test('a rule changed between detail chunks sends the model back to list_rules', (ctx) => {
+  const t = fresh(ctx);
+  const id = t.addRule({ text: 'x'.repeat(25000), reason: 'r', types: ['scoring'] }).rule_id;
+  const revision = t.listRules({ types: ['scoring'] }).rules_revision;
+  const first = t.getRule({ id, expected_revision: revision });
+  assert.ok(first.next_cursor);
+  t.setRuleTypes({ id, types: ['forms'] });
+  assert.throws(() => t.getRule({ id, cursor: first.next_cursor, expected_revision: revision }), (e: unknown) => {
+    assert.ok(e instanceof ToolError);
+    assert.match(e.message, /Rules changed/);
+    sendsBackToList(e.message);
+    return true;
+  });
+});
 
 test('a matching collection revision succeeds on every detail chunk', (ctx) => {
   const t = fresh(ctx);
@@ -363,7 +405,8 @@ test('a second-connection mutation between detail chunks rejects the collection 
   other.addRule({ text: 'New rule', reason: 'r', types: ['scoring'] });
   const next = await call('get_rule', { id, cursor: first.next_cursor, expected_revision: revision });
   assert.equal(next.isError, true);
-  assert.match(JSON.parse(next.content[0].text).error, /Rules changed.*Restart/);
+  assert.match(JSON.parse(next.content[0].text).error, /Rules changed/);
+  sendsBackToList(JSON.parse(next.content[0].text).error);
   assert.equal(next.structuredContent, undefined);
 });
 
@@ -375,7 +418,8 @@ test('an explicit revision that disagrees with the detail cursor is refused', as
   assert.ok(first.next_cursor);
   const next = await call('get_rule', { id, cursor: first.next_cursor, expected_revision: first.rules_revision + 1 });
   assert.equal(next.isError, true);
-  assert.match(JSON.parse(next.content[0].text).error, /expected_revision.*cursor.*Restart/);
+  assert.match(JSON.parse(next.content[0].text).error, /expected_revision.*disagrees.*cursor/);
+  sendsBackToList(JSON.parse(next.content[0].text).error);
   assert.equal(next.structuredContent, undefined);
 });
 
@@ -406,5 +450,6 @@ test('zero is a valid expected_revision and a stale zero requests a collection r
   const id = t.addRule({ text: 'Rule', reason: 'r' }).rule_id;
   const detail = await protocol(t)('get_rule', { id, expected_revision: 0 });
   assert.equal(detail.isError, true);
-  assert.match(JSON.parse(detail.content[0].text).error, /Rules changed.*Restart/);
+  assert.match(JSON.parse(detail.content[0].text).error, /Rules changed/);
+  sendsBackToList(JSON.parse(detail.content[0].text).error);
 });
