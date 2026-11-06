@@ -1,6 +1,9 @@
 // Bounded list_rules pages and get_rule: oversized rules arrive intact, in pieces, and never as partial JSON.
 
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { TestContext } from 'node:test';
 import { test } from 'node:test';
 import type { RuleRow } from '../../plugin/servers/tracker/src/db.ts';
@@ -26,11 +29,13 @@ function fresh(ctx: TestContext) {
 }
 
 // Every chunk of a rule, in order, checked against the byte budget as it arrives.
-function readDetail(t: Tracker, id: number, limit?: number) {
+function readDetail(t: Tracker, id: number, limit?: number, expected_revision?: number) {
   const chunks: string[] = [];
   let cursor: string | null = null;
   do {
-    const part: ReturnType<Tracker['getRule']> = t.getRule({ id, cursor, limit });
+    const part: ReturnType<Tracker['getRule']> = t.getRule({ id, cursor, limit, expected_revision });
+    expected_revision ??= part.rules_revision;
+    assert.equal(part.rules_revision, expected_revision, 'all detail chunks share the collection revision');
     assert.ok(size(part) <= BUDGET, `chunk of ${size(part)} bytes`);
     assert.ok(part.chunk.length > 0, 'empty chunk');
     chunks.push(part.chunk);
@@ -47,7 +52,7 @@ test('an oversized rule is a detail reference in the list and arrives intact thr
   const page = t.listRules();
   assert.ok(size(page) <= BUDGET);
   assert.deepEqual(page.rules, [{ id: ruleId, types: ['forms', 'writing'], requires_detail: true }]);
-  const chunks = readDetail(t, ruleId);
+  const chunks = readDetail(t, ruleId, undefined, page.rules_revision);
   assert.ok(chunks.length > 1);
   const rule = JSON.parse(chunks.join(''));
   assert.equal(rule.text, originalText);
@@ -67,16 +72,18 @@ function stored(t: Tracker, id: number) {
 function collect(t: Tracker, args: Parameters<Tracker['listRules']>[0]) {
   const rules: Partial<RuleRow>[] = [];
   let page = t.listRules(args);
+  const revision = page.rules_revision;
   let lastId = 0;
   // Every page holds at least one rule, so a pager that needs more pages than there are rules is stuck.
   for (let n = 0; ; n++) {
     if (n > page.total) assert.fail(`still paging after ${n} pages for ${page.total} rules`);
+    assert.equal(page.rules_revision, revision, 'all pages share the collection revision');
     assert.ok(size(page) <= BUDGET, `page of ${size(page)} bytes`);
     assert.ok(page.rules.length > 0 || page.total === 0, 'empty page while rules remain');
     for (const r of page.rules) {
       assert.ok(r.id > lastId, `rule ${r.id} after ${lastId}: the pager did not advance`);
       lastId = r.id;
-      rules.push(r.requires_detail ? JSON.parse(readDetail(t, r.id).join('')) : r);
+      rules.push(r.requires_detail ? JSON.parse(readDetail(t, r.id, undefined, revision).join('')) : r);
     }
     if (!page.next_cursor) break;
     page = t.listRules({ cursor: page.next_cursor, limit: args?.limit });
@@ -280,4 +287,124 @@ test('get_rule through the protocol: argument limits and the text result stay in
   const text = (list.result as { content: [{ text: string }] }).content[0].text;
   assert.ok(Buffer.byteLength(text, 'utf8') <= BUDGET);
   assert.equal(JSON.parse(text).rules[0].requires_detail, undefined);
+});
+
+function sharedDb(ctx: TestContext) {
+  const dir = mkdtempSync(join(tmpdir(), 'rule-detail-'));
+  const db = openDb(join(dir, 'tracker.db'));
+  const otherDb = openDb(join(dir, 'tracker.db'));
+  ctx.after(() => { otherDb.close(); db.close(); rmSync(dir, { recursive: true, force: true }); });
+  const t = new Tracker(db);
+  const other = new Tracker(otherDb);
+  return { t, other };
+}
+
+function protocol(t: Tracker) {
+  const handle = makeHandler(t);
+  return async (name: string, args: Record<string, unknown>) => {
+    const res = (await handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } })) as RpcResponse;
+    return res.result as { isError: boolean; content: [{ text: string }]; structuredContent?: Record<string, unknown> };
+  };
+}
+
+// Catch the final-page gap: there is no list cursor left to detect a concurrent write.
+test('a rule added through a second connection after the final list page rejects the first detail chunk', async (ctx) => {
+  const { t, other } = sharedDb(ctx);
+  const call = protocol(t);
+  const id = t.addRule({ text: 'x'.repeat(25000), reason: 'r', types: ['scoring'] }).rule_id;
+  const page = await call('list_rules', { types: ['scoring'] });
+  assert.equal(page.isError, false);
+  const listed = page.structuredContent!;
+  assert.deepEqual(listed.rules, [{ id, types: ['scoring'], requires_detail: true }]);
+  assert.equal(listed.next_cursor, null);
+  const added = other.addRule({ text: 'New applicable rule', reason: 'r', types: ['scoring'] }).rule_id;
+  const detail = await call('get_rule', { id, expected_revision: listed.rules_revision });
+  assert.match(JSON.parse(detail.content[0].text).error ?? '', /Rules changed.*Restart/);
+  assert.equal(detail.isError, true);
+  assert.equal(detail.structuredContent, undefined, 'no usable chunk on a stale collection');
+  const restarted = await call('list_rules', { types: ['scoring'] });
+  assert.deepEqual((restarted.structuredContent!.rules as { id: number }[]).map((r) => r.id), [id, added]);
+  const complete = collect(t, { types: ['scoring'] }).rules;
+  assert.deepEqual(complete.map((r) => r.text), ['x'.repeat(25000), 'New applicable rule']);
+});
+
+for (const mutation of ['deactivation', 'reclassification'] as const) {
+  test(`a rule ${mutation} after the final list page rejects the first detail chunk`, async (ctx) => {
+    const { t, other } = sharedDb(ctx);
+    const call = protocol(t);
+    const id = t.addRule({ text: 'x'.repeat(25000), reason: 'r', types: ['scoring'] }).rule_id;
+    const listed = (await call('list_rules', { types: ['scoring'] })).structuredContent!;
+    assert.equal(listed.next_cursor, null);
+    assert.deepEqual(listed.rules, [{ id, types: ['scoring'], requires_detail: true }]);
+    if (mutation === 'deactivation') other.deactivateRule({ id });
+    else other.setRuleTypes({ id, types: ['forms'] });
+    const detail = await call('get_rule', { id, expected_revision: listed.rules_revision });
+    assert.equal(detail.isError, true);
+    assert.match(JSON.parse(detail.content[0].text).error, /Rules changed.*Restart/);
+    assert.equal(detail.structuredContent, undefined);
+    assert.deepEqual((await call('list_rules', { types: ['scoring'] })).structuredContent!.rules, []);
+  });
+}
+
+test('a matching collection revision succeeds on every detail chunk', (ctx) => {
+  const t = fresh(ctx);
+  const id = t.addRule({ text: 'x'.repeat(25000), reason: 'r', types: ['scoring'] }).rule_id;
+  const page = t.listRules({ types: ['scoring'] });
+  assert.equal(JSON.parse(readDetail(t, id, 4000, page.rules_revision).join('')).text, 'x'.repeat(25000));
+});
+
+test('a second-connection mutation between detail chunks rejects the collection revision', async (ctx) => {
+  const { t, other } = sharedDb(ctx);
+  const call = protocol(t);
+  const id = t.addRule({ text: 'x'.repeat(25000), reason: 'r', types: ['scoring'] }).rule_id;
+  const revision = t.listRules({ types: ['scoring'] }).rules_revision;
+  const first = (await call('get_rule', { id, expected_revision: revision })).structuredContent!;
+  assert.ok(first.next_cursor);
+  other.addRule({ text: 'New rule', reason: 'r', types: ['scoring'] });
+  const next = await call('get_rule', { id, cursor: first.next_cursor, expected_revision: revision });
+  assert.equal(next.isError, true);
+  assert.match(JSON.parse(next.content[0].text).error, /Rules changed.*Restart/);
+  assert.equal(next.structuredContent, undefined);
+});
+
+test('an explicit revision that disagrees with the detail cursor is refused', async (ctx) => {
+  const t = fresh(ctx);
+  const call = protocol(t);
+  const id = t.addRule({ text: 'x'.repeat(25000), reason: 'r' }).rule_id;
+  const first = t.getRule({ id });
+  assert.ok(first.next_cursor);
+  const next = await call('get_rule', { id, cursor: first.next_cursor, expected_revision: first.rules_revision + 1 });
+  assert.equal(next.isError, true);
+  assert.match(JSON.parse(next.content[0].text).error, /expected_revision.*cursor.*Restart/);
+  assert.equal(next.structuredContent, undefined);
+});
+
+test('omitting expected_revision preserves direct first-chunk reads after a rule change', async (ctx) => {
+  const { t, other } = sharedDb(ctx);
+  const id = t.addRule({ text: 'x'.repeat(25000), reason: 'r' }).rule_id;
+  const before = t.listRules().rules_revision;
+  other.addRule({ text: 'New rule', reason: 'r' });
+  const detail = await protocol(t)('get_rule', { id });
+  assert.equal(detail.isError, false);
+  assert.equal(detail.structuredContent!.rules_revision, before + 1);
+  assert.ok(detail.structuredContent!.chunk);
+});
+
+for (const expected_revision of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+  test(`MCP rejects invalid expected_revision ${expected_revision}`, async (ctx) => {
+    const t = fresh(ctx);
+    const id = t.addRule({ text: 'Rule', reason: 'r' }).rule_id;
+    const detail = await protocol(t)('get_rule', { id, expected_revision });
+    assert.equal(detail.isError, true);
+    assert.match(JSON.parse(detail.content[0].text).error, /expected_revision/);
+    assert.equal(detail.structuredContent, undefined);
+  });
+}
+
+test('zero is a valid expected_revision and a stale zero requests a collection restart', async (ctx) => {
+  const t = fresh(ctx);
+  const id = t.addRule({ text: 'Rule', reason: 'r' }).rule_id;
+  const detail = await protocol(t)('get_rule', { id, expected_revision: 0 });
+  assert.equal(detail.isError, true);
+  assert.match(JSON.parse(detail.content[0].text).error, /Rules changed.*Restart/);
 });

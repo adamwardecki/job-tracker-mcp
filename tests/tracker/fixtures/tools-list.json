@@ -768,7 +768,7 @@
   },
   {
     "name": "get_rule",
-    "description": "Read one whole rule in chunks. Only for a list_rules entry marked requires_detail. Call until next_cursor is null, join every chunk in order, then JSON.parse the result. Never act on a partial chunk. If rules changed meanwhile, the cursor is refused: restart without it.",
+    "description": "Read one whole rule in chunks. Only for a list_rules entry marked requires_detail. Pass the listing rules_revision as expected_revision on the first call for every rule, and compare every returned revision with it. Call until next_cursor is null, join every chunk in order, then JSON.parse the result. Never act on a partial chunk. If rules changed or revisions disagree, discard all list pages and detail chunks and restart list_rules without a cursor.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -783,6 +783,10 @@
         "limit": {
           "type": "integer",
           "description": "Chunk size in characters, 1 to 4000 (default 4000)"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "description": "The listing rules_revision; a nonnegative safe integer. Pass on the first chunk to bind it to the collection"
         }
       },
       "required": [

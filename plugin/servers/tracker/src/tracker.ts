@@ -1055,12 +1055,17 @@ export class Tracker {
   }
 
   // One rule as list_rules would show it, in pieces of its JSON text. For a rule list_rules marked requires_detail.
-  getRule({ id, cursor, limit }: ArgsFor<'get_rule'>) {
+  getRule({ id, cursor, limit, expected_revision }: ArgsFor<'get_rule'>) {
     const after = cursor == null ? null : decodeDetailCursor(cursor);
     const size = normalizeDetailLimit(limit);
+    if (expected_revision != null && (!Number.isSafeInteger(expected_revision) || expected_revision < 0)) throw new ToolError('expected_revision must be a nonnegative safe integer from list_rules.rules_revision.');
     if (after && after.id !== id) throw new ToolError(`cursor belongs to rule ${after.id}, not rule ${id}. Restart get_rule for rule ${id} without a cursor.`);
     return readTx(this.db, () => {
       const revision = this.rulesRevision();
+      if (expected_revision != null) {
+        if (after && expected_revision !== after.revision) throw new ToolError('expected_revision disagrees with the detail cursor revision. Restart list_rules without a cursor and discard all collected pages and chunks.');
+        assertFreshRevision('get_rule', expected_revision, revision);
+      }
       if (after) assertFreshRevision('get_rule', after.revision, revision);
       const rule = this.one<RuleRow>('SELECT * FROM rules WHERE id = ?', id);
       req(rule, `No rule ${id}`);

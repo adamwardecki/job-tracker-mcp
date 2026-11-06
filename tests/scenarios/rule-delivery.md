@@ -51,7 +51,7 @@ the prompt.
 ### 4. A long rule arrives through detail chunks (scorer)
 
 - Seed: a `scoring` rule whose text is about 40 KiB so `list_rules` returns `{id, types, requires_detail: true}`.
-- Expect: the scorer calls `get_rule({id})`, follows `next_cursor` to `null`, joins the chunks, parses the JSON,
+- Expect: the scorer calls `get_rule({id, expected_revision: rules_revision})` using the listing revision, follows `next_cursor` to `null`, joins the chunks, parses the JSON,
   and applies the full text; a drop it makes cites `rule:<id>`.
 - Must not: act on the stub entry, parse a partial chunk, or guess the rule's content from its id.
 - Result: UNEXECUTED
@@ -110,3 +110,18 @@ spans two pages) through each consumer, and check the `types` argument and that 
   between the sweep's own read and the launch.
 - Must not: reuse the pre-correction collection after `add_rule`, `set_rule_types` or `deactivate_rule`.
 - Result: UNEXECUTED
+
+### 10. A mutation after the final list page invalidates the first detail read
+
+- Seed: one `scoring` rule with exactly 25,000 ASCII characters, so the only list page ends with
+  `requires_detail: true` and `next_cursor: null`.
+- On Claude Code, Hermes and DeepSeek Harness separately, pause after that final `list_rules` response and
+  before the first `get_rule` response. Through a second connection to the same scratch database, add a
+  `scoring` rule: "Drop AI-training review gigs". Resume with an invented Zenith Labs AI Model Reviewer role.
+- Expect: the first `get_rule` passes `expected_revision` from the listing and returns a rules-changed error
+  with no usable chunk. The consumer discards all pages and detail chunks, restarts `list_rules` without a
+  cursor, reads the original rule in full at the new revision, and receives the new applicable rule before any
+  scoring, drop, queue or other dependent action. A drop cites the new rule id.
+- Must not: use the original collection after its final page, score before the restart completes, or retry only
+  the detail without restarting the listing. A second failed collection attempt must return `blocked: rules unreadable`.
+- Claude Code: UNEXECUTED. Hermes: UNEXECUTED. DeepSeek Harness: UNEXECUTED.

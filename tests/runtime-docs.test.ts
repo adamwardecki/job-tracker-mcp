@@ -93,7 +93,7 @@ test('the shared Reading rules section carries the whole protocol and its reason
   const rules = read('templates/rules.md');
   const s = rules.slice(rules.indexOf('## Reading rules'));
   assert.ok(rules.includes('## Reading rules'), 'templates/rules.md has a Reading rules section');
-  for (const needle of ['`next_cursor`', '`requires_detail`', '`get_rule`', 'JSON.parse', 'discard', 'two attempts', '`blocked: rules unreadable`', 'only if nothing wrote a rule since', '`add_rule`, `set_rule_types`, `deactivate_rule`', 'A subagent always reads its own', 'Why: ']) assert.ok(s.includes(needle), needle);
+  for (const needle of ['`next_cursor`', '`rules_revision`', '`expected_revision`', 'first call for every oversized rule', 'Compare every page and detail response', 'discard all list pages and detail chunks together', '`requires_detail`', '`get_rule`', 'JSON.parse', 'discard', 'two attempts', '`blocked: rules unreadable`', 'only if nothing wrote a rule since', '`add_rule`, `set_rule_types`, `deactivate_rule`', 'A subagent always reads its own', 'Why: ']) assert.ok(s.includes(needle), needle);
 });
 
 // File -> the rule types its "Reading rules" line names (spec B, consumer mapping). [] means all types.
