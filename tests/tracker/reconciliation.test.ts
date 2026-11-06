@@ -46,6 +46,35 @@ const REJECTION = { actor: 'employer', status: 'closed', outcome: 'rejected', re
 const count = (t: Tracker, where = '1 = 1', ...params: (string | number)[]) => t.one<{ n: number }>(`SELECT COUNT(*) AS n FROM events WHERE ${where}`, ...params)?.n ?? 0;
 const status = (t: Tracker, id: number) => t.roleDetail({ role_id: id }).role.status;
 
+test('a historical receipt establishes a newly discovered application without backdating discovery', async (ctx) => {
+  ctx.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-06T12:00:00Z') });
+  const t = fresh(ctx);
+  const rpc = call(t);
+  const discovered = await rpc('upsert_role', { company: 'Example Labs', title: 'Engineer', source: 'inbound', url: 'https://jobs.ashbyhq.com/example/one' });
+  assert.equal(discovered.error, '');
+  const id = discovered.data?.role?.id;
+  assert.ok(id);
+  const discovery = t.roleDetail({ role_id: id }).events[0];
+  assert.ok(discovery);
+  const firstSeen = t.mustRole(id).first_seen;
+  const result = await rpc('record', { ...ACK, role_id: id, occurred_at: '2026-11-06T11:00:00Z' });
+  assert.equal(result.error, '');
+  assert.equal(result.data?.status_applied, true);
+  assert.equal(result.data?.role?.status, 'applied');
+  assert.equal(result.data?.conflict, undefined);
+  assert.equal(t.pipelineSummary().awaiting_reply, 1);
+  assert.equal(t.findCompany({ name: 'Example Labs' }).live_application, true);
+  const events = t.roleDetail({ role_id: id }).events;
+  assert.deepEqual(events.map((e) => e.status), ['applied', 'found']);
+  assert.deepEqual(events.find((e) => e.id === discovery.id), discovery);
+  assert.equal(t.mustRole(id).first_seen, firstSeen);
+  const other = t.upsertRole({ company: 'Example Labs', title: 'Designer', url: 'https://jobs.ashbyhq.com/example/two' }).role.id;
+  t.transition({ role_id: other, to: 'verified', reason: 'Employer posting', evidence: 'https://jobs.ashbyhq.com/example/two Remote', location_line: 'Remote', location_type: 'remote' });
+  const gate = t.gateCheck({ role_id: other });
+  assert.equal(gate.live_elsewhere, true);
+  assert.equal(gate.ok, false);
+});
+
 test('replaying an acknowledgement adds one event', (ctx) => {
   const t = fresh(ctx);
   const roleId = queued(t);
@@ -432,4 +461,121 @@ test('of two status events at the same time the later row speaks for the role', 
   const ack = t.record({ ...ACK, role_id: roleId, occurred_at: at });
   assert.equal(ack.conflict, undefined, 'it repeats the status of the later row');
   assert.equal(ack.status_applied, false);
+});
+
+for (const order of ['receipt first', 'rejection first'] as const) {
+  test(`historical receipt and newer rejection before discovery: ${order}`, (ctx) => {
+    const t = fresh(ctx);
+    const id = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+    const inputs = order === 'receipt first' ? [ACK, REJECTION] : [REJECTION, ACK];
+    for (const input of inputs) {
+      const result = t.record({ ...input, role_id: id });
+      assert.equal(result.status_applied, input === REJECTION || order === 'receipt first');
+      assert.equal(result.conflict, undefined);
+    }
+    assert.equal(status(t, id), 'closed');
+    assert.equal(count(t, 'role_id = ?', id), 3);
+  });
+}
+
+for (const outcome of ['rejected', 'withdrawn', 'role_closed']) {
+  test(`a clear historical ${outcome} establishes a newly discovered closed role`, (ctx) => {
+    const t = fresh(ctx);
+    const id = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+    const result = t.record({ ...REJECTION, role_id: id, outcome });
+    assert.equal(result.status_applied, true);
+    assert.equal(result.conflict, undefined);
+    assert.equal(status(t, id), 'closed');
+    assert.equal(count(t, 'role_id = ?', id), 2);
+  });
+}
+
+test('equal-time contradictory historical evidence does not replace a bootstrapped receipt', (ctx) => {
+  const t = fresh(ctx);
+  const id = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+  assert.equal(t.record({ ...ACK, role_id: id }).status_applied, true);
+  const rejection = t.record({ ...REJECTION, role_id: id, occurred_at: ACK.occurred_at });
+  assert.equal(rejection.status_applied, false);
+  assert.match(String(rejection.conflict), /same time/);
+  assert.equal(status(t, id), 'applied');
+  assert.equal(count(t, 'role_id = ?', id), 3);
+});
+
+for (const decision of ['queued', 'dropped', 'closed']) {
+  test(`a later user ${decision} decision survives an older receipt`, (ctx) => {
+    const t = fresh(ctx);
+    const id = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+    assert.equal(t.record({ ...ACK, role_id: id }).status_applied, true);
+    t.record({ role_id: id, status: decision, actor: 'user', reason: 'User decision', evidence: 'User decided', ...(decision === 'closed' ? { outcome: 'withdrawn' } : {}) });
+    const result = t.record({ ...ACK, role_id: id, source_id: 'older-receipt', occurred_at: '2026-10-02T09:00:00Z' });
+    assert.equal(result.status_applied, false);
+    assert.equal(result.conflict, undefined);
+    assert.equal(status(t, id), decision);
+    assert.equal(count(t, 'role_id = ?', id), 4);
+  });
+}
+
+for (const [label, actor, statusValue] of [['second found', 'pipeline', 'found'], ['import status', 'import', 'applied'], ['earlier local decision', 'user', 'found']] as const) {
+  test(`a found card with a ${label} cannot bootstrap past a substantive local decision`, (ctx) => {
+    const t = fresh(ctx);
+    const id = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+    t.run('INSERT INTO events(role_id, ts, status, actor, reason) VALUES(?, ?, ?, ?, ?)', id, label === 'earlier local decision' ? '2026-09-01T00:00:00Z' : '2026-11-01T00:00:00Z', statusValue, actor, 'Explicit decision');
+    const result = t.record({ ...ACK, role_id: id });
+    assert.equal(result.status_applied, false);
+    assert.match(String(result.conflict), /found|decision|reconcil/i);
+    assert.equal(status(t, id), 'found');
+    assert.equal(count(t, 'role_id = ?', id), 3);
+  });
+}
+
+test('a substantive local decision retained on a child prevents bootstrap of its found group', (ctx) => {
+  const t = fresh(ctx);
+  const root = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+  const child = t.upsertRole({ company: 'Acme', title: 'Engineer copy' }).role.id;
+  t.linkDuplicateRole({ canonical_role_id: root, duplicate_role_id: child, reason: 'Same posting', evidence: 'Requisition 42' });
+  t.run("INSERT INTO events(role_id, ts, status, actor, reason) VALUES(?, '2026-09-01T00:00:00Z', 'found', 'user', 'User reset')", child);
+  const result = t.record({ ...ACK, role_id: root });
+  assert.equal(result.status_applied, false);
+  assert.ok(result.conflict);
+  assert.equal(status(t, root), 'found');
+  assert.equal(count(t), 4);
+});
+
+test('bootstrap needs nonblank evidence and a valid closed outcome', async (ctx) => {
+  const t = fresh(ctx);
+  const id = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+  const rpc = call(t);
+  assert.match((await rpc('record', { ...ACK, role_id: id, evidence: '  ' })).error, /applied needs evidence/);
+  assert.match((await rpc('record', { ...REJECTION, role_id: id, outcome: 'other' })).error, /outcome/);
+  const emptyClosed = t.record({ ...REJECTION, role_id: id, evidence: '  ' });
+  assert.equal(emptyClosed.status_applied, false);
+  assert.ok(emptyClosed.conflict);
+  assert.equal(status(t, id), 'found');
+  assert.equal(count(t), 2);
+});
+
+test('bookings and other external statuses cannot bootstrap an application', (ctx) => {
+  const t = fresh(ctx);
+  const id = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+  t.addInterview({ role_id: id, stage: 'screen', link: 'https://calendar.example.test/one' });
+  assert.equal(status(t, id), 'found');
+  for (const next of ['interviewing', 'offer', 'queued']) {
+    const result = t.record({ ...ACK, role_id: id, status: next, source_id: next, occurred_at: '2026-10-02T09:00:00Z' });
+    assert.equal(result.status_applied, false);
+    assert.ok(result.conflict);
+    assert.equal(status(t, id), 'found');
+  }
+  assert.throws(() => t.transition({ role_id: id, to: 'applied', reason: 'No bypass', evidence: 'Sent' }), /Illegal transition/);
+});
+
+test('retrying a legacy stranded receipt does not reproject it', (ctx) => {
+  const t = fresh(ctx);
+  const id = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+  t.insertEvent({ ...ACK, role_id: id, ts: '2026-10-01T09:00:00.000Z' }, { projectStatus: false });
+  const before = count(t);
+  const result = t.record({ ...ACK, role_id: id });
+  assert.equal(result.duplicate, true);
+  assert.equal(result.status_applied, false);
+  assert.equal(status(t, id), 'found');
+  assert.equal(count(t), before);
 });

@@ -153,12 +153,19 @@ nothing is written. `source` is trimmed and lowercased (`Gmail` and `gmail` are 
   `blocked_by`, evidence or `occurred_at` under the same key is an error, so a changed payload is never discarded.
   The same `source_id` in another account is another event.
 - **Chronology.** The event is always appended. `roles.status` moves (`status_applied: true`) only when the event
-  happened after every status event of the role's whole group and the status machine allows the move from the
-  current status. An older event (a late acknowledgement of an application that was already rejected) is recorded
-  with `status_applied: false` and no conflict. An event at exactly the time of a different status, or a newer
-  one the machine forbids (for example `interviewing` after a rejection, or `applied` on a role still in
-  `found`), is recorded as evidence with `status_applied: false` and a `conflict` that says why. Nothing is forced,
-  and nothing reopens a closed role. Settle those with `transition` or the user.
+  happened after every substantive status event of the role's whole group and the status machine allows the move.
+  Only each member's first inserted status event is ignored when it is an unsourced pipeline `found`: that marks
+  discovery, not an application. Later `found` events, user/import decisions and all other statuses remain barriers.
+  An older event (a late acknowledgement of an application already rejected) is recorded with `status_applied: false`
+  and no conflict. An event at exactly the time of a different status, or a newer one the machine forbids (for example
+  `interviewing` after a rejection), stays evidence-only with a `conflict`. Nothing reopens a closed role.
+- **Missing-role bootstrap.** A keyed `record` with nonblank evidence may establish `applied` or `closed` (with
+  `rejected`, `withdrawn` or `role_closed`) on a `found` card whose whole group has no non-discovery local status
+  decisions. Substantive evidence is ordered first: newer rejections and equal-time contradictions still win.
+  Discovery timestamps stay unchanged; no verification, scoring or queue events are fabricated. Other statuses,
+  `transition`, unkeyed `record` and interview bookings do not gain this exception. A found card that disagrees with
+  substantive history returns an actionable conflict for explicit reconciliation. Replaying an old already-recorded
+  stranded receipt remains a no-op: it never silently reprojects the stored evidence or repairs old databases.
 - **Not a submission.** An imported `applied` event keeps its `source`, so reports do not count it as an application
   the plugin submitted. It still counts for `gate_check`: a posting applied to before stays `previous_application`.
 - Calls without the four fields are unchanged: `event_id` and `status_applied` (whether a status was written) are

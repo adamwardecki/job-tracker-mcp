@@ -432,7 +432,7 @@
   },
   {
     "name": "record",
-    "description": "Append a validated event without the state-machine check: outcomes from outside (rejection, invite, user decision) or a note (omit status). For a message or board record pass source, source_account, source_id and occurred_at: replaying the same occurrence returns the original event_id (duplicate: true), a changed payload under one id is an error, and the status moves only if it is newer than the role's latest status event and the status machine allows it (status_applied; conflict says why not).",
+    "description": "Append a validated external outcome or note (omit status); unkeyed events bypass the state machine. For a message or board record pass source, source_account, source_id and occurred_at: identical replay returns the original event_id (duplicate: true); changed payload under one id is an error. Status moves only after substantive group history and when the machine allows it, except clear evidence can establish applied or closed on a found card with no local status decisions. Initial discovery markers do not decide order. Returns status_applied and any conflict; replay never reprojects stranded history.",
     "inputSchema": {
       "type": "object",
       "properties": {

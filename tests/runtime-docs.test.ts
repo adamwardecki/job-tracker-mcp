@@ -188,6 +188,15 @@ test('the inbox skill treats results correctly: replays are no-ops and conflicts
   assert.match(s, /do not retry or force a status/);
 });
 
+test('the inbox skill reconciles clear missing-role evidence and surfaces stranded history', () => {
+  const s = read('skills/inbox-and-calendar/SKILL.md');
+  assert.match(s, /A clear sourced receipt can establish a newly discovered `found` role as `applied`/);
+  assert.match(s, /without backdating discovery or inventing verification, scoring or queue events/);
+  assert.match(s, /A replay does not reproject an old already-recorded stranded receipt/);
+  assert.match(s, /surface it under Needs you for explicit reconciliation/);
+  assert.doesNotMatch(s, /for example an acknowledgement for a role still in found/);
+});
+
 test('the inbox skill reads calendars before holding a to-book claim, and checkpoints them at the window end', () => {
   const s = read('skills/inbox-and-calendar/SKILL.md');
   const gather = s.indexOf('### 2. Gather mail');

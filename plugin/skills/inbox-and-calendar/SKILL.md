@@ -56,6 +56,8 @@ Turn incoming mail into tracker events and, where a written answer is needed, a 
 - Several roles at the company and no URL: pick the one the mail names by title and req, and `get_role` to confirm before recording on it.
 - Match at role level even when another role at the company is live. A `find_company` verdict of `skip` for a tracked posting does not stop you recording external evidence on that existing role.
 - No role in the tracker but clearly about one: `upsert_role` with `source: "inbound"` and the posting `url` when the mail has one. If it returns `possible_role_ids`, check them as in Identity in `source-roles` and record the outcome on the role that is this posting. Why: a URL-less upsert always creates a new role, so an outcome recorded on it would miss the role that holds the application.
+- A clear sourced receipt can establish a newly discovered `found` role as `applied`, or clear sourced closure evidence can establish `closed` with a valid outcome, without backdating discovery or inventing verification, scoring or queue events. Pass the four identity fields and nonblank verbatim evidence. Only initial discovery markers are ignored; substantive local decisions or newer/equal-time conflicting evidence prevent bootstrap. Why: discovering the role now does not change when the external application happened.
+- A replay does not reproject an old already-recorded stranded receipt. If the role still disagrees with its stored receipt, surface it under Needs you for explicit reconciliation; do not alter the key, time or evidence to force it. Why: retries must not silently reinterpret existing history.
 
 Classify into one of:
 
@@ -74,7 +76,7 @@ Classify into one of:
 **Results of `record` and `add_interview`.**
 - `duplicate: true`, or `created`, `updated` and `stale` all false: a replay. A no-op; say nothing new.
 - `stale: true`: a newer update is already stored. Leave it.
-- `status_applied: false` with a `conflict` (for example an acknowledgement for a role still in found, verified or scored, or equal-time statuses): do not retry or force a status. List it under Needs you with the role and the conflict text.
+- `status_applied: false` with a `conflict` (for example substantive history blocks bootstrap, an acknowledgement for a verified or scored role, or equal-time statuses): do not retry or force a status. List it under Needs you with the role and the conflict text.
 - `status_applied: false` with no `conflict`: older evidence, kept.
 - A ToolError listing several candidate interviews: ask the user which round, listing the IDs.
 - A ToolError saying a cancelled interview needs `state: "scheduled"` to rebook: do not rebook. List it under Needs you with both sightings.

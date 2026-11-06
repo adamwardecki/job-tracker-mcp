@@ -254,9 +254,14 @@ const ACK = { actor: 'user', status: 'applied', reason: 'Acknowledgement found i
 test('an old application confirmation found in this run is reported as recorded, with its original date, and not as a submission', (ctx) => {
   const t = fresh(ctx);
   const r = run(t, '2026-10-31T10:00:00.000Z', '2026-10-31T13:00:00.000Z');
-  const id = queued(t, 'Ext Acme', { score: 7, at: '2026-09-01T10:00:00.000Z' });
+  const id = t.upsertRole({ company: 'Ext Acme', title: 'Engineer', source: 'inbound' }).role.id;
   const first = t.record({ ...ACK, role_id: id, run_id: r });
   assert.equal(first.duplicate, false);
+  assert.equal(first.status_applied, true);
+  assert.equal(t.mustRole(id).status, 'applied');
+  const count = t.roleDetail({ role_id: id }).events.length;
+  assert.equal(t.record({ ...ACK, role_id: id, run_id: r }).duplicate, true);
+  assert.equal(t.roleDetail({ role_id: id }).events.length, count);
   for (const args of [{ date: '2026-10-31', run_id: r }, { date: '2026-10-31' }]) {
     const markdown = renderReport(t, args).markdown;
     assert.match(markdown, /## Applied\n\n- \*\*Ext Acme\*\*, Engineer\. Recorded from gmail, applied 2026-10-05: "Your application for Ext Acme Engineer was received\."/);
@@ -271,7 +276,7 @@ test('an old application confirmation found in this run is reported as recorded,
 test('replaying the same source event in a later run does not announce it again', (ctx) => {
   const t = fresh(ctx);
   const first = run(t, '2026-10-31T10:00:00.000Z', '2026-10-31T13:00:00.000Z');
-  const id = queued(t, 'Ext Acme', { score: 7, at: '2026-09-01T10:00:00.000Z' });
+  const id = t.upsertRole({ company: 'Ext Acme', title: 'Engineer', source: 'inbound' }).role.id;
   t.record({ ...ACK, role_id: id, run_id: first });
   ctx.mock.timers.setTime(Date.parse('2026-11-01T10:00:00.000Z'));
   const second = run(t, '2026-11-01T09:00:00.000Z', '2026-11-01T11:00:00.000Z');

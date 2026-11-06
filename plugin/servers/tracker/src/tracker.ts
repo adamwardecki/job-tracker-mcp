@@ -778,7 +778,8 @@ export class Tracker {
   // Appends an event without the machine check, for outcomes that arrive from outside and for notes. With source,
   // source_account, source_id and occurred_at the event is external: the same occurrence is recorded once, it is
   // dated by when it happened rather than when it arrived, and it moves the status only if it is the newest status
-  // event of the role's group and the status machine allows the move. Otherwise it is kept as evidence.
+  // event of the role's group and the status machine allows the move, or clear evidence establishes a missing
+  // application on a found card with no local status decisions. Otherwise it is kept as evidence.
   record(a: ArgsFor<'record'>) {
     req(oneOf(['user', 'employer', 'pipeline'], a.actor), 'actor: user | employer | pipeline');
     req(a.status !== 'verified', 'Use transition(to: "verified") so verified_at is set with evidence.');
@@ -798,7 +799,7 @@ export class Tracker {
         this.requireSameOccurrence(known, { ...ev, ts });
         return { role: this.roleRow(ev.role_id), event_id: known.id, duplicate: true, status_applied: false };
       }
-      const { project, conflict } = this.projection(ev, ts);
+      const { project, conflict } = this.projection(ev, ts, { externalRecord: true });
       const event_id = this.insertEvent({ ...ev, ...key, ts, received_at: now() }, { projectStatus: project });
       return { role: this.roleRow(ev.role_id), event_id, duplicate: false, status_applied: project, ...(conflict ? { conflict } : {}) };
     });
@@ -811,25 +812,27 @@ export class Tracker {
     requireSameFields(label, known, next, REPEATED, { ts: 'occurred_at' });
   }
 
-  // Whether an external event may set the role's status. Only if it happened after every status event of the group
-  // (a late-arriving acknowledgement must not reopen a rejection) and the machine allows the move from the current
-  // status. When it does not, the evidence is still kept and the reason comes back as the conflict. An older event
-  // is ordinary backfill, so it carries no conflict.
-  private projection(ev: EventInput, ts: string): { project: boolean; conflict?: string } {
+  // Discovery marks when we learned of a role, not when an application happened. Order all substantive history
+  // first so backfilled receipts cannot reopen rejections. An unreconciled found card needs an actionable conflict.
+  private projection(ev: EventInput, ts: string, { externalRecord = false }: { externalRecord?: boolean } = {}): { project: boolean; conflict?: string } {
     if (!ev.status) return { project: false };
     const role = this.mustRole(ev.role_id);
-    // In JS because ts text is not one format ('…:00Z' from older releases, '…:00.000Z' from now), so SQL order is not time order.
-    const when = (iso: string) => (Number.isNaN(Date.parse(iso)) ? Number.NEGATIVE_INFINITY : Date.parse(iso));
-    const latest = this.q<StatusEvent & Pick<EventRow, 'id'>>(`SELECT id, ts, status, outcome FROM events WHERE status IS NOT NULL AND role_id IN (${marks(this.roleGroupIds(role.id))})`, ...this.roleGroupIds(role.id))
-      .reduce<(StatusEvent & Pick<EventRow, 'id'>) | undefined>((best, e) => (!best || when(e.ts) > when(best.ts) || (when(e.ts) === when(best.ts) && e.id > best.id) ? e : best), undefined);
+    const events = substantiveStatusEvents(this.groupStatusEvents(this.roleGroupIds(role.id)));
+    const latest = events.at(-1);
     const at = Date.parse(ts);
     const label = stateLabel({ status: ev.status, outcome: ev.outcome ?? null });
-    if (latest && at < when(latest.ts)) return { project: false };
-    if (latest && at === when(latest.ts)) {
-      if (latest.status === ev.status && (latest.outcome ?? null) === (ev.outcome ?? null)) return { project: false };
+    const from = role.status || 'found';
+    const unreconciled = () => ({ project: false, conflict: `Role ${role.id} is still found but its substantive history disagrees with ${label}. It was recorded as evidence only. Reconcile the role with the user before recording a state correction.` });
+    if (latest && at < statusInstant(latest.ts)) return from === 'found' ? unreconciled() : { project: false };
+    if (latest && at === statusInstant(latest.ts)) {
+      if (latest.status === ev.status && (latest.outcome ?? null) === (ev.outcome ?? null)) return from === 'found' && ev.status !== 'found' ? unreconciled() : { project: false };
       return { project: false, conflict: `The role already has ${stateLabel(latest)} at the same time (${ts}), so ${label} was recorded as evidence only and the status stays ${role.status}. Decide which came last, then settle it with transition or record.` };
     }
-    const from = role.status || 'found';
+    // Only keyed external evidence can establish a missing application; local decisions anywhere in the group veto it.
+    if (externalRecord && from === 'found' && (ev.status === 'applied' || ev.status === 'closed')) {
+      if (events.some((event) => event.source === null)) return unreconciled();
+      if (String(ev.evidence ?? '').trim()) return { project: true };
+    }
     const allowed = oneOf(STATUSES, from) ? MACHINE[from] : [];
     if (from === ev.status || oneOf(allowed, ev.status)) return { project: true };
     return { project: false, conflict: `Moving from ${from} to ${ev.status} is not allowed by the status machine (allowed from ${from}: ${allowed.join(', ') || 'none (terminal)'}), so ${label} was recorded as evidence only and the status stays ${from}. If the role really changed, settle it with transition or the user.` };

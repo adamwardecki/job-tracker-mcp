@@ -420,19 +420,27 @@ test('linking refuses matching evidence when the canonical card is not actually 
   assert.equal(t.gateCheck({ role_id: otherVerifiedRole }).live_elsewhere, true);
 });
 
-test('linking refuses application evidence on a card still at initial discovery', async (ctx) => {
+test('historical receipts bootstrap compatible groups and linking preserves one live application', async (ctx) => {
+  ctx.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-06T12:00:00Z') });
   const t = fresh(ctx);
-  const canonical = legacyRole(t, 1, [['2026-01-01T00:00:00Z', 'found']]);
-  t.run("UPDATE events SET actor = 'pipeline' WHERE role_id = ?", canonical);
-  const duplicate = legacyRole(t, 2, APPLIED);
+  const canonical = t.upsertRole({ company: 'Acme', title: 'Engineer', url: ONE, source: 'inbound' }).role.id;
+  const duplicate = t.upsertRole({ company: 'Acme', title: 'Engineer copy', source: 'inbound' }).role.id;
+  const child = t.upsertRole({ company: 'Acme', title: 'Engineer child', source: 'inbound' }).role.id;
+  t.linkDuplicateRole({ canonical_role_id: duplicate, duplicate_role_id: child, ...LINK });
+  const discovery = t.q('SELECT id, role_id, ts FROM events ORDER BY id');
   const external = await call(t)('record', { ...RECEIPT, role_id: canonical });
   assert.equal(external.error, '');
-  assert.equal(external.data?.status_applied, false);
+  assert.equal(external.data?.status_applied, true);
+  assert.equal((await call(t)('record', { ...RECEIPT, role_id: duplicate, source_id: 'copy-receipt' })).data?.status_applied, true);
+  assert.equal(t.pipelineSummary().awaiting_reply, 2);
   const before = storedCounts(t);
-  assert.throws(() => t.linkDuplicateRole({ canonical_role_id: canonical, duplicate_role_id: duplicate, ...LINK }), /actual|reconcile/i);
-  assert.deepEqual(storedCounts(t), before);
-  assert.equal(t.canonicalRoleId(duplicate), duplicate);
+  assert.deepEqual(t.linkDuplicateRole({ canonical_role_id: canonical, duplicate_role_id: duplicate, ...LINK }), { canonical_role_id: canonical, linked_role_ids: [duplicate, child] });
+  assert.deepEqual(storedCounts(t).slice(0, 4), before.slice(0, 4));
+  assert.deepEqual(t.q('SELECT id, role_id, ts FROM events WHERE status = ? ORDER BY id', 'found'), discovery);
+  assert.deepEqual([t.mustRole(canonical).status, t.mustRole(duplicate).status], ['applied', 'applied']);
+  assert.equal(t.canonicalRoleId(child), canonical);
   assert.equal(t.pipelineSummary().awaiting_reply, 1);
+  assert.equal(t.findCompany({ name: 'Acme' }).live_application, true);
 });
 
 test('a refused merge leaves the duplicate root and its existing children unflattened', async (ctx) => {
