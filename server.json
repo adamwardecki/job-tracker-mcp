@@ -14,7 +14,7 @@
       "registryType": "mcpb",
       "identifier": "https://github.com/adamwardecki/job-tracker-mcp/releases/download/v0.3.3/job-tracker-0.3.3.mcpb",
       "version": "0.3.3",
-      "fileSha256": "618ecb0107548197a846c0a15d9665f83d4f033233279fdbe41e10442c51442f",
+      "fileSha256": "7246f39d502f06f86b4ae7073627d29fa3135aa08db371bd6eab27695dec2804",
       "transport": {
         "type": "stdio"
       },
