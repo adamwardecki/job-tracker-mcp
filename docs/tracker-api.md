@@ -207,6 +207,17 @@ without.
   A call without `occurred_at` applies in the order it arrives and never moves that order, so an event that
   happened before a local edit but is read after it still applies, and wins for the fields it carries; the edit stays
   in `interview_changes`. `occurred_at` without `interview_id` or a key is an error.
+- **Replay snapshots and upgrades.** Every accepted dated call saves its resolved values privately, including a
+  newer call that matches the current row: that call advances `last_occurred_at` but sets all result flags false
+  and writes no booking-change note. Local edits, stale calls and same-time retries do not replace the snapshot.
+  Omitted replay fields inherit the accepted values, so local edits survive an identical retry, even when the
+  local edit shares the external timestamp. This bookkeeping is absent from `get_role` and `open_items`.
+  Upgrading from v8 preserves all interviews, events and history. It backfills a baseline only when complete
+  creation history, every before/after value snapshot and the current values all agree; source-key-only adoption
+  does not invalidate that proof. Changed, missing or malformed histories remain unknown. A same-time retry of
+  an unknown baseline returns a tool error and changes nothing: surface the uncertainty under Needs you rather
+  than changing the key or occurrence time to force it. A genuinely newer dated update establishes the baseline;
+  its identical retry then succeeds. Older updates remain stale, and local-only interviews remain usable.
 - **History.** Each change that is applied (including the first) adds a row to `interview_changes` with the
   occurrence time, the receipt time, the `run_id`, and the interview's fields before (null for a new one) and after.
   It also appends a note event to the role with `category: 'interview_changed'`, the same `run_id`, and the

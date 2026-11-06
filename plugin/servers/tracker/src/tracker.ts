@@ -1208,13 +1208,13 @@ export class Tracker {
       const order = orderOf(known, occurred, when.ts);
       // Checked before the values: an update this old is ignored whatever it says.
       if (known && order === 'older') return interviewResult(known.id, known.state, { stale: true });
-      const next = this.interviewValues(a, known);
-      const key: InterviewKey = external ? { source: external.source, source_account: external.account, source_id: external.id } : { source: known?.source ?? null, source_account: known?.source_account ?? null, source_id: known?.source_id ?? null };
-      if (!known) return interviewResult(this.insertInterview(role, next, key, occurred, when), next.state, { created: true });
-      if (order === 'same') {
+      if (known && order === 'same') {
         this.requireReplay(a, known);
         return interviewResult(known.id, known.state);
       }
+      const next = this.interviewValues(a, known);
+      const key: InterviewKey = external ? { source: external.source, source_account: external.account, source_id: external.id } : { source: known?.source ?? null, source_account: known?.source_account ?? null, source_id: known?.source_id ?? null };
+      if (!known) return interviewResult(this.insertInterview(role, next, key, occurred, when), next.state, { created: true });
       return this.updateInterview(role, known, next, key, occurred != null, when);
     });
   }
@@ -1227,6 +1227,7 @@ export class Tracker {
     const id = Number(r.lastInsertRowid);
     this.logInterviewChange(id, null, { ...next, ...key }, when);
     this.afterInterviewChange(role, id, null, next, key, when);
+    if (occurred != null) this.saveInterviewExternalState(id, occurred, next);
     return id;
   }
 
@@ -1234,7 +1235,10 @@ export class Tracker {
     const before = interviewSnapshot(known);
     if (INTERVIEW_VALUES.every((k) => before[k] === next[k])) {
       // Nothing changed, but a dated repeat is still the newest word on the interview.
-      if (dated) this.adoptSourceKey(known, key, when);
+      if (dated) {
+        this.adoptSourceKey(known, key, when);
+        this.saveInterviewExternalState(known.id, when.ts, next);
+      }
       return interviewResult(known.id, known.state);
     }
     // An update without an occurrence time (a hand edit) leaves the order alone: an event that happened before the
@@ -1244,6 +1248,7 @@ export class Tracker {
       next.starts_at, next.tz, next.stage, next.people, next.link, next.booked_by, next.notes, next.state, when.received, key.source, key.source_account, key.source_id, last, known.id);
     this.logInterviewChange(known.id, { ...before, source: known.source, source_account: known.source_account, source_id: known.source_id }, { ...next, ...key }, when);
     this.afterInterviewChange(role, known.id, before, next, key, when);
+    if (dated) this.saveInterviewExternalState(known.id, when.ts, next);
     return interviewResult(known.id, next.state, { updated: true });
   }
 
@@ -1258,12 +1263,18 @@ export class Tracker {
     }
   }
 
-  // A repeat at the time of the newest external update must say what that update said. The row may have been edited by
-  // hand since, so the repeat is compared with the last external snapshot (the newest history entry at or before that
-  // time; later entries are local edits), not with the row.
+  // Accepted dated calls save even when no fields changed. Local edits and stale/replayed calls never replace it.
+  private saveInterviewExternalState(interviewId: number, occurredAt: string, values: InterviewValues): void {
+    this.run(`INSERT INTO interview_external_state(interview_id, occurred_at, snapshot_json) VALUES(?, ?, ?)
+      ON CONFLICT(interview_id) DO UPDATE SET occurred_at = excluded.occurred_at, snapshot_json = excluded.snapshot_json`,
+      interviewId, occurredAt, JSON.stringify(interviewSnapshot(values)));
+  }
+
+  // The accepted external values are independent of local edits, including ones at the same occurrence time.
   private requireReplay(a: ArgsFor<'add_interview'>, known: InterviewRow): void {
-    const entry = this.one<{ after_json: string }>('SELECT after_json FROM interview_changes WHERE interview_id = ? AND occurred_at <= ? ORDER BY occurred_at DESC, id DESC LIMIT 1', known.id, known.last_occurred_at);
-    const last = entry ? interviewSnapshot(JSON.parse(entry.after_json) as InterviewValues) : interviewSnapshot(known);
+    const entry = this.one<{ snapshot_json: string }>('SELECT snapshot_json FROM interview_external_state WHERE interview_id = ? AND occurred_at = ?', known.id, known.last_occurred_at);
+    req(entry, `Interview ${known.id} replay baseline is unknown after upgrade. Nothing was written. Surface this uncertainty under Needs you for reconciliation. Do not alter the key or occurrence time to force a replay; a genuinely newer dated update can establish the baseline.`);
+    const last = interviewSnapshot(JSON.parse(entry.snapshot_json) as InterviewValues);
     requireSameFields(known.source ? `${known.source} id ${known.source_id}` : `Interview ${known.id}`, last, this.interviewValues(a, { ...known, ...last }), INTERVIEW_VALUES);
   }
 

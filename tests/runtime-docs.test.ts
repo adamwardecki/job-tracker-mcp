@@ -285,3 +285,12 @@ test('triage-tracker hard rules, guard and delete rounds are unchanged by the re
   why('Hard rules and guard', rules, '52e64f52998b2a3d40ef7fbd83629c44dd39555f3c67d911b45006575d1712f2');
   why('Delete rounds (step 6)', rounds, '75d87a15fbdd2c41e4eb2932210dcef6afa4c0d46c5ef8e64159d08a5f757cde');
 });
+
+test('the inbox skill surfaces an unknown interview replay baseline without inventing metadata', () => {
+  const s = read('skills/inbox-and-calendar/SKILL.md');
+  assert.match(s, /replay baseline is unknown/);
+  assert.match(s, /surface the uncertainty under Needs you/);
+  assert.match(s, /Do not change the key or occurrence time/);
+  assert.match(s, /genuinely newer dated update/);
+  assert.match(s, /Why: pre-upgrade history cannot always prove the accepted external values/);
+});

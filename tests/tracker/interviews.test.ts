@@ -2,12 +2,16 @@
 // cancelled calendar events leave the latest state and a history of how it got there.
 
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { TestContext } from 'node:test';
 import { test } from 'node:test';
 import { openDb } from '../../plugin/servers/tracker/src/db.ts';
 import type { RpcResponse } from '../../plugin/servers/tracker/src/mcp.ts';
 import { makeHandler } from '../../plugin/servers/tracker/src/mcp.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
+import { REWIND_TO_V8 } from './helpers.ts';
 
 function fresh(ctx: TestContext) {
   const db = openDb(':memory:');
@@ -478,4 +482,126 @@ test('an occurrence time alone needs an interview id, and a partial source group
   assert.throws(() => t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', occurred_at: '2026-10-04T08:00:00' }), /explicit offset/);
   assert.throws(() => t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', occurred_at: '2999-01-01T00:00:00Z' }), /in the future/);
   assert.equal(snapshot(t, id).last_occurred_at, '2026-10-03T08:00:00.000Z');
+});
+
+test('a dated no-change update after a local reschedule accepts its identical retry', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const first = t.addInterview({ role_id: roleId, ...EVENT });
+  const moved = '2099-11-08T10:00:00+01:00';
+  t.addInterview({ role_id: roleId, interview_id: first.interview_id, stage: 'Technical', starts_at: moved });
+  const changes = count(t, 'interview_changes');
+  const events = count(t, 'events');
+  const update = { role_id: roleId, ...EVENT, starts_at: moved, occurred_at: '2026-10-03T08:00:00Z' };
+  const want = { interview_id: first.interview_id, created: false, updated: false, stale: false, state: 'scheduled' };
+  assert.deepEqual(t.addInterview(update), want);
+  assert.equal(snapshot(t, first.interview_id).last_occurred_at, '2026-10-03T08:00:00.000Z');
+  const accepted = snapshot(t, first.interview_id);
+  assert.deepEqual(t.addInterview(update), want);
+  assert.deepEqual(snapshot(t, first.interview_id), accepted);
+  assert.equal(count(t, 'interview_changes'), changes);
+  assert.equal(count(t, 'events'), events, 'no booking note for either no-change call');
+});
+
+const externalState = (t: Tracker, id: number) => ({ ...t.one<{ occurred_at: string; snapshot_json: string }>('SELECT occurred_at, snapshot_json FROM interview_external_state WHERE interview_id = ?', id) });
+
+for (const keyed of [true, false]) {
+  test(`a ${keyed ? 'keyed' : 'id-only'} dated no-change update saves a baseline without changing history`, (ctx) => {
+    const t = fresh(ctx);
+    const roleId = applied(t);
+    const id = t.addInterview({ role_id: roleId, ...EVENT }).interview_id;
+    t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', notes: 'Local note' });
+    const update = { role_id: roleId, stage: 'Technical', occurred_at: '2026-10-03T08:00:00Z', ...(keyed ? { source: EVENT.source, source_account: EVENT.source_account, source_id: EVENT.source_id } : { interview_id: id }) };
+    const changes = count(t, 'interview_changes');
+    assert.equal(t.addInterview(update).updated, false);
+    const baseline = externalState(t, id);
+    assert.equal(baseline.occurred_at, '2026-10-03T08:00:00.000Z');
+    assert.equal(JSON.parse(baseline.snapshot_json ?? '{}').notes, 'Local note');
+    t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', notes: 'Later local note' });
+    const edited = snapshot(t, id);
+    assert.equal(t.addInterview(update).updated, false);
+    assert.deepEqual(snapshot(t, id), edited, 'omitted notes preserve the later local edit');
+    assert.deepEqual(externalState(t, id), baseline);
+    assert.throws(() => t.addInterview({ ...update, notes: 'Later local note' }), /different notes/);
+    assert.equal(t.addInterview({ ...update, occurred_at: '2026-10-02T08:00:00Z', notes: 'Stale' }).stale, true);
+    assert.deepEqual(snapshot(t, id), edited);
+    assert.deepEqual(externalState(t, id), baseline);
+    assert.equal(count(t, 'interview_changes'), changes + 1);
+  });
+}
+
+test('a local edit at the external occurrence time cannot replace the accepted replay baseline', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const id = t.addInterview({ role_id: roleId, ...EVENT }).interview_id;
+  ctx.mock.timers.enable({ apis: ['Date'], now: new Date(EVENT.occurred_at) });
+  t.addInterview({ role_id: roleId, interview_id: id, stage: 'Technical', people: 'Dana Ruiz', state: 'cancelled' });
+  const edited = snapshot(t, id);
+  assert.equal(t.addInterview({ role_id: roleId, ...EVENT }).updated, false);
+  assert.deepEqual(snapshot(t, id), edited);
+  assert.throws(() => t.addInterview({ role_id: roleId, ...EVENT, people: 'Dana Ruiz' }), /different people/);
+});
+
+test('key adoption without a field change establishes a private baseline', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const id = t.addInterview({ role_id: roleId, stage: 'Screen', link: BOOK }).interview_id;
+  assert.deepEqual(externalState(t, id), {});
+  const update = { role_id: roleId, stage: 'Screen', link: BOOK, source: EVENT.source, source_account: EVENT.source_account, source_id: 'adopted', occurred_at: EVENT.occurred_at };
+  assert.equal(t.addInterview(update).updated, false);
+  assert.equal(externalState(t, id).occurred_at, '2026-10-01T09:00:00.000Z');
+  assert.equal(t.addInterview(update).updated, false);
+  assert.equal(Object.hasOwn(t.roleDetail({ role_id: roleId }).interviews[0] ?? {}, 'snapshot_json'), false);
+  assert.equal(Object.hasOwn(t.openItems().interviews_to_book[0] ?? {}, 'snapshot_json'), false);
+});
+
+test('a snapshot write error rolls back interview fields, ordering, history and notes', (ctx) => {
+  const t = fresh(ctx);
+  const roleId = applied(t);
+  const id = t.addInterview({ role_id: roleId, ...EVENT }).interview_id;
+  const before = snapshot(t, id);
+  const baseline = externalState(t, id);
+  const history = t.q('SELECT * FROM interview_changes ORDER BY id');
+  const events = t.q('SELECT * FROM events ORDER BY id');
+  t.run("CREATE TRIGGER fail_snapshot BEFORE UPDATE ON interview_external_state BEGIN SELECT RAISE(ABORT, 'snapshot blocked'); END");
+  assert.throws(() => t.addInterview({ role_id: roleId, ...EVENT, notes: 'New details', occurred_at: '2026-10-03T08:00:00Z' }), /snapshot blocked/);
+  assert.deepEqual(snapshot(t, id), before);
+  assert.deepEqual(externalState(t, id), baseline);
+  assert.deepEqual(t.q('SELECT * FROM interview_changes ORDER BY id'), history);
+  assert.deepEqual(t.q('SELECT * FROM events ORDER BY id'), events);
+});
+
+test('upgraded interviews replay proven history and surface unknown baselines until a newer dated update', async (ctx) => {
+  const dir = mkdtempSync(join(tmpdir(), 'jh-replay-'));
+  ctx.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'tracker.db');
+  const old = openDb(path);
+  const prior = new Tracker(old);
+  const roleId = applied(prior);
+  const proven = prior.addInterview({ role_id: roleId, ...EVENT }).interview_id;
+  const ambiguousEvent = { role_id: roleId, ...EVENT, source_id: 'ambiguous' };
+  const ambiguous = prior.addInterview(ambiguousEvent).interview_id;
+  prior.addInterview({ role_id: roleId, interview_id: ambiguous, stage: 'Technical', notes: 'Local note' });
+  const local = prior.addInterview({ role_id: roleId, stage: 'Screen' }).interview_id;
+  old.exec(REWIND_TO_V8);
+  old.close();
+  const db = openDb(path);
+  ctx.after(() => db.close());
+  const t = new Tracker(db);
+  assert.equal(t.addInterview({ role_id: roleId, ...EVENT }).updated, false);
+  assert.equal(externalState(t, proven).occurred_at, '2026-10-01T09:00:00.000Z');
+  const before = snapshot(t, ambiguous);
+  const history = t.q('SELECT * FROM interview_changes ORDER BY id');
+  const result = await call(t)('add_interview', ambiguousEvent);
+  assert.match(result.error, /replay baseline is unknown/);
+  assert.match(result.error, /Needs you/);
+  assert.match(result.error, /Do not alter.*occurrence/);
+  assert.deepEqual(snapshot(t, ambiguous), before);
+  assert.deepEqual(t.q('SELECT * FROM interview_changes ORDER BY id'), history);
+  assert.deepEqual(externalState(t, ambiguous), {});
+  const newer = { ...ambiguousEvent, occurred_at: '2026-10-03T08:00:00Z' };
+  assert.equal(t.addInterview(newer).updated, false);
+  assert.equal(t.addInterview(newer).updated, false);
+  assert.equal(t.addInterview(ambiguousEvent).stale, true);
+  assert.equal(t.addInterview({ role_id: roleId, interview_id: local, stage: 'Screen', notes: 'Still usable' }).updated, true);
 });

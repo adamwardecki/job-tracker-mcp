@@ -1,7 +1,14 @@
 // Shared by tests in more than one file.
 
+// Turns a current database into the release before accepted interview snapshots (schema v8).
+export const REWIND_TO_V8 = `
+  DROP TABLE interview_external_state;
+  PRAGMA user_version = 8;
+`;
+
 // Turns a current database into one from the release before interview states (schema v7): drops what migration 8 added.
 export const REWIND_TO_V7 = `
+  ${REWIND_TO_V8}
   DROP TABLE interview_changes;
   DROP INDEX interviews_external;
   ALTER TABLE interviews DROP COLUMN state;

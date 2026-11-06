@@ -11,7 +11,7 @@ import { openDb, readTx, SCHEMA_V1, SCHEMA_VERSION, tx } from '../../plugin/serv
 import { secureDir, secureFile } from '../../plugin/servers/tracker/src/fsperm.ts';
 import { importLegacy } from '../../plugin/servers/tracker/src/legacy.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
-import { REWIND_TO_V5, REWIND_TO_V6, REWIND_TO_V7 } from './helpers.ts';
+import { REWIND_TO_V5, REWIND_TO_V6, REWIND_TO_V7, REWIND_TO_V8 } from './helpers.ts';
 
 const tempDb = () => join(mkdtempSync(join(tmpdir(), 'jh-db-')), 'tracker.db');
 const addRule = (db: ReturnType<typeof openDb>, text: string) =>
@@ -620,4 +620,61 @@ test('permission tightening is best effort: unsupported chmod warns, anything el
   assert.throws(() => secureFile(file, failWith('EIO')), /EIO/);
   assert.throws(() => secureDir(dir, failWith('ENOENT')), /ENOENT/);
   secureFile(join(dir, 'missing')); // a missing file is ignored
+});
+
+// Real v8 rows: the history can prove a baseline only when every value stayed unchanged since creation.
+test('upgrading from v8 backfills only proven unchanged interviews and preserves all prior data', () => {
+  const path = tempDb();
+  const old = openDb(path);
+  const t = new Tracker(old);
+  const role = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+  const base = { role_id: role, stage: 'Screen', occurred_at: '2026-10-01T09:00:00Z', source: 'calendar', source_account: 'me@example.test' };
+  const scheduled = t.addInterview({ ...base, source_id: 'scheduled', starts_at: '2099-11-05T13:00:00Z' }).interview_id;
+  const pending = t.addInterview({ ...base, source_id: 'pending', link: 'https://calendar.example.test/book' }).interview_id;
+  const cancelled = t.addInterview({ ...base, source_id: 'cancelled', state: 'cancelled' }).interview_id;
+  const adopted = t.addInterview({ role_id: role, stage: 'Screen', link: 'https://calendar.example.test/adopt' }).interview_id;
+  t.addInterview({ ...base, interview_id: adopted, source_id: 'adopted' });
+  const changed = t.addInterview({ ...base, source_id: 'changed' }).interview_id;
+  t.addInterview({ role_id: role, interview_id: changed, stage: 'Screen', notes: 'Local edit' });
+  const missing = t.addInterview({ ...base, source_id: 'missing' }).interview_id;
+  t.run('DELETE FROM interview_changes WHERE interview_id = ?', missing);
+  const malformed = t.addInterview({ ...base, source_id: 'malformed' }).interview_id;
+  t.run("UPDATE interview_changes SET after_json = '{broken' WHERE interview_id = ?", malformed);
+  const incomplete = t.addInterview({ ...base, source_id: 'incomplete' }).interview_id;
+  t.run("UPDATE interview_changes SET after_json = json_remove(after_json, '$.notes') WHERE interview_id = ?", incomplete);
+  const noCreation = t.addInterview({ ...base, source_id: 'no-creation' }).interview_id;
+  t.run('UPDATE interview_changes SET before_json = after_json WHERE interview_id = ?', noCreation);
+  const disconnected = t.addInterview({ ...base, source_id: 'disconnected' }).interview_id;
+  t.run("UPDATE interview_changes SET received_at = '2026-01-01T00:00:00.000Z' WHERE interview_id = ?", disconnected);
+  const local = t.addInterview({ role_id: role, stage: 'Local' }).interview_id;
+  const prior = () => ['companies', 'roles', 'interviews', 'events', 'interview_changes'].map((table) => JSON.stringify(old.prepare(`SELECT * FROM ${table} ORDER BY id`).all()));
+  const before = prior();
+  old.exec(REWIND_TO_V8);
+  old.close();
+  const db = openDb(path);
+  let accepted: string;
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name = 'interview_external_state'").get(), 'the private baseline table is created');
+    assert.deepEqual(['companies', 'roles', 'interviews', 'events', 'interview_changes'].map((table) => JSON.stringify(db.prepare(`SELECT * FROM ${table} ORDER BY id`).all())), before);
+    const rows = db.prepare('SELECT * FROM interview_external_state ORDER BY interview_id').all();
+    assert.deepEqual(rows.map((r) => r.interview_id), [scheduled, pending, cancelled, adopted]);
+    for (const row of rows) {
+      assert.equal(row.occurred_at, '2026-10-01T09:00:00.000Z');
+      assert.deepEqual(Object.keys(JSON.parse(String(row.snapshot_json))), ['starts_at', 'tz', 'stage', 'people', 'link', 'booked_by', 'notes', 'state']);
+    }
+    assert.equal(rows.some((r) => r.interview_id === local), false);
+    accepted = JSON.stringify(rows);
+    if (process.platform !== 'win32') {
+      for (const f of [path, `${path}-wal`, `${path}-shm`]) assert.equal(mode(f), 0o600);
+    }
+  } finally {
+    db.close();
+  }
+  const again = openDb(path);
+  try {
+    assert.equal(JSON.stringify(again.prepare('SELECT * FROM interview_external_state ORDER BY interview_id').all()), accepted);
+  } finally {
+    again.close();
+  }
 });

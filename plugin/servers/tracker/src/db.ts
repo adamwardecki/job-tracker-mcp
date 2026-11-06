@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { secureDir, secureFile } from './fsperm.ts';
 import { urlIdentity } from './posting.ts';
 import { isValidTimeZone, toUtcIso } from './time.ts';
+import { isRecord } from './util.ts';
 
 export function jobTrackerHome(): string {
   return process.env.JOB_TRACKER_HOME || join(homedir(), '.job-tracker');
@@ -393,7 +394,7 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 // MIGRATIONS[i] takes the schema from version i + 1 to i + 2. Append only; never edit a shipped one.
 const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
@@ -533,6 +534,44 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       );
       CREATE INDEX interview_changes_interview ON interview_changes(interview_id);
     `);
+  },
+  // 9: the last accepted dated interview values, including calls that changed no fields. Old histories cannot
+  // distinguish all local edits from external updates, so only a complete, unchanged history proves a baseline.
+  (db) => {
+    db.exec(`
+      CREATE TABLE interview_external_state (
+        interview_id INTEGER PRIMARY KEY REFERENCES interviews(id),
+        occurred_at TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL
+      );
+    `);
+    // Freeze this release's eight value fields and null normalization here, independent of later tracker changes.
+    const fields = ['starts_at', 'tz', 'stage', 'people', 'link', 'booked_by', 'notes', 'state'] as const;
+    const normalize = (value: unknown): string | null => {
+      if (!isRecord(value)) return null;
+      const row = value;
+      if (fields.some((k) => !Object.hasOwn(row, k) || (row[k] !== null && typeof row[k] !== 'string'))) return null;
+      if (!['pending', 'scheduled', 'cancelled'].includes(String(row.state))) return null;
+      return JSON.stringify(Object.fromEntries(fields.map((k) => [k, row[k] ?? null])));
+    };
+    const parse = (text: string): string | null => {
+      try {
+        return normalize(JSON.parse(text));
+      } catch {
+        return null; // Damaged or incomplete history is unknown, never guessed from the current row.
+      }
+    };
+    const history = db.prepare('SELECT before_json, after_json, received_at FROM interview_changes WHERE interview_id = ? ORDER BY id');
+    const save = db.prepare('INSERT INTO interview_external_state(interview_id, occurred_at, snapshot_json) VALUES(?, ?, ?)');
+    const rows = db.prepare('SELECT * FROM interviews WHERE last_occurred_at IS NOT NULL').all() as Pick<InterviewRow, 'id' | 'created_at' | 'last_occurred_at'>[];
+    for (const row of rows) {
+      const current = normalize(row);
+      const changes = history.all(row.id) as Pick<InterviewChangeRow, 'before_json' | 'after_json' | 'received_at'>[];
+      const first = changes[0];
+      if (!current || !first || first.before_json !== null || first.received_at !== row.created_at) continue;
+      if (changes.some((change, i) => parse(change.after_json) !== current || (i > 0 && (change.before_json === null || parse(change.before_json) !== current)))) continue;
+      save.run(row.id, row.last_occurred_at, current);
+    }
   },
 ];
 
