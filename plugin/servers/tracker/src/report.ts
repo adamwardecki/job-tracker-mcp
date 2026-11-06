@@ -155,8 +155,13 @@ export function renderReport(t: Tracker, { date, run_id, headline }: ArgsFor<'re
   // Only the board can record applied without confirmation text. Listing these lets the user spot one they didn't make.
   const selfReported = eventsIn(t, scope, "e.status = 'applied' AND e.actor = 'user' AND (e.evidence IS NULL OR trim(e.evidence) = '')");
   // An application found in a mailbox or on a board: dated by when it happened, reported in the scope that received it.
-  // Replaying it in a later run adds no event, so it is not announced again.
-  const recorded = eventsAt(t, scope, 'received_at', "e.status = 'applied' AND e.source IS NOT NULL");
+  // Replaying it in a later run adds no event, so it is not announced again. Every new acknowledgement is recorded
+  // this way, including the employer's receipt for a submission the plugin made (in this run or an earlier one, on any
+  // row of the card's group): that one already has its confirmation, so listing it here would claim a second,
+  // outside application.
+  const recorded = eventsAt(t, scope, 'received_at', `e.status = 'applied' AND e.source IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM events s WHERE s.status = 'applied' AND s.actor = 'pipeline' AND s.source IS NULL
+      AND (s.role_id = r.id OR s.role_id IN (SELECT duplicate_role_id FROM role_links WHERE canonical_role_id = r.id)))`);
   // A calendar or mail change to a booking is news when it arrives, whenever the meeting itself was changed.
   const bookingChanges = eventsAt(t, scope, 'received_at', "e.category = 'interview_changed'");
   const replies = eventsOrReceived(t, scope, "e.actor = 'employer'");

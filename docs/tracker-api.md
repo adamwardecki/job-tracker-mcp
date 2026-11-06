@@ -105,7 +105,9 @@ number new or changed.
 **Applications and bookings found elsewhere.** An `applied` event with a `source` (a mailbox or board) is listed under
 **Applied** as `Recorded from <source>, applied <date>`, with the date it happened, and is not counted in
 "Applications submitted". It is found by when it was received (`received_at`, or the `run_id`), not by when it
-happened. Replaying it in a later run adds no event, so it is not announced again. Replies and drops that carry a `source` (a rejection read today that arrived days ago) are found the same way and show the date they happened, as in `closed (rejected, 2026-10-28)`; those without a `source` are found by when they happened. An `interview_changed` note is
+happened. Replaying it in a later run adds no event, so it is not announced again. An acknowledgement of a role the
+plugin submitted (a `pipeline` `applied` event without a `source` anywhere in the role's linked group, in any run) is
+not listed or counted this way: the submission already shows with its confirmation. Replies and drops that carry a `source` (a rejection read today that arrived days ago) are found the same way and show the date they happened, as in `closed (rejected, 2026-10-28)`; those without a `source` are found by when they happened. An `interview_changed` note is
 listed under **Interviews** as "Booking change" in the scope that received it, whenever the booking itself changed.
 Rendering a report writes nothing.
 

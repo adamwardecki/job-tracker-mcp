@@ -306,6 +306,59 @@ test('board and pipeline applications keep their own labels beside a recorded on
   assert.match(markdown, /\| Applications recorded from mail or boards \| 1 \|/);
 });
 
+// The employer's acknowledgement of an application the plugin submitted, as inbox-and-calendar records every new one.
+const ackOf = (company: string, source_id: string, occurred_at: string) => ({ ...ACK, evidence: `We received your application to ${company}.`, source_id, occurred_at });
+const submit = (t: Tracker, role_id: number, company: string, ts: string, run_id?: number) =>
+  t.insertEvent({ role_id, status: 'applied', actor: 'pipeline', reason: 'Submitted', evidence: `Thanks for applying to ${company}!`, ts, run_id });
+const appliedSection = (markdown: string) => markdown.split('## Applied\n\n')[1]?.split('\n\n')[0] ?? '';
+
+test('an acknowledgement of a submission in the same run is not also listed as recorded, beside a receipt found elsewhere', (ctx) => {
+  const t = fresh(ctx);
+  const r = run(t, '2026-10-31T10:00:00.000Z', '2026-10-31T13:00:00.000Z');
+  const sent = queued(t, 'Sent Acme', { at: '2026-10-31T08:00:00.000Z' });
+  const mail = queued(t, 'Ext Acme', { at: '2026-09-01T10:00:00.000Z' });
+  submit(t, sent, 'Sent Acme', '2026-10-31T10:30:00.000Z', r);
+  t.record({ ...ackOf('Sent Acme', 'message-sent', '2026-10-31T11:00:00Z'), role_id: sent, run_id: r });
+  t.record({ ...ACK, role_id: mail, run_id: r });
+  for (const args of [{ date: '2026-10-31', run_id: r }, { date: '2026-10-31' }]) {
+    const markdown = renderReport(t, args).markdown;
+    assert.equal(appliedSection(markdown), [
+      '- **Sent Acme**, Engineer. Confirmation: "Thanks for applying to Sent Acme!"',
+      '- **Ext Acme**, Engineer. Recorded from gmail, applied 2026-10-05: "Your application for Ext Acme Engineer was received."',
+    ].join('\n'));
+    assert.match(markdown, /\| Applications submitted \| 1 \|/);
+    assert.match(markdown, /\| Applications recorded from mail or boards \| 1 \|/);
+  }
+});
+
+test('an acknowledgement read today of a submission from an earlier run is not reported as recorded', (ctx) => {
+  const t = fresh(ctx);
+  const earlier = run(t, '2026-10-30T10:00:00.000Z', '2026-10-30T11:00:00.000Z');
+  const sent = queued(t, 'Sent Acme', { at: '2026-10-29T08:00:00.000Z' });
+  submit(t, sent, 'Sent Acme', '2026-10-30T10:30:00.000Z', earlier);
+  const today = run(t, '2026-10-31T10:00:00.000Z', '2026-10-31T13:00:00.000Z');
+  t.record({ ...ackOf('Sent Acme', 'message-sent', '2026-10-31T09:00:00Z'), role_id: sent, run_id: today });
+  for (const args of [{ date: '2026-10-31', run_id: today }, { date: '2026-10-31' }]) {
+    const markdown = renderReport(t, args).markdown;
+    assert.doesNotMatch(markdown, /Sent Acme/);
+    assert.match(markdown, /\| Applications recorded from mail or boards \| 0 \|/);
+  }
+  assert.match(renderReport(t, { date: '2026-10-30', run_id: earlier }).markdown, /- \*\*Sent Acme\*\*, Engineer\. Confirmation: "Thanks for applying to Sent Acme!"/);
+});
+
+test('an acknowledgement on a card whose linked duplicate holds the submission is not reported as recorded', (ctx) => {
+  const t = fresh(ctx);
+  const copy = queued(t, 'Alias Acme', { title: 'Engineer (LinkedIn)', at: '2026-10-29T08:00:00.000Z' });
+  const card = t.upsertRole({ company: 'Alias Acme', title: 'Engineer' }).role.id;
+  submit(t, copy, 'Alias Acme', '2026-10-31T09:00:00.000Z');
+  // The mail was matched to the other card before the two were found to be one posting.
+  t.record({ ...ackOf('Alias Acme', 'message-alias', '2026-10-31T09:30:00Z'), role_id: card });
+  t.linkDuplicateRole({ canonical_role_id: card, duplicate_role_id: copy, reason: 'Same posting listed twice', evidence: 'Both link to the same Ashby page' });
+  const markdown = renderReport(t, { date: '2026-10-31' }).markdown;
+  assert.equal(appliedSection(markdown), '- **Alias Acme**, Engineer. Confirmation: "Thanks for applying to Alias Acme!"');
+  assert.match(markdown, /\| Applications recorded from mail or boards \| 0 \|/);
+});
+
 test('a calendar change received today for an old occurrence is a booking change today', (ctx) => {
   const t = fresh(ctx);
   const r = run(t, '2026-10-31T10:00:00.000Z', '2026-10-31T13:00:00.000Z');
