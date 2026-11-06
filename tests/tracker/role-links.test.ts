@@ -275,8 +275,9 @@ test('reports and audits attribute a duplicate\'s old events to the canonical ca
   legacyRole(t, 1, APPLIED);
   legacyRole(t, 2, []);
   t.run("INSERT INTO events(id, role_id, ts, status, actor, reason) VALUES(50, 2, '2026-01-04T10:00:00Z', 'applied', 'pipeline', 'Submitted')");
+  t.run("UPDATE roles SET status = 'applied' WHERE id = 2"); // the legacy application event above had set its card state
   t.run("UPDATE roles SET title = 'Senior Engineer' WHERE id = 1");
-  await call(t)('link_duplicate_role', { canonical_role_id: 1, duplicate_role_id: 2, ...LINK });
+  assert.equal((await call(t)('link_duplicate_role', { canonical_role_id: 1, duplicate_role_id: 2, ...LINK })).error, '');
   assert.match(renderReport(t, { date: '2026-01-04' }).markdown, /\*\*Acme\*\*, Senior Engineer\./);
   assert.deepEqual(runAudit(t, { date: '2026-01-04' }).failures.map((f) => [f.check, f.role_id]), [['applied_without_confirmation', 1]]);
   assert.equal(t.one<{ role_id: number }>('SELECT role_id FROM events WHERE id = 50')?.role_id, 2, 'the event itself is not rewritten');
@@ -396,4 +397,154 @@ test('views count a group once and take its newest events and questions', (ctx) 
   assert.deepEqual(summary.queue.map((q) => [q.id, q.last_event]), [[10, recent]]);
   assert.deepEqual(summary.stale_queue.map((q) => [q.id, q.last_activity]), [[20, '2026-02-01T00:00:00Z']]);
   assert.equal(boardView(t).roles.find((r) => r.id === 10)?.last_event, recent);
+});
+
+
+// Retaining external evidence must not let linking hide a live card under an unreconciled root.
+const RECEIPT = { actor: 'user', status: 'applied', reason: 'External receipt', evidence: 'Application received for requisition 42', source: 'gmail', source_account: 'jobs@example.test', source_id: 'receipt-42', occurred_at: '2026-03-01T00:00:00Z' };
+const storedCounts = (t: Tracker) => ['roles', 'events', 'artifacts', 'interviews', 'role_links'].map((table) => t.one<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)?.n);
+
+test('linking refuses matching evidence when the canonical card is not actually applied', async (ctx) => {
+  const t = fresh(ctx);
+  const canonical = legacyRole(t, 1, REJECTED);
+  const duplicate = legacyRole(t, 2, APPLIED);
+  const otherVerifiedRole = legacyRole(t, 3, [['2026-01-01T00:00:00Z', 'verified']], { url: 'https://jobs.ashbyhq.com/acme/other' });
+  const external = await call(t)('record', { ...RECEIPT, role_id: canonical });
+  assert.equal(external.error, '');
+  assert.equal(external.data?.status_applied, false);
+  const before = storedCounts(t);
+  assert.throws(() => t.linkDuplicateRole({ canonical_role_id: canonical, duplicate_role_id: duplicate, reason: 'Same posting', evidence: 'Both listings name requisition 42' }), /actual|reconcile/i);
+  assert.deepEqual(storedCounts(t), before);
+  assert.equal(t.canonicalRoleId(duplicate), duplicate);
+  assert.equal(t.pipelineSummary().awaiting_reply, 1);
+  assert.equal(t.gateCheck({ role_id: otherVerifiedRole }).live_elsewhere, true);
+});
+
+test('linking refuses application evidence on a card still at initial discovery', async (ctx) => {
+  const t = fresh(ctx);
+  const canonical = legacyRole(t, 1, [['2026-01-01T00:00:00Z', 'found']]);
+  t.run("UPDATE events SET actor = 'pipeline' WHERE role_id = ?", canonical);
+  const duplicate = legacyRole(t, 2, APPLIED);
+  const external = await call(t)('record', { ...RECEIPT, role_id: canonical });
+  assert.equal(external.error, '');
+  assert.equal(external.data?.status_applied, false);
+  const before = storedCounts(t);
+  assert.throws(() => t.linkDuplicateRole({ canonical_role_id: canonical, duplicate_role_id: duplicate, ...LINK }), /actual|reconcile/i);
+  assert.deepEqual(storedCounts(t), before);
+  assert.equal(t.canonicalRoleId(duplicate), duplicate);
+  assert.equal(t.pipelineSummary().awaiting_reply, 1);
+});
+
+test('a refused merge leaves the duplicate root and its existing children unflattened', async (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, REJECTED);
+  legacyRole(t, 2, APPLIED);
+  legacyRole(t, 3, PREP);
+  t.linkDuplicateRole({ canonical_role_id: 2, duplicate_role_id: 3, ...LINK });
+  t.run("INSERT INTO artifacts(role_id, kind, content, created_at) VALUES(3, 'note', 'Child preparation', '2026-01-04T00:00:00Z')");
+  assert.equal((await call(t)('record', { ...RECEIPT, role_id: 1 })).data?.status_applied, false);
+  const before = storedCounts(t);
+  const links = t.q<object>('SELECT * FROM role_links');
+  assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), /actual|reconcile/i);
+  assert.deepEqual(t.q<object>('SELECT * FROM role_links'), links);
+  assert.deepEqual(storedCounts(t), before);
+  assert.deepEqual(t.roleGroupIds(3), [2, 3]);
+  assert.equal(t.pipelineSummary().awaiting_reply, 1);
+});
+
+test('a duplicate root whose evidence masks its actual state is refused', async (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, [...APPLIED, ['2026-04-01T00:00:00Z', 'applied']]);
+  legacyRole(t, 2, REJECTED);
+  assert.equal((await call(t)('record', { ...RECEIPT, role_id: 2 })).data?.status_applied, false);
+  const before = storedCounts(t);
+  assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), /actual|reconcile/i);
+  assert.deepEqual(storedCounts(t), before);
+  assert.equal(t.canonicalRoleId(2), 2);
+  assert.deepEqual([t.mustRole(1).status, t.mustRole(2).status], ['applied', 'closed']);
+});
+
+test('an actual authoritative canonical accepts preparation despite a later discovery marker', (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, [['2026-04-01T00:00:00Z', 'found'], ['2026-01-05T00:00:00Z', 'applied']]);
+  t.run("UPDATE events SET actor = 'pipeline' WHERE role_id = 1 AND status = 'found'");
+  legacyRole(t, 2, PREP);
+  const before = storedCounts(t);
+  assert.deepEqual(t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), { canonical_role_id: 1, linked_role_ids: [2] });
+  assert.deepEqual(storedCounts(t).slice(0, 4), before.slice(0, 4));
+  assert.deepEqual([t.mustRole(1).status, t.mustRole(2).status], ['applied', 'queued']);
+  assert.equal(t.pipelineSummary().awaiting_reply, 1);
+});
+
+test('compatible applied groups link while each member retains its later discovery timestamp', (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, [['2026-04-01T00:00:00Z', 'found'], ['2026-03-01T00:00:00Z', 'applied']]);
+  legacyRole(t, 2, [['2026-05-01T00:00:00Z', 'found'], ['2026-02-01T00:00:00Z', 'applied']]);
+  legacyRole(t, 3, [['2026-06-01T00:00:00Z', 'found']]);
+  t.run("UPDATE events SET actor = 'pipeline' WHERE status = 'found'");
+  t.linkDuplicateRole({ canonical_role_id: 2, duplicate_role_id: 3, ...LINK });
+  const before = storedCounts(t);
+  assert.deepEqual(t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), { canonical_role_id: 1, linked_role_ids: [2, 3] });
+  assert.deepEqual(storedCounts(t).slice(0, 4), before.slice(0, 4));
+  assert.equal(t.pipelineSummary().awaiting_reply, 1);
+  assert.deepEqual(t.q<{ ts: string }>("SELECT ts FROM events WHERE status = 'found' ORDER BY role_id").map((e) => e.ts), ['2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', '2026-06-01T00:00:00Z']);
+});
+
+test('links compare whole-second and fractional-second histories chronologically', (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, [['2026-01-05T00:00:00Z', 'queued'], ['2026-01-05T00:00:00.500Z', 'applied']]);
+  legacyRole(t, 2, [['2026-01-05T00:00:00Z', 'applied']]);
+  const before = storedCounts(t);
+  assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 2, duplicate_role_id: 1, ...LINK }), /after role 2/);
+  assert.deepEqual(storedCounts(t), before);
+  assert.deepEqual(t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), { canonical_role_id: 1, linked_role_ids: [2] });
+  assert.equal(t.pipelineSummary().awaiting_reply, 1);
+});
+
+for (const [label, actor, source, history] of [
+  ['user discovery', 'user', null, [['2026-04-01T00:00:00Z', 'found'], ['2026-03-01T00:00:00Z', 'applied']]],
+  ['import discovery', 'import', null, [['2026-04-01T00:00:00Z', 'found'], ['2026-03-01T00:00:00Z', 'applied']]],
+  ['sourced pipeline discovery', 'pipeline', 'gmail', [['2026-04-01T00:00:00Z', 'found'], ['2026-03-01T00:00:00Z', 'applied']]],
+  ['second pipeline found decision', 'pipeline', null, [['2026-01-01T00:00:00Z', 'found'], ['2026-04-01T00:00:00Z', 'found'], ['2026-03-01T00:00:00Z', 'applied']]],
+] as const) {
+  test(`linking retains ${label} when checking actual state`, (ctx) => {
+    const t = fresh(ctx);
+    legacyRole(t, 1, history.map(([ts, status]) => [ts, status]));
+    legacyRole(t, 2, APPLIED);
+    t.run("UPDATE events SET actor = ?, source = ? WHERE role_id = 1 AND status = 'found'", actor, source);
+    const before = storedCounts(t);
+    assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), /actual|reconcile/i);
+    assert.deepEqual(storedCounts(t), before);
+    assert.equal(t.canonicalRoleId(2), 2);
+  });
+}
+
+test('invalid legacy status times sort before valid instants and equal instants use event id', (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, [['not-a-time', 'queued'], ['2026-01-05T00:00:00Z', 'queued'], ['2026-01-05T00:00:00.000Z', 'applied']]);
+  legacyRole(t, 2, [['2026-01-05T01:00:00+01:00', 'applied']]);
+  assert.deepEqual(t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), { canonical_role_id: 1, linked_role_ids: [2] });
+  assert.equal(t.pipelineSummary().awaiting_reply, 1);
+});
+
+test('the preparatory exception cannot bypass reconciliation of the canonical card', async (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, REJECTED);
+  legacyRole(t, 2, PREP);
+  assert.equal((await call(t)('record', { ...RECEIPT, role_id: 1 })).data?.status_applied, false);
+  const before = storedCounts(t);
+  assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), /actual|reconcile/i);
+  assert.deepEqual(storedCounts(t), before);
+  assert.equal(t.canonicalRoleId(2), 2);
+});
+
+test('discovery-only groups use their discovery history when choosing the canonical card', (ctx) => {
+  const t = fresh(ctx);
+  legacyRole(t, 1, [['2026-01-01T00:00:00Z', 'found']]);
+  legacyRole(t, 2, [['2026-01-02T00:00:00Z', 'found']]);
+  t.run("UPDATE events SET actor = 'pipeline'");
+  const before = storedCounts(t);
+  assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, ...LINK }), /after role 1/);
+  assert.deepEqual(storedCounts(t), before);
+  assert.deepEqual(t.linkDuplicateRole({ canonical_role_id: 2, duplicate_role_id: 1, ...LINK }), { canonical_role_id: 2, linked_role_ids: [1] });
 });

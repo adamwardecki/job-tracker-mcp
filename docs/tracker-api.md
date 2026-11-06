@@ -221,14 +221,19 @@ interviews. `link_duplicate_role` makes one of them the canonical role and recor
 the reason and evidence. Nothing is deleted and no event is rewritten.
 
 - **Checks.** Both roles exist, differ, and belong to the same company; `reason` and `evidence` are non-empty. The
-  two groups may not hold two posting IDs from the same ATS and employer (different requisitions). Histories must
-  agree: a duplicate with only preparatory states (found, verified, scored, queued, or dropped before any
-  application) links under a canonical role that has an applied, interviewing, offer or closed event. When the
-  duplicate has such an event, the canonical role needs one too, both latest statuses (and outcomes) must match,
-  and the canonical's must be no older than the duplicate's. Here "latest" means the latest status event of any
-  kind, so a later move to queued or dropped counts and is refused unless it matches. Two preparatory rows link only
-  when the canonical one moved last; otherwise swap the ids. Linking never changes a status: correct the canonical
-  role with `transition` or `record` first.
+  two groups may not hold two posting IDs from the same ATS and employer (different requisitions). Each root's
+  actual card status must agree with its group's latest substantive status evidence before any preparatory
+  exception applies; evidence-only events cannot hide a different actual state. Reconcile a mismatch explicitly
+  with `transition` or `record`, or choose a canonical card that already holds the state. A duplicate with only
+  preparatory states (found, verified, scored, queued, or dropped before any application) links under a reconciled
+  canonical role that has an applied, interviewing, offer or closed event. When the duplicate has such an event,
+  the canonical role needs one too, both actual root statuses and latest evidence statuses (and outcomes) must
+  match, and the canonical's evidence must be no older than the duplicate's. Histories sort by parsed occurrence
+  time, then event id; invalid legacy times sort before valid times. Only each member's first status event by
+  insertion id, when it is an unsourced pipeline `found`, is an initial discovery marker. Ignore these markers
+  when substantive status history exists; otherwise use discovery history. Later `found` events and user/import
+  decisions still count. Two preparatory rows link only when the canonical one moved last; otherwise swap the ids.
+  Linking never changes a status, and a refusal leaves existing child links and all histories intact.
 - **Groups stay flat.** Every link points at a root. A `canonical_role_id` that is itself a duplicate stands for
   its root. A `duplicate_role_id` already linked to another root is refused with the root to link instead, and a
   root cannot become a duplicate of its own member. Linking a root that has duplicates moves them to the new root

@@ -227,8 +227,21 @@ export const canonicalOf = (col: string) => `COALESCE((SELECT canonical_role_id 
 // Statuses that record what happened with the employer. Everything before them is the sweep's own preparation,
 // including a drop before any application.
 const AUTHORITATIVE: readonly Status[] = ['applied', 'interviewing', 'offer', 'closed'];
-type StatusEvent = Pick<EventRow, 'ts' | 'status' | 'outcome'>;
-const stateLabel = (e: StatusEvent) => (e.status === 'closed' ? `closed (${e.outcome ?? 'no outcome'})` : String(e.status));
+type StatusEvent = Pick<EventRow, 'id' | 'role_id' | 'ts' | 'status' | 'outcome' | 'actor' | 'source'>;
+const statusInstant = (ts: string) => (Number.isNaN(Date.parse(ts)) ? Number.NEGATIVE_INFINITY : Date.parse(ts));
+const orderStatusEvents = (a: StatusEvent, b: StatusEvent) => statusInstant(a.ts) - statusInstant(b.ts) || a.id - b.id;
+
+// Only the first inserted, unsourced pipeline discovery is bookkeeping; later found events are decisions.
+function substantiveStatusEvents(events: readonly StatusEvent[]): StatusEvent[] {
+  const first = new Map<number, StatusEvent>();
+  for (const event of events) {
+    const known = first.get(event.role_id);
+    if (!known || event.id < known.id) first.set(event.role_id, event);
+  }
+  return events.filter((event) => !(first.get(event.role_id)?.id === event.id && event.status === 'found' && event.actor === 'pipeline' && event.source === null)).sort(orderStatusEvents);
+}
+
+const stateLabel = (e: Pick<StatusEvent, 'status' | 'outcome'>) => (e.status === 'closed' ? `closed (${e.outcome ?? 'no outcome'})` : String(e.status));
 const hasEmployerHistory = (evs: readonly StatusEvent[]) => evs.some((e) => oneOf(AUTHORITATIVE, e.status));
 // Events that show the user already applied to a posting. A rejection or withdrawal ends an application, so either
 // counts even when no applied event was imported with it. A closed posting (role_closed) alone does not.
@@ -239,9 +252,13 @@ const APPLIED_SQL = "(status IN ('applied', 'interviewing', 'offer') OR (status 
 // Whether a duplicate's history can sit under the canonical role's card without hiding what happened. Each side is
 // a root id and its group's status events, oldest first. Nothing here ranks states: the canonical role must already
 // show the latest state itself, and the normal evidence-backed workflow corrects it first when it does not.
-function checkHistories(canonical: { id: number; events: StatusEvent[] }, duplicate: { id: number; events: StatusEvent[] }): void {
-  const c = canonical.events.at(-1);
-  const d = duplicate.events.at(-1);
+function checkHistories(canonical: { id: number; status: RoleRow['status']; events: StatusEvent[] }, duplicate: { id: number; status: RoleRow['status']; events: StatusEvent[] }): void {
+  const latest = (root: typeof canonical) => substantiveStatusEvents(root.events).at(-1) ?? root.events.at(-1);
+  const c = latest(canonical);
+  const d = latest(duplicate);
+  for (const [root, claimed] of [[canonical, c], [duplicate, d]] as const) {
+    req(!claimed || claimed.status === root.status, `Roles ${canonical.id} (actual ${canonical.status ?? 'no status'}) and ${duplicate.id} (actual ${duplicate.status ?? 'no status'}) need reconciliation: role ${root.id}'s latest evidence claims ${claimed ? stateLabel(claimed) : 'no status'}. Nothing was written. Reconcile with transition or record, or choose a canonical card that already holds the state.`);
+  }
   const canonicalHistory = hasEmployerHistory(canonical.events);
   const duplicateHistory = hasEmployerHistory(duplicate.events);
   // No status on the duplicate, or preparation only under a role that went further: nothing the employer did is hidden.
@@ -249,10 +266,10 @@ function checkHistories(canonical: { id: number; events: StatusEvent[] }, duplic
   if (canonicalHistory && !duplicateHistory) return;
   if (duplicateHistory) {
     req(c && canonicalHistory, `Role ${duplicate.id} is ${stateLabel(d)}, but role ${canonical.id} has no application history. Nothing was written. Record that state on role ${canonical.id} first (transition or record, with its evidence), or link role ${canonical.id} into role ${duplicate.id}.`);
-    req(c.status === d.status && (c.outcome ?? null) === (d.outcome ?? null), `The histories disagree: role ${canonical.id} is ${stateLabel(c)} and role ${duplicate.id} is ${stateLabel(d)}. Nothing was written. Linking would hide one of them; correct the wrong one with transition or record first.`);
+    req(canonical.status === duplicate.status && c.status === d.status && (c.outcome ?? null) === (d.outcome ?? null), `The histories disagree: role ${canonical.id} is ${stateLabel(c)} and role ${duplicate.id} is ${stateLabel(d)}. Nothing was written. Linking would hide one of them; correct the wrong one with transition or record first.`);
   }
-  // Latest means the latest status event of any kind, so a later move back to queued or dropped counts.
-  req(c && c.ts >= d.ts, `Role ${duplicate.id} became ${stateLabel(d)} on ${d.ts}, after role ${canonical.id} (${c?.ts ?? 'no status yet'}). Nothing was written. The canonical role must hold the latest state: link role ${canonical.id} into role ${duplicate.id} instead, or record the state on role ${canonical.id} first.`);
+  // Every substantive status counts, including a later move back to queued or dropped.
+  req(c && statusInstant(c.ts) >= statusInstant(d.ts), `Role ${duplicate.id} became ${stateLabel(d)} on ${d.ts}, after role ${canonical.id} (${c?.ts ?? 'no status yet'}). Nothing was written. The canonical role must hold the latest state: link role ${canonical.id} into role ${duplicate.id} instead, or record the state on role ${canonical.id} first.`);
 }
 
 const keyLabel = (k: PostingKey) => `${k.provider} ${k.employer_key}/${k.posting_id}`;
@@ -806,7 +823,7 @@ export class Tracker {
     const latest = this.q<StatusEvent & Pick<EventRow, 'id'>>(`SELECT id, ts, status, outcome FROM events WHERE status IS NOT NULL AND role_id IN (${marks(this.roleGroupIds(role.id))})`, ...this.roleGroupIds(role.id))
       .reduce<(StatusEvent & Pick<EventRow, 'id'>) | undefined>((best, e) => (!best || when(e.ts) > when(best.ts) || (when(e.ts) === when(best.ts) && e.id > best.id) ? e : best), undefined);
     const at = Date.parse(ts);
-    const label = stateLabel({ ts, status: ev.status, outcome: ev.outcome ?? null });
+    const label = stateLabel({ status: ev.status, outcome: ev.outcome ?? null });
     if (latest && at < when(latest.ts)) return { project: false };
     if (latest && at === when(latest.ts)) {
       if (latest.status === ev.status && (latest.outcome ?? null) === (ev.outcome ?? null)) return { project: false };
@@ -841,7 +858,7 @@ export class Tracker {
 
   // Status events of a group of roles, oldest first.
   groupStatusEvents(ids: readonly number[]): StatusEvent[] {
-    return this.q<StatusEvent>(`SELECT ts, status, outcome FROM events WHERE status IS NOT NULL AND role_id IN (${marks(ids)}) ORDER BY ts, id`, ...ids);
+    return this.q<StatusEvent>(`SELECT id, role_id, ts, status, outcome, actor, source FROM events WHERE status IS NOT NULL AND role_id IN (${marks(ids)})`, ...ids).sort(orderStatusEvents);
   }
 
   linkDuplicateRole({ canonical_role_id, duplicate_role_id, reason, evidence }: ArgsFor<'link_duplicate_role'>) {
@@ -866,7 +883,7 @@ export class Tracker {
         const clash = held.find((h) => h.provider === k.provider && h.employer_key === k.employer_key && h.posting_id !== k.posting_id);
         if (clash) throw new ToolError(`${keyLabel(clash)} and ${keyLabel(k)} are different postings on one employer board, so roles ${canonical.id} and ${duplicate.id} are different requisitions. Nothing was written.`);
       }
-      checkHistories({ id: canonical.id, events: this.groupStatusEvents(canonicalGroup) }, { id: duplicate.id, events: this.groupStatusEvents(duplicateGroup) });
+      checkHistories({ id: canonical.id, status: canonical.status, events: this.groupStatusEvents(canonicalGroup) }, { id: duplicate.id, status: duplicate.status, events: this.groupStatusEvents(duplicateGroup) });
       // A root's own duplicates move with it, so every link still points at a root.
       this.run('UPDATE role_links SET canonical_role_id = ? WHERE canonical_role_id = ?', canonical.id, duplicate.id);
       this.run('INSERT INTO role_links(duplicate_role_id, canonical_role_id, reason, evidence, created_at) VALUES(?, ?, ?, ?, ?)', duplicate.id, canonical.id, reason.trim(), evidence.trim(), now());
