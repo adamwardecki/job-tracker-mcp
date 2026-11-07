@@ -1,6 +1,6 @@
 {
   "name": "job-hunt-tracker",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Tracker MCP server for the job-hunt plugin. Zero dependencies; needs Node 22.18+ (node:sqlite, and it runs its TypeScript directly).",
   "type": "module",
   "private": true,
