@@ -5,9 +5,12 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { RoleRow } from './db.ts';
 import { tx } from './db.ts';
+import { ToolError } from './errors.ts';
 import { normalizeName } from './fuzzy.ts';
+import { urlIdentity } from './posting.ts';
 import type { ArgsFor } from './tools.ts';
 import type { Company, Tracker } from './tracker.ts';
+import { isCard } from './tracker.ts';
 import { oneOf } from './util.ts';
 
 // A queue note: the file name, its markdown, and (when read from disk) its modification time.
@@ -174,19 +177,29 @@ export function importLegacy(t: Tracker, args: ArgsFor<'import_legacy'>) {
   const companyCount = () => t.one<{ n: number }>('SELECT COUNT(*) AS n FROM companies')?.n ?? 0;
 
   const roleFor = (companyName: string, aliases: string[], title: string, url?: string | null) => {
+    // An exact URL or ATS posting decides first, as everywhere: rows of one linked group are one role, and
+    // independent rows are a conflict the user resolves before importing.
+    const exact = url ? t.exactGroups(urlIdentity(url)) : [];
+    if (exact.length > 1) throw new ToolError(`A queue note's posting matches roles ${exact.join(', ')}. Nothing was imported. Check them with get_role, link them with link_duplicate_role if they are one posting, then import again.`);
     const before = companyCount();
     const { company } = t.upsertCompany({ name: companyName, aliases, url });
     if (companyCount() > before) stats.companies++;
-    const roles = t.q<RoleRow>('SELECT * FROM roles WHERE company_id = ?', company.id);
+    // A linked duplicate is its canonical role's history, not a role to attach to.
+    const roles = t.q<RoleRow>(`SELECT * FROM roles r WHERE company_id = ? AND ${isCard('r.id')}`, company.id);
     const nt = normalizeName(title);
-    const role = (url && roles.find((r) => r.url === url)) || roles.find((r) => normalizeName(r.title) === nt) ||
+    const hit = exact[0] === undefined ? undefined : t.mustRole(exact[0]);
+    // Matching on the title is allowed only in this one-off import of the user's own log, whose rows name roles by
+    // title and carry no URL. Everywhere else a same title is only a candidate (upsert_role's possible_role_ids).
+    const role = hit || roles.find((r) => normalizeName(r.title) === nt) ||
       roles.find((r) => nt && normalizeName(r.title) && (normalizeName(r.title).startsWith(nt) || nt.startsWith(normalizeName(r.title))));
-    return { company, role, roles };
+    return { company: hit ? t.mustCompany(hit.company_id) : company, role, roles };
   };
   const newRole = (company: Company, title: string, url: string | null | undefined, source: string, ts: string) => {
     const r = t.run(`INSERT INTO roles(company_id, title, url, source, first_seen, updated_at, status) VALUES(?, ?, ?, ?, ?, ?, NULL)`, company.id, title || '(unspecified)', url || null, source || 'legacy', ts, ts);
     stats.roles++;
-    return t.mustRole(Number(r.lastInsertRowid));
+    const id = Number(r.lastInsertRowid);
+    if (url) t.indexRoleUrls(id, [url]);
+    return t.mustRole(id);
   };
   const event = (role: RoleRow, ts: string, mapped: Mapped, reason: string, evidence: string | null | undefined) => {
     t.insertEvent({ role_id: role.id, ts, status: mapped.status, outcome: mapped.outcome ?? null, actor: 'import', reason, evidence: evidence?.slice(0, 2000) ?? null });
@@ -211,7 +224,7 @@ export function importLegacy(t: Tracker, args: ArgsFor<'import_legacy'>) {
       if (!hit) continue;
       const outcome = OUTCOME_SENTENCE.find(([re]) => re.test(plain));
       if (!outcome) continue;
-      const roles = t.q<RoleRow>('SELECT * FROM roles WHERE company_id = ? ORDER BY updated_at DESC', hit.id);
+      const roles = t.q<RoleRow>(`SELECT * FROM roles r WHERE company_id = ? AND ${isCard('r.id')} ORDER BY updated_at DESC`, hit.id);
       const role = roles.find((r) => oneOf(['applied', 'interviewing', 'offer'], r.status)) || roles.find((r) => r.status === 'queued');
       if (!role || role.status === outcome[1].status) continue;
       event(role, ts, outcome[1], `Legacy log ${row.date}: ${plain.slice(0, 200)}`, row.raw);
@@ -292,7 +305,10 @@ export function importLegacy(t: Tracker, args: ArgsFor<'import_legacy'>) {
         // to its most recent role instead of creating a second one.
         role ||= roles.sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
         role ||= newRole(company, title, url, 'legacy queue', ts);
-        if (url && !role.url) t.run('UPDATE roles SET url = ? WHERE id = ?', url, role.id);
+        if (url && !role.url) {
+          t.run('UPDATE roles SET url = ? WHERE id = ?', url, role.id);
+          t.indexRoleUrls(role.id, [url]);
+        }
         const mapped: Mapped = prefix === 'DROPPED' ? { status: 'dropped' } : prefix === 'DONE' ? { status: 'applied' } : prefix === 'EXPIRED' ? { status: 'closed', outcome: 'role_closed' } : { status: 'queued' };
         const current = t.mustRole(role.id).status;
         if (!current || current === 'queued' || current === 'found' || (current === 'dropped' && mapped.status === 'dropped')) {

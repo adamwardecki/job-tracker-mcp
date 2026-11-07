@@ -96,3 +96,17 @@ export function toUtcIso(value: unknown, tz = 'UTC'): string {
   if (!validWall(y, mo, d, h, mi, sec)) throw new ToolError(`Cannot parse time "${value}": no such date or time. ${HINT}`);
   return new Date(wallToUtc(y, mo, d, h, mi, sec, tz)).toISOString();
 }
+
+const EXPLICIT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|([+-])(\d{2}):(\d{2}))$/i;
+
+// UTC ISO string for a time that states its own offset, for events that name when they happened. Unlike toUtcIso, a
+// wall time is refused rather than read in the user's zone: the offset is what says when it really was.
+export function explicitUtcIso(value: unknown, field: string): string {
+  const s = String(value ?? '').trim();
+  const m = EXPLICIT.exec(s);
+  const hint = `${field} must be an ISO 8601 date and time with an explicit offset, e.g. 2026-10-01T09:00:00Z or 2026-10-01T11:00:00+02:00`;
+  if (!m) throw new ToolError(`${hint}; got "${s}".`);
+  const [y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0] = groups(m);
+  if (!validWall(y, mo, d, h, mi, sec) || Number(m[8] ?? 0) > 23 || Number(m[9] ?? 0) > 59) throw new ToolError(`${field} is not a real date and time: "${s}".`);
+  return new Date(Date.parse(s.toUpperCase())).toISOString();
+}

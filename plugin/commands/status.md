@@ -6,7 +6,7 @@ Show the user a short job-hunt status.
 
 **If the tracker tools are missing** (search for them first if tools are deferred), or a hook error says `node` could not start: Node.js, which the plugin runs on, is missing or too old. Tell the user that in one sentence, offer to run `/job-tracker:setup` (it installs Node.js), and stop.
 
-1. Call `pipeline_summary` and `open_items`.
+1. Call `pipeline_summary` and `open_items`. Rules: load `reporting` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`). Apply them to what you show.
 2. Reply in this order, omitting empty sections, one line per item:
    - **Needs you**: numbered, each with the single blocking question.
    - **Interviews**: upcoming (local time, stage, people), then links still to book.

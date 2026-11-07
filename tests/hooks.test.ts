@@ -1,16 +1,19 @@
 // Hook gates (spec §11): AC6 send blocked, AC7 unverified submit blocked, AC8 delete guard, AC9 read-back.
 
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, test } from 'node:test';
 import { preTool, prompt, setOutput, stop } from '../plugin/hooks/gates.ts';
 import { loadSession, saveSession } from '../plugin/hooks/lib/session.ts';
 import { sameTarget, targetMatchesRole } from '../plugin/hooks/lib/target.ts';
 import type { HookOutput } from '../plugin/hooks/lib/types.ts';
-import { openDb } from '../plugin/servers/tracker/src/db.ts';
+import { boardMove } from '../plugin/servers/tracker/src/board-api.ts';
+import { openDb, SCHEMA_V1 } from '../plugin/servers/tracker/src/db.ts';
 import { Tracker } from '../plugin/servers/tracker/src/tracker.ts';
+import { REWIND_TO_V7 } from './tracker/helpers.ts';
 
 // One tool call in a test transcript: [toolName, input, resultText].
 type Call = [name: string, input: Record<string, unknown>, result?: string];
@@ -183,6 +186,115 @@ test('submit gate fails closed when no tracker is reachable', async () => {
   assert.match(reason(), /needs the user's approval/);
 });
 
+// Roles for the repeat-application gate. Acme 1 was applied to and rejected, then dragged back to the queue on
+// the board, and an old row for the same posting is linked under it. Acme 2 is another req with the same title.
+// Beta has a live application, and Beta Labs (its brand) another req. Gamma has an intro open.
+function trackerWithHistory() {
+  const t = new Tracker(openDb(join(home, 'tracker.db')));
+  const queued = (company: string, url: string) => {
+    const { role } = t.upsertRole({ company, title: 'Engineer', url, source: 'ashby' });
+    t.transition({ role_id: role.id, to: 'verified', reason: 'checked', evidence: `${url} "Remote (EU)"`, location_line: 'Remote (EU)', location_type: 'remote' });
+    t.transition({ role_id: role.id, to: 'scored', reason: 'fits', score: 8 });
+    t.transition({ role_id: role.id, to: 'queued', reason: 'top pick' });
+    return t.mustRole(role.id);
+  };
+  const reopened = queued('Acme', 'https://jobs.ashbyhq.com/acme/1');
+  t.transition({ role_id: reopened.id, to: 'applied', reason: 'submitted', evidence: 'Thanks for applying to Acme!' });
+  t.record({ role_id: reopened.id, status: 'closed', outcome: 'rejected', reason: 'Rejection email', evidence: 'We decided to move forward with other candidates', actor: 'employer' });
+  const alias = Number(t.run("INSERT INTO roles(company_id, title, url, first_seen, updated_at, status) VALUES(?, 'Engineer', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'queued')", reopened.company_id, 'https://jobs.ashbyhq.com/acme/1?utm_source=mail').lastInsertRowid);
+  t.indexRoleUrls(alias, ['https://jobs.ashbyhq.com/acme/1?utm_source=mail']);
+  t.run("INSERT INTO events(role_id, ts, status, actor, reason) VALUES(?, '2026-01-01T00:00:00Z', 'queued', 'import', 'Legacy row')", alias);
+  t.linkDuplicateRole({ canonical_role_id: reopened.id, duplicate_role_id: alias, reason: 'Same Ashby posting', evidence: 'Both link to https://jobs.ashbyhq.com/acme/1' });
+  boardMove(t, { role_id: reopened.id, to: 'queued' });
+  const sameTitle = queued('Acme', 'https://jobs.ashbyhq.com/acme/2');
+  const live = queued('Beta', 'https://jobs.ashbyhq.com/beta/1');
+  t.transition({ role_id: live.id, to: 'applied', reason: 'submitted', evidence: 'Thanks for applying to Beta!' });
+  t.addAlias({ company_id: live.company_id, alias: 'Beta Labs' });
+  const brand = queued('Beta Labs', 'https://jobs.lever.co/betalabs/2');
+  const intro = queued('Gamma', 'https://jobs.ashbyhq.com/gamma/1');
+  t.setNoColdApply({ company_id: intro.company_id, reason: 'Recruiter intro open' });
+  t.db.close();
+  // The hooks only read: the gate must work on a database they could not write to.
+  chmodSync(join(home, 'tracker.db'), 0o400);
+  return { reopened, alias, sameTitle, brand, intro };
+}
+
+// The user approves a role on its form, then the model clicks Submit: the approval note and the submit verdict.
+async function approveAndSubmit(role_id: number, url: string) {
+  const sid = session();
+  await markSession(sid);
+  const tp = applicationPage(url);
+  outputs = [];
+  await prompt({ session_id: sid, prompt: `/job-tracker:approve ${role_id}`, transcript_path: tp });
+  const note = outputs[0]?.hookSpecificOutput?.additionalContext ?? '';
+  outputs = [];
+  await preTool({ session_id: sid, transcript_path: tp, tool_name: `${CHROME}computer`, tool_input: { action: 'left_click', ref: 'ref_45', tabId: 1 } });
+  return { note, denied: reason() };
+}
+
+test('a submit is blocked for a posting applied to before, even after it is moved back to the queue', { skip: process.platform === 'win32' }, async () => {
+  const { reopened, alias, sameTitle, brand, intro } = trackerWithHistory();
+  const url = String(reopened.url);
+  for (const id of [reopened.id, alias]) {
+    const r = await approveAndSubmit(id, url);
+    assert.match(r.note, /gate_check fails: .*This posting was applied to before/, `role ${id}`);
+    assert.match(r.denied, new RegExp(`Submit blocked for role ${id}: .*This posting was applied to before: role ${reopened.id} was closed \\(rejected\\)`));
+  }
+  // Another req at the company, with the same title, is a new application.
+  const other = await approveAndSubmit(sameTitle.id, String(sameTitle.url));
+  assert.match(other.note, /gate_check passed/);
+  assert.equal(other.denied, '');
+  // The company-wide protections stay: a live application under the brand name, and an open intro.
+  assert.match((await approveAndSubmit(brand.id, String(brand.url))).denied, /Live application at this company already: Engineer \(applied\)/);
+  assert.match((await approveAndSubmit(intro.id, String(intro.url))).denied, /no_cold_apply: Recruiter intro open/);
+});
+
+// A database as the release before posting identity left it: no role_urls, role_postings or role_links.
+function v2Database(path: string, url: string): void {
+  const raw = new DatabaseSync(path);
+  raw.exec(SCHEMA_V1);
+  raw.exec('ALTER TABLE artifacts ADD COLUMN run_id INTEGER; PRAGMA user_version = 2;');
+  raw.exec("INSERT INTO companies(id, name, created_at) VALUES(1, 'Beta', '2026-01-01T00:00:00Z')");
+  raw.prepare("INSERT INTO roles(id, company_id, title, url, first_seen, updated_at, status, verified_at) VALUES(1, 1, 'Founding Engineer', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'queued', '2026-01-01T00:00:00Z')").run(url);
+  raw.close();
+}
+
+test('the submit gate fails closed with a clear problem on a database the tracker has not upgraded yet', async () => {
+  const { verified } = trackerWithRoles();
+  const url = String(verified.url);
+  const sid = session();
+  await markSession(sid);
+  const tp = applicationPage(url);
+  await prompt({ session_id: sid, prompt: `/job-tracker:approve ${verified.id}`, transcript_path: tp });
+  assert.match(outputs[0]?.hookSpecificOutput?.additionalContext ?? '', /gate_check passed/);
+  // The database is swapped for an older one (another install) before the submit.
+  for (const f of ['tracker.db', 'tracker.db-wal', 'tracker.db-shm']) rmSync(join(home, f), { force: true });
+  v2Database(join(home, 'tracker.db'), url);
+  outputs = [];
+  await preTool({ session_id: sid, transcript_path: tp, tool_name: `${CHROME}computer`, tool_input: { action: 'left_click', ref: 'ref_45', tabId: 1 } });
+  assert.match(reason(), /Submit blocked for role \d+: The tracker database is at schema v2; start the tracker once to upgrade it\./);
+  assert.doesNotMatch(reason(), /no such table/);
+  // The hook never upgrades it: it only reads.
+  const raw = new DatabaseSync(join(home, 'tracker.db'), { readOnly: true });
+  assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 2);
+  raw.close();
+  outputs = [];
+  await prompt({ session_id: session(), prompt: `/job-tracker:approve ${verified.id}`, transcript_path: tp });
+  assert.match(outputs[0]?.hookSpecificOutput?.additionalContext ?? '', /was not recorded: The tracker database is at schema v2; start the tracker once to upgrade it\./);
+});
+
+test('a database one schema step behind also blocks with the upgrade message', async () => {
+  const { verified } = trackerWithRoles();
+  // A v7 database: the current schema without the interview states that v8 added.
+  const raw = new DatabaseSync(join(home, 'tracker.db'));
+  raw.exec(REWIND_TO_V7);
+  raw.close();
+  const sid = session();
+  await markSession(sid);
+  await prompt({ session_id: sid, prompt: `/job-tracker:approve ${verified.id}`, transcript_path: applicationPage(String(verified.url)) });
+  assert.match(outputs[0]?.hookSpecificOutput?.additionalContext ?? '', /was not recorded: The tracker database is at schema v7; start the tracker once to upgrade it\./);
+});
+
 test('personal-data fields and consent boxes are blocked', async () => {
   const { verified, unverified } = trackerWithRoles();
   const sid = session();
@@ -285,6 +397,23 @@ test('Stop: a sweep cannot finish with unrecorded roles or no report', async () 
   // Other sessions are never blocked.
   await stop({ session_id: session(), transcript_path: transcript([up(1)]) });
   assert.equal(outputs.length, 0);
+});
+
+test('Stop: an event written through a linked duplicate\'s old id counts for the role upsert_role returned', async () => {
+  const sid = session();
+  await prompt({ session_id: sid, prompt: '/job-tracker:sweep' });
+  // upsert_role answers with the canonical role 1; the model then moves it through the old id 2, and the tracker
+  // answers with the role it moved.
+  const up: Call = [`${TRACKER}upsert_role`, { id: 2, title: 'B' }, JSON.stringify({ role: { id: 1, title: 'B' }, created: false })];
+  const moved: Call = [`${TRACKER}transition`, { role_id: 2, to: 'dropped' }, JSON.stringify({ role: { id: 1, status: 'dropped' }, from: 'scored', to: 'dropped' })];
+  const report: Call = [`${TRACKER}render_report`, { date: '2026-10-01' }, '# Daily report'];
+  outputs = [];
+  await stop({ session_id: sid, transcript_path: transcript([up, moved, report]) });
+  assert.equal(outputs.length, 0);
+  // A failed event still counts for nothing.
+  const failed: Call = [`${TRACKER}transition`, { role_id: 2, to: 'dropped' }, JSON.stringify({ error: 'A drop needs evidence' })];
+  await stop({ session_id: sid, transcript_path: transcript([up, failed, report]) });
+  assert.match(outputs[0]?.reason ?? '', /no transition\/record event: 1/);
 });
 
 test('browser gates stay out of sessions that never touched the job hunt', async () => {

@@ -54,28 +54,222 @@ closed (from queued | applied | interviewing | offer), with outcome: rejected | 
 | `get_profile` | — | All config sections (filters, prefs, writing, accounts, autonomy, schedule, capabilities) |
 | `save_config` | `section`, `data` | Validated against the schema; errors list bad fields |
 | `get_document` / `save_document` | `name` (`profile`\|`stories`\|`reusable-answers`\|`voice`), `content` | User-owned markdown documents |
-| `find_company` | `name?`, `domain?`, `url?` | Fuzzy match on name, aliases, domain and ATS slug. `{matches:[{company, score, certain, roles:[{id,title,status,url}]}], live_application, no_cold_apply, verdict: "new"\|"seen"\|"skip", why}`. **This is the dedupe check.** |
+| `find_company` | `name?`, `domain?`, `url?` | Exact URL or ATS posting first, across all companies and recorded aliases, then fuzzy match on name, aliases, domain and ATS slug. `{matches:[{company, score, certain, roles:[{id,title,status,url}]}], live_application, no_cold_apply, verdict: "new"\|"seen"\|"skip", why, exact_role_ids}`. Several `exact_role_ids` mean a conflict to resolve. A URL that `upsert_role` would refuse is still looked up, as written. `roles` lists one card per linked group, and only cards count as a live application. `seen` is a known company with nothing blocking: a different requisition there is a new lead, even after a rejection there. `skip` for a tracked posting is for discovery; applying to a known, never-applied queued role goes by its role id through `gate_check`. **This is the dedupe check.** |
 | `set_no_cold_apply` | `company_id`, `on?`, `reason` | Mark (or clear) a company with an open intro or recruiter process. |
 | `add_alias` | `company_id`, `alias` | Add a brand, former name or parent so dedupe catches it. |
-| `upsert_role` | `{id?, company, company_aliases?, company_domain?, title, url, ats?, location_line?, location_type?, comp_min?, comp_max?, comp_currency?, comp_period?, equity?, stack?, industry?, source, posted_at?}` | `{role, company, created, dedupe}`. New roles get a `found` event. Matching url or company+title updates instead of duplicating. |
+| `upsert_role` | `{id?, company, company_aliases?, company_domain?, title, url, url_aliases?, identity_evidence?, ats?, location_line?, location_type?, comp_min?, comp_max?, comp_currency?, comp_period?, equity?, stack?, industry?, source, posted_at?}` | `{role, company, created, dedupe, possible_role_ids}`. `dedupe` is the `find_company` result, on creates and updates alike, and is omitted when `id` is given. New roles get a `found` event. `id` updates that role. Otherwise an exact URL or ATS posting, under any company, updates the role holding it and leaves its company alone; `company` is then optional. A title never matches: a new role lists same-title roles at the company in `possible_role_ids`, to rule out before scoring. `url` and `url_aliases` must be http(s) without credentials. `url_aliases` need `identity_evidence` saying how the listings were confirmed as one posting; it is stored on the alias rows, and on a `url` that joins an existing role, but not on a new role's own `url`. A URL held by another role, or matching several roles, is a tool error naming them, and nothing is written. A role holds one posting per employer board: a second posting ID from the same ATS and employer is a different requisition and an error, and a posting on another ATS or board (an employer that moved ATS) needs `identity_evidence`. Every URL stays a lookup after it changes; an ATS link wins the role's main `url` over a listing that only points at the job, in either order, including an ATS link given in `url_aliases`, which also gives a role without a URL its main one. |
 | `transition` | `role_id`, `to`, `reason`, `evidence?`, `outcome?`, `category?` (drops), `question?` + `blocked_by?` (queued), `location_line?`, `location_type?`, `score?`, `score_notes?`, `run_id?` | Enforces the machine above. |
-| `get_role` | `role_id` | Role, company, full event history, artifacts, interviews. |
-| `record` | `role_id`, `status?`, `reason`, `evidence?`, `outcome?`, `category?`, `question?`, `blocked_by?`, `actor` (`user`\|`employer`\|`pipeline`), `run_id?` | Appends a validated event without the machine check. For outcomes that arrive from outside (rejection, invite, user decision) and for notes (`status` omitted = note). A `question` on the latest event shows under Needs you. |
+| `get_role` | `role_id` | Role, company, full event history, artifacts, interviews, `urls:[{url, normalized_url, evidence}]`, `postings:[{provider, employer_key, posting_id}]`, `requested_role_id`, `linked_role_ids`, `links:[{duplicate_role_id, title, url, status, reason, evidence, created_at}]`. A linked duplicate's id returns its canonical role. Events, artifacts and interviews then cover the whole group, each with its own `role_id`; `urls` and `postings` are the group's, each listed once; `links` keeps each duplicate's own row and why it was linked. See [Duplicate roles](#duplicate-roles). |
+| `link_duplicate_role` | `canonical_role_id`, `duplicate_role_id`, `reason`, `evidence` | `{canonical_role_id, linked_role_ids}`. Links a historical duplicate row to the role kept as its card. See [Duplicate roles](#duplicate-roles). |
+| `record` | `role_id`, `status?`, `reason`, `evidence?`, `outcome?`, `category?`, `question?`, `blocked_by?`, `actor` (`user`\|`employer`\|`pipeline`), `run_id?`, `source?`, `source_account?`, `source_id?`, `occurred_at?` | Appends a validated event without the machine check. For outcomes that arrive from outside (rejection, invite, user decision) and for notes (`status` omitted = note). A `question` on the latest event shows under Needs you. Returns `{role, event_id, duplicate, status_applied, conflict?}`. `source`, `source_account`, `source_id` and `occurred_at` come together or not at all, and make the event an external one (see below). |
 | `check_pay` | `comp_min?`, `comp_max`, `currency`, `period` (`year`\|`month`\|`day`\|`hour`), `fx_rate?` (units of floor currency per 1 unit of `currency`), `equity?` | `{verdict: "keep"\|"straddles"\|"drop"\|"unknown", reason}`. Drop only if the band max is below the floor. |
-| `gate_check` | `role_id` | `{ok, role_id, company, title, url, verified, dedupe_clean, no_cold_apply, live_elsewhere, problems[]}`. Hooks call this before a submit click and bind approval to `url`. |
+| `gate_check` | `role_id` | `{ok, role_id, company, title, url, verified, dedupe_clean, no_cold_apply, live_elsewhere, previous_application, matched_role_id?, problems[]}`. Fails when the role is not verified, the company is `no_cold_apply`, another card at the company is applied, interviewing or offer, the role itself is live, dropped or closed, or the posting was applied to before. A posting is applied to once: an `applied`, `interviewing`, `offer`, or `closed` (`rejected` or `withdrawn`) event on any row of its group, or on an unlinked row holding one of its URLs or ATS postings, sets `previous_application` and blocks it even after a board move back to the queue; `matched_role_id` is the row holding the latest such event. An unlinked row holding the same posting also blocks on its own until the rows are linked or corrected. A rejection blocks only that posting: other requisitions at the company stay open. `dedupe_clean` is false on a live application elsewhere, a previous application or an unlinked row for the posting. Hooks call this before a submit click, on a read-only connection that never migrates (an older database blocks, asking for the tracker to be started once), and bind approval to `url`. |
 | `add_artifact` | `role_id`, `kind` (`cover_note`\|`cover_letter_pdf`\|`gmail_draft`\|`form_answers`\|`confirmation`\|`note`), `ref`, `content?` | `{artifact_id}`. Prose kinds are linted; issues are returned. `gmail_draft` starts unverified. |
 | `list_artifacts` | `run_id?`, `date?`, `role_id?`, `kind?` | Artifacts with lint results and read-back state (the auditor uses this). |
 | `verify_artifact` | `artifact_id`, `readback` (the text returned by `get_draft`/`list_drafts`) | Marks verified. The tracker checks the draft id is in the read-back; a hook checks a real `get_draft`/`list_drafts` result in the session contains it. |
 | `lint_prose` | `text`, `max_words?` | `{ok, issues:[{kind, match, hint}]}`: em/en dashes, "not X but Y", fake-candid openers, volunteered gaps, word count. |
-| `open_items` | `stale_after_days?` (14) | Fresh queue, stale queue, questions on non-queued roles, unverified drafts, interviews to book, upcoming interviews |
-| `add_rule` / `list_rules` / `deactivate_rule` | `text`, `reason`, `example?` / — / `id` | Rules with provenance |
-| `source_health` / `set_source_status` | — / `name`, `status` (`ok`\|`degraded`\|`failed`\|`disabled`), `found?`, `applied?`, `error?` | Per-source health; N consecutive failures flips to `degraded` |
-| `add_interview` | `role_id`, `stage`, `starts_at?` (ISO with offset, or a wall time read in `tz`), `tz?` (IANA), `people?`, `link?`, `booked_by?`, `notes?` | Also records an `interviewing` event if needed |
-| `render_report` | `date` (YYYY-MM-DD, local day), `run_id?` (preferred: that run only), `headline?` | Markdown daily report (spec §9). Only verified drafts and confirmed submissions are claimed. Missing capabilities and what was queued because of them are listed. Interview times are shown in local time. |
+| `open_items` | `stale_after_days?` (14) | Fresh queue, stale queue (each entry also carries `question` and `blocked_by`), questions on non-queued roles, unverified drafts, interviews to book, upcoming interviews |
+| `add_rule` / `list_rules` / `deactivate_rule` | `text`, `reason`, `example?`, `types?` / `types?`, `limit?`, `cursor?`, `include_inactive?` / `id` | Rules with provenance. `add_rule` returns `{rule_id}`; `types` is one or more of the rule types below, and omitted or `null` means `global`. **`list_rules` is paginated: a call with no arguments returns at most 10 rules plus a `next_cursor`, and callers must follow it until it is `null` (see [Listing rules](#listing-rules)).** It returns `{rules, next_cursor, total, rules_revision}`; each rule has its stored fields plus `types`; a rule too large to list is a short `{id, types, requires_detail: true}` entry (see [Oversized rules](#oversized-rules)). Rules from before types existed are `global`. `deactivate_rule` returns `{deactivated: id}`. Repeating it on an already inactive rule is a no-op and leaves `rules_revision` alone. |
+| `get_rule` | `id`, `cursor?`, `limit?` (1 to 4000, default 4000), `expected_revision?` (nonnegative safe integer) | `{id, chunk, next_cursor, rules_revision}`. One piece of the JSON text of the whole rule; only for a `requires_detail` entry (see [Oversized rules](#oversized-rules)). Works on inactive rules. |
+| `set_rule_types` | `id`, `types` (non-empty) | `{rule_id, types, rules_revision}`. Replaces the rule's classification and nothing else: text, reason, example, author and date stay. Duplicates collapse; an empty list, a non-string or an unknown type is an error and writes nothing. |
+| `source_health` / `set_source_status` | — / `name`, `status` (`ok`\|`degraded`\|`failed`\|`disabled`), `found?`, `applied?`, `error?`, `source_account?`, `checked_through?`, `coverage?` (`complete`\|`partial`\|`unavailable`) | Per-source health; N consecutive failures flips to `degraded`. `source_health` returns `{sources, checkpoints}`; each checkpoint is `{source, source_account, checked_through, last_coverage, last_attempt_at}` for one source account (the source name is trimmed and lowercased, so `Gmail` and `gmail` are one). `coverage` needs `source_account`; `complete` also needs `status` `ok` and `checked_through` (ISO 8601 with an explicit offset, stored as UTC, not more than a day ahead). Only `complete` moves `checked_through`, and only forward; `partial` and `unavailable` record `last_coverage` and `last_attempt_at` and keep the last successful cutoff, which is `null` until the account's first complete scan. `checked_through` is the actual endpoint of what was read: the 48-hour overlap belongs to the caller's next search window. `sources.last_run` still moves on every report, failures included. With `coverage` the result adds `checkpoint`; calls without these fields behave as before. |
+| `add_interview` | `role_id`, `stage`, `starts_at?` (ISO with offset, or a wall time read in `tz`), `tz?` (IANA), `people?`, `link?`, `booked_by?`, `notes?`, `interview_id?`, `state?` (`pending`\|`scheduled`\|`cancelled`), `source?`, `source_account?`, `source_id?`, `occurred_at?`, `run_id?` | Records an interview or updates one. Returns `{interview_id, created, updated, stale, state}`; an identical retry sets all three booleans false and an ignored older update sets only `stale`. See [Interviews](#interviews). |
+| `render_report` | `date` (YYYY-MM-DD, local day), `run_id?` (preferred: that run only), `headline?` | `{date, markdown, audit_ok, queue_activity}`. Markdown daily report (spec §9). Only verified drafts and confirmed submissions are claimed. Missing capabilities and what was queued because of them are listed. Interview times are shown in local time. See [Report sections](#report-sections). |
 | `audit` | `run_id?` or `date?` (one is required) | Post-run rule check: excluded industries touched, drops without evidence, applied without confirmation, prose lint failures in artifacts, unverified drafts. `{ok, failures[]}` |
 | `pipeline_summary` | `stale_after_days?` (14) | Counts by status, live processes (interviewing, offer), awaiting reply, rejections, fresh and stale queue |
 | `open_board` | `open?` (bool, default false: also open the default browser) | `{reused, opened, url?}`. With `open: true` and the browser opened, no `url`: the token stays out of the model's context. Otherwise `url`, and the text result is `Board: <url>`. Starts the local board for this database, or reuses the running one. See [Board](#board). |
-| `import_legacy` | `applied_log?` (markdown), `preferences?` (markdown), `queue?` (`[{filename, content}]`), `documents?` (`{profile, stories, reusable-answers}`), `path?` (local only: a `pipeline/` folder) | Import counts and unparsed rows |
+| `import_legacy` | `applied_log?` (markdown), `preferences?` (markdown), `queue?` (`[{filename, content}]`), `documents?` (`{profile, stories, reusable-answers}`), `path?` (local only: a `pipeline/` folder) | Import counts and unparsed rows. If a queue note's URL matches two roles that are not linked, the import stops with an error naming them and writes nothing. Check them with `get_role`, link them with `link_duplicate_role` if they are one posting, then import again. |
+
+## Report sections
+
+`render_report` separates what changed in its scope (the run with `run_id`, else the local day) from the queue that did not.
+Under **Needs you**:
+
+1. **New or changed today**, in detail: queued roles whose action changed in the scope. A role's action is
+   `(queued, question, blocked_by)`. Its events, across a linked group and in time order, are compared one to the
+   next, including the last event before the scope: the action changed at an event if the role was not queued before
+   it (it entered the queue, again or for the first time) or its `question` or `blocked_by` differs. Repeating the
+   same queued event, refreshing the score or URL, and notes do not count, and a cleared question does. The change
+   event must lie in the scope. A role that left the queue is not listed.
+2. **Other open actions**, whatever their age: questions on roles outside the queue, drafts not read back, bookings
+   still to confirm, and audit failures.
+3. **Still waiting (N)**: the queued roles with no change in the scope, stale ones included. The text gives the
+   count of those untouched for 14+ days, names each of them with what it asks (its question, blocker, or the decision itself), and points to `/job-tracker:board` and
+   `/job-tracker:status`. It does not say they were researched or decided today.
+
+`queue_activity` is `{new_or_changed, waiting, stale_waiting}`, canonical role ids. Fresh roles come in `open_items`
+queue order, then the stale ones. `waiting` includes `stale_waiting`; each role is in exactly one of `new_or_changed`
+and `waiting`. The metrics table keeps the current queue total ("Queued for you", stale included) apart from the
+number new or changed.
+
+**Applications and bookings found elsewhere.** An `applied` event with a `source` (a mailbox or board) is listed under
+**Applied** as `Recorded from <source>, applied <date>`, with the date it happened, and is not counted in
+"Applications submitted". It is found by when it was received (`received_at`, or the `run_id`), not by when it
+happened. Replaying it in a later run adds no event, so it is not announced again. An acknowledgement of a role the
+plugin submitted (a `pipeline` `applied` event without a `source` anywhere in the role's linked group, in any run) is
+not listed or counted this way: the submission already shows with its confirmation. Replies and drops that carry a `source` (a rejection read today that arrived days ago) are found the same way and show the date they happened, as in `closed (rejected, 2026-10-28)`; those without a `source` are found by when they happened. An `interview_changed` note is
+listed under **Interviews** as "Booking change" in the scope that received it, whenever the booking itself changed.
+Rendering a report writes nothing.
+
+## Rule types
+
+A rule has one or more types saying which consumers read it: `global`, `sourcing`, `scoring`, `forms`, `writing`, `inbox`, `reporting`. A rule can apply to several consumers. Rules added without `types`, and every rule that existed before types, are `global`. `rules_revision` counts rule changes: it goes up when a rule is added, when its types really change, and when an active rule is deactivated. Reads and no-op changes leave it alone.
+
+### Listing rules
+
+`list_rules({types?, limit?, cursor?, include_inactive?})` returns `{rules, next_cursor, total, rules_revision}`.
+
+- **It no longer returns every rule.** The default call returns at most 10 rules, in ascending id order, plus `next_cursor`. Pass `next_cursor` back as `cursor` until it is `null`; a caller that stops after the first page has only part of the rules. `limit` is a whole number from 1 to 50 (default 10) and may change between pages. `total` counts the whole filtered result, not the page. `next_cursor` is `null` on the last page, including a page that is exactly full. No match is `{rules: [], next_cursor: null, total: 0}`.
+- **Filter by consumer.** `types` is one or more rule types and matches a rule that has any of them or `global`: global rules always come with a filtered request, and a rule that applies to several requested types appears once. Omitted `types` means every rule. Repeated or reordered types are the same filter. `include_inactive` adds deactivated rules.
+- **A cursor binds the filters and `rules_revision`.** Send only `cursor` (and optionally `limit`) to continue; the cursor's `types` and `include_inactive` are inherited. Giving a different `types` or `include_inactive` with a cursor is an error. The cursor is opaque: a malformed, edited or wrong-version cursor is an error, not a guess.
+- **A rule change ends the listing.** Adding a rule, changing its types or deactivating it moves `rules_revision`. A cursor issued before the change is refused with an error that says to restart `list_rules` without a cursor. Discard the pages already read and collect the set again; never mix pages from two revisions.
+- Each page is read at one revision inside one transaction, so repeated reads at the same revision return the same pages.
+- **A page can be shorter than `limit`.** The pretty-printed result JSON (`JSON.stringify(result, null, 2)`, with `next_cursor`, `total` and `rules_revision`) is kept to 24 KiB (24 * 1024 bytes of UTF-8). Whole rules are added while both the count limit and the byte budget hold; the page then ends and `next_cursor` points after the last rule it holds. A page is never empty while matching rules remain. The budget applies before the protocol wraps the result: `tools/call` carries the same data as the text content (pretty-printed, so the figure above) and as `structuredContent` (the same object, so no larger). Only `next_cursor` says whether more remain, never the page length.
+
+### Oversized rules
+
+A rule that cannot fit a page even alone is listed as `{id, types, requires_detail: true}` with no text; the server never shortens a rule. It counts as a page entry, so the listing continues past it. Save the listing's `rules_revision` as the collection revision and read it with `get_rule({id, expected_revision: rules_revision})`:
+
+- `chunk` is a piece of the JSON serialization of the complete rule, the object a normal list entry would be (`id`, `text`, `reason`, `example`, `added_by`, `added_on`, `active`, `types`), not just its text. Call again with `cursor: next_cursor` until it is `null`, join the chunks in order, then `JSON.parse` the result. Never parse or act on a partial chunk.
+- A chunk holds at most `limit` Unicode code points (1 to 4000, default 4000) and never splits a surrogate pair. Even 4000 code points of 4-byte characters, escaped, stay far under the 24 KiB budget. The last chunk is never empty.
+- The cursor binds the rule id, the offset into the serialization (in code points) and `rules_revision`. A cursor for another rule, or a malformed or out-of-range one, is an error that says to restart `get_rule` without a cursor; discard the chunks already read when it says so. A cursor issued before a rule change is a rules-changed error that says to restart `list_rules` instead (below).
+- Pass `expected_revision` on the first call for every oversized rule. The server checks it against the current rules revision in the same read transaction that fetches the rule, including after a final list page. If a cursor is supplied too, its revision must agree with `expected_revision`. Negative, fractional and unsafe integers are errors; omitting the argument preserves direct-call behavior.
+- Compare every page and detail response revision with the one collection revision. On a rules-changed error or any mismatch, discard all list pages and detail chunks together and restart `list_rules` from its first page. After two failed collection attempts, stop with `blocked: rules unreadable`; do no dependent work on an incomplete collection.
+- An unknown id is an error. Inactive rules can be read, with `active: 0` in the rule.
+- This is the exception: ordinary rules arrive complete in `list_rules` and need no extra call.
+
+## Events from outside
+
+`record` can take an event from a mailbox or board without replaying it or reordering history. Pass `source`
+(`gmail`, `board`, ...), `source_account` (the mailbox or account, which scopes the id), `source_id` (the source's
+own id for one immutable occurrence: a message id, or a board application id with its original date; not a thread or
+a mutable card) and `occurred_at` (ISO 8601 with an explicit offset). All four or none: a partial group, an empty
+key, a time with no offset, that is not a real date, or that is more than 24 hours ahead of now is refused, and
+nothing is written. `source` is trimmed and lowercased (`Gmail` and `gmail` are one source); `source_account` and
+`source_id` are trimmed and otherwise kept exactly as given.
+
+- **Time.** `occurred_at` is stored as UTC and becomes the event's `ts`; the time the tracker heard of it is kept in
+  `received_at`. Receipt time and the role's `updated_at` never decide order. Every existing event has
+  `received_at = ts`.
+- **Idempotent.** `(source, source_account, source_id)` is unique. Repeating a call returns the original `event_id`
+  with `duplicate: true`, `status_applied: false`, and writes nothing, also through a linked duplicate's id. The run,
+  the reason and the receipt time may differ. A different role, actor, status, outcome, category, question,
+  `blocked_by`, evidence or `occurred_at` under the same key is an error, so a changed payload is never discarded.
+  The same `source_id` in another account is another event.
+- **Chronology.** The event is always appended. `roles.status` moves (`status_applied: true`) only when the event
+  happened after every substantive status event of the role's whole group and the status machine allows the move.
+  Only each member's first inserted status event is ignored when it is an unsourced pipeline `found`: that marks
+  discovery, not an application. Later `found` events, user/import decisions and all other statuses remain barriers.
+  An older event (a late acknowledgement of an application already rejected) is recorded with `status_applied: false`
+  and no conflict. An event at exactly the time of a different status, or a newer one the machine forbids (for example
+  `interviewing` after a rejection), stays evidence-only with a `conflict`. Nothing reopens a closed role.
+- **Missing-role bootstrap.** A keyed `record` with nonblank evidence may establish `applied` or `closed` (with
+  `rejected`, `withdrawn` or `role_closed`) on a `found` card whose whole group has no non-discovery local status
+  decisions. Substantive evidence is ordered first: newer rejections and equal-time contradictions still win.
+  Discovery timestamps stay unchanged; no verification, scoring or queue events are fabricated. Other statuses,
+  `transition`, unkeyed `record` and interview bookings do not gain this exception. A found card that disagrees with
+  substantive history returns an actionable conflict for explicit reconciliation. Replaying an old already-recorded
+  stranded receipt remains a no-op: it never silently reprojects the stored evidence or repairs old databases.
+- **Not a submission.** An imported `applied` event keeps its `source`, so reports do not count it as an application
+  the plugin submitted. It still counts for `gate_check`: a posting applied to before stays `previous_application`.
+- Calls without the four fields are unchanged: `event_id` and `status_applied` (whether a status was written) are
+  the only additions to the result, and the status is written through whatever the caller asked for, as before.
+
+## Interviews
+
+`add_interview` updates the interview a call is about instead of adding a row each time, so a confirmed booking
+replaces the earlier "to book" row. An interview has a `state`: `pending` (a booking still to make, no time),
+`scheduled` (has a time) or `cancelled`. `open_items` lists `pending` ones under `interviews_to_book` and
+`scheduled` ones in the future under `upcoming_interviews`; a cancelled one is in neither, and neither are the
+interviews of a closed or dropped role. Rows from before states existed became `scheduled` with a time and `pending`
+without.
+
+- **Which interview.** In this order: `interview_id` (it must belong to the role's group, else an error and no
+  write); the external key (`source`, `source_account`, `source_id`, `occurred_at`, all four or none, as for
+  [events from outside](#events-from-outside); `source_id` is the calendar event or message id, and for a recurring
+  event includes the occurrence); otherwise a call with a `link` updates the one pending interview of the role
+  (a linked duplicate's group counts) with exactly that stage and link, and several candidates are an error naming
+  their ids, with nothing written. A call with none of these adds a new interview: a stage alone never identifies a
+  round, so rounds never merge. An `interview_id` together with an external key ties that interview to the key,
+  once. The same key under another role is an error; the same `source_id` in another source or account is another
+  interview.
+- **Fields.** An update keeps the stored value of any field it omits (`link` may change once the interview is
+  found). `state` defaults to `scheduled` with `starts_at` and otherwise stays. `scheduled` needs a time (`starts_at`
+  is read in `tz`, else the stored zone, else `filters.timezone`, and stored as UTC); `pending` has none; giving a
+  time to a `cancelled` interview needs an explicit `state`. An invalid zone, date or state is an error and writes
+  nothing.
+- **Order.** `occurred_at` is when the event happened, not when it was read. It comes with the full external key,
+  or alone with `interview_id` for a later sighting of a known interview from another message or source (its
+  `source`, `source_account` and `source_id` are all absent: the source group is whole or absent, and the interview
+  keeps the key it first got). An update older than the newest dated one applied to the interview
+  (`last_occurred_at`, visible on interview rows in `get_role` and `open_items`) returns `stale: true` and changes
+  nothing, so a late "booking link" cannot undo a scheduling, a late scheduling cannot undo a cancellation, and an
+  older mail re-read later cannot revert a reschedule. An update at the same time is a no-op if identical (compared
+  with the newest dated update, not a hand-edited row) and an error if it differs. A newer one applies in every
+  direction, including rebooking a cancelled interview, and moves `last_occurred_at` to its time. An interview made
+  by hand has no `last_occurred_at` until a dated update reaches it, so an earlier-dated message still applies to it.
+  A call without `occurred_at` applies in the order it arrives and never moves that order, so an event that
+  happened before a local edit but is read after it still applies, and wins for the fields it carries; the edit stays
+  in `interview_changes`. `occurred_at` without `interview_id` or a key is an error.
+- **Replay snapshots and upgrades.** Every accepted dated call saves its resolved values privately, including a
+  newer call that matches the current row: that call advances `last_occurred_at` but sets all result flags false
+  and writes no booking-change note. Local edits, stale calls and same-time retries do not replace the snapshot.
+  Omitted replay fields inherit the accepted values, so local edits survive an identical retry, even when the
+  local edit shares the external timestamp. This bookkeeping is absent from `get_role` and `open_items`.
+  Upgrading from v8 preserves all interviews, events and history. It backfills a baseline only when complete
+  creation history, every before/after value snapshot and the current values all agree; source-key-only adoption
+  does not invalidate that proof. Changed, missing or malformed histories remain unknown. A same-time retry of
+  an unknown baseline returns a tool error and changes nothing: surface the uncertainty under Needs you rather
+  than changing the key or occurrence time to force it. A genuinely newer dated update establishes the baseline;
+  its identical retry then succeeds. Older updates remain stale, and local-only interviews remain usable.
+- **History.** Each change that is applied (including the first) adds a row to `interview_changes` with the
+  occurrence time, the receipt time, the `run_id`, and the interview's fields before (null for a new one) and after.
+  It also appends a note event to the role with `category: 'interview_changed'`, the same `run_id`, and the
+  occurrence time as its `ts` (`received_at` is when the tracker heard of it); the reason says what changed, and the
+  evidence is `interview:<id>`, followed by ` <source>/<source_account>/<source_id>` when the interview has a calendar
+  key, for joining the note to its interview. The note does not carry the key in the event's own source columns:
+  those are unique per source id and would refuse a second change of one interview. Identical retries write neither.
+  An identical repeat of the newest external update is checked against what that update said, not against the row,
+  so it stays a no-op after a local edit and a changed one at the same time is still refused. A call that only
+  gives a pending row its calendar key adds a history entry (no note).
+- **Status.** A pending or scheduled interview moves the role to `interviewing` only when the status machine allows
+  it from the role's status and no later status event exists (so an `applied` role moves; a `queued` one, a closed
+  or a dropped one does not, and an older invite cannot reopen a rejection). Cancelling never changes the status.
+
+## Duplicate roles
+
+Rows that an older release created twice for one posting stay in the database with their events, artifacts and
+interviews. `link_duplicate_role` makes one of them the canonical role and records the other in `role_links` with
+the reason and evidence. Nothing is deleted and no event is rewritten.
+
+- **Checks.** Both roles exist, differ, and belong to the same company; `reason` and `evidence` are non-empty. The
+  two groups may not hold two posting IDs from the same ATS and employer (different requisitions). Each root's
+  actual card status must agree with its group's latest substantive status evidence before any preparatory
+  exception applies; evidence-only events cannot hide a different actual state. Reconcile a mismatch explicitly
+  with `transition` or `record`, or choose a canonical card that already holds the state. A duplicate with only
+  preparatory states (found, verified, scored, queued, or dropped before any application) links under a reconciled
+  canonical role that has an applied, interviewing, offer or closed event. When the duplicate has such an event,
+  the canonical role needs one too, both actual root statuses and latest evidence statuses (and outcomes) must
+  match, and the canonical's evidence must be no older than the duplicate's. Histories sort by parsed occurrence
+  time, then event id; invalid legacy times sort before valid times. Only each member's first status event by
+  insertion id, when it is an unsourced pipeline `found`, is an initial discovery marker. Ignore these markers
+  when substantive status history exists; otherwise use discovery history. Later `found` events and user/import
+  decisions still count. Two preparatory rows link only when the canonical one moved last; otherwise swap the ids.
+  Linking never changes a status, and a refusal leaves existing child links and all histories intact.
+- **Groups stay flat.** Every link points at a root. A `canonical_role_id` that is itself a duplicate stands for
+  its root. A `duplicate_role_id` already linked to another root is refused with the root to link instead, and a
+  root cannot become a duplicate of its own member. Linking a root that has duplicates moves them to the new root
+  in the same transaction. Linking the same pair again returns the current group.
+- **Old ids.** Every tool that takes a `role_id` (`get_role`, `transition`, `record`, `gate_check`,
+  `add_artifact`, `add_interview`, `list_artifacts`, `upsert_role` with `id`, and the board) acts on the canonical
+  role. New events, artifacts and interviews are written there, so a duplicate's status never changes after the
+  link. `find_company`'s `exact_role_ids` and `upsert_role`'s matching count a group once; rows of independent
+  groups are still a conflict.
+- **Views.** The board, `open_items`, `pipeline_summary` and `find_company`'s `roles` show one card per group,
+  judged by the canonical role's status, with the group's latest events and questions. `gate_check` likewise
+  ignores a duplicate's stale status when it looks for a live application elsewhere, and reads the whole group's
+  history for a previous application. Reports and audits attribute a duplicate's events
+  and artifacts to the canonical card (audit `role_id`); the events keep their own ids and `role_id`.
 
 ## Board
 

@@ -234,7 +234,7 @@ test('AC2: report names missing capabilities and what was queued because of them
   const { markdown } = renderReport(t, { date: today(), run_id, headline: 'One strong find queued; no browser this run.' });
   assert.match(markdown, /Missing this run: browser, local folder, LinkedIn/);
   assert.match(markdown, /Queued because of it: Acme \(role 1\)/);
-  assert.match(markdown, /## Needs you\n\n1\. \*\*Acme\*\*, Eng \(role 1\): Apply in a browser session\? To apply: `\/job-tracker:apply 1`/);
+  assert.match(markdown, /## Needs you\n\n### New or changed today\n\n1\. \*\*Acme\*\*, Eng \(role 1\): Apply in a browser session\? To apply: `\/job-tracker:apply 1`/);
   assert.match(markdown, /Emails or messages sent \| 0/);
 });
 
@@ -344,6 +344,7 @@ test('AC11: legacy import reproduces live processes, rejections and queue', () =
   assert.ok(out.imported.no_cold_apply.includes('Intro Example'));
   assert.equal(out.imported.rules, 2);
   assert.equal(t.listRules().rules[0]?.added_by, 'user');
+  assert.deepEqual(t.listRules().rules.map((r) => r.types), [['global'], ['global']]); // imported rules are unclassified
   // Rejection feedback is kept verbatim in evidence.
   const cam = t.findCompany({ name: 'Cobalt Flow' }).matches[0]?.roles[0];
   assert.ok(cam);
@@ -438,7 +439,7 @@ test('an unparseable legacy interview time is shown as written, not a crash', ()
   const t = fresh();
   const { role } = t.upsertRole({ company: 'Acme', title: 'Eng', source: 'x' });
   // The v1 -> v2 migration leaves free text as is; it sorts after any ISO string, so it counts as upcoming.
-  t.run("INSERT INTO interviews(role_id, starts_at, stage, created_at) VALUES(?, 'Tuesday 10am', 'screen', ?)", role.id, new Date().toISOString());
+  t.run("INSERT INTO interviews(role_id, starts_at, stage, created_at, state) VALUES(?, 'Tuesday 10am', 'screen', ?, 'scheduled')", role.id, new Date().toISOString()); // as the v8 migration leaves a row with a time
   assert.equal(t.openItems().upcoming_interviews.length, 1);
   assert.ok(renderReport(t, { date: today() }).markdown.includes('- Tuesday 10am (Europe/Berlin): **Acme**, screen'));
 });

@@ -147,7 +147,7 @@
   },
   {
     "name": "find_company",
-    "description": "Dedupe check. Fuzzy match on name, aliases, domain and ATS slug. verdict: new | seen | skip (live application, same posting, or no_cold_apply).",
+    "description": "Dedupe check. Pass url when you have one: an exact URL or ATS posting, under any company and any recorded alias, is checked first and listed in exact_role_ids. Then fuzzy match on name, aliases, domain and ATS slug. verdict: new | seen | skip (live application, same posting, or no_cold_apply). seen is a known company with nothing blocking: a different requisition there is a lead, even after a rejection. skip for a tracked posting is for discovery; to apply to a known queued role, pass its id to gate_check.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -217,7 +217,7 @@
   },
   {
     "name": "upsert_role",
-    "description": "Create or update a role (creates the company if needed). New roles start as found. Returns the dedupe result for new roles.",
+    "description": "Create or update a role (creates the company if needed). Pass id to update a known role. Otherwise a role is matched on its exact URL or ATS posting, never on title: with no match a new role starts as found, and possible_role_ids lists same-title roles at the company to rule out before scoring. A URL matching several roles, or a second posting ID from the same employer board, returns an error and writes nothing. Returns the find_company dedupe result unless id is given.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -247,6 +247,17 @@
         "url": {
           "type": "string",
           "description": "Posting URL (employer ATS preferred)"
+        },
+        "url_aliases": {
+          "type": "array",
+          "description": "Other URLs for this same posting, e.g. the LinkedIn card of an Ashby job. Needs identity_evidence",
+          "items": {
+            "type": "string"
+          }
+        },
+        "identity_evidence": {
+          "type": "string",
+          "description": "How you confirmed the listings are one posting. Required with url_aliases, and to add an ATS posting from another ATS or employer board to a known role"
         },
         "ats": {
           "type": "string",
@@ -305,7 +316,7 @@
   },
   {
     "name": "get_role",
-    "description": "Role with its company, full event history, artifacts and interviews.",
+    "description": "Role with its company, full event history, artifacts, interviews, and the urls and ATS postings it is known by. A linked duplicate's id returns its canonical role; history, artifacts, interviews and URLs then cover the whole group under their original ids, with requested_role_id, linked_role_ids and links.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -316,6 +327,38 @@
       },
       "required": [
         "role_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "link_duplicate_role",
+    "description": "Link a historical duplicate row to the canonical role for the same posting. Nothing is deleted: the duplicate's events, artifacts and interviews show under the canonical role, and its id resolves to that role in every tool. Same company only. Refuses two posting IDs from one employer board, histories that disagree, or either root whose actual card status disagrees with its latest substantive evidence. Initial unsourced pipeline discovery markers do not outrank substantive history. A preparatory duplicate links under a reconciled role with an application history, or under a preparatory role that moved last. A duplicate with an application history needs matching actual card statuses and the same latest status and outcome on the canonical role, no older by occurrence time. Reconcile with transition or record first; linking never changes status. A duplicate already linked to another role is refused. A canonical role's own duplicates move along when it is linked. Linking the same pair again returns the group.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "canonical_role_id": {
+          "type": "integer",
+          "description": "The role to keep as the card. A linked duplicate's id stands for its canonical role"
+        },
+        "duplicate_role_id": {
+          "type": "integer",
+          "description": "The other row for the same posting. Its history, artifacts and interviews stay and show under the canonical role"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why the two rows are one role"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "How you confirmed they are the same posting, e.g. both link to the same ATS URL"
+        }
+      },
+      "required": [
+        "canonical_role_id",
+        "duplicate_role_id",
+        "reason",
+        "evidence"
       ],
       "additionalProperties": false
     }
@@ -389,7 +432,7 @@
   },
   {
     "name": "record",
-    "description": "Append a validated event without the state-machine check: outcomes from outside (rejection, invite, user decision) or a note (omit status).",
+    "description": "Append a validated external outcome or note (omit status); unkeyed events bypass the state machine. For a message or board record pass source, source_account, source_id and occurred_at: identical replay returns the original event_id (duplicate: true); changed payload under one id is an error. Status moves only after substantive group history and when the machine allows it, except clear evidence can establish applied or closed on a found card with no local status decisions. Initial discovery markers do not decide order. Returns status_applied and any conflict; replay never reprojects stranded history.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -432,6 +475,22 @@
         "run_id": {
           "type": "integer",
           "description": "Current run id"
+        },
+        "source": {
+          "type": "string",
+          "description": "Events from outside only: where it came from, e.g. gmail, linkedin, board (case-insensitive). Pass with source_account, source_id and occurred_at, or none of them"
+        },
+        "source_account": {
+          "type": "string",
+          "description": "The mailbox or account, e.g. jobs@example.test. The same source_id in two accounts is two events"
+        },
+        "source_id": {
+          "type": "string",
+          "description": "The source's own id for this one occurrence (message id; board application id plus its original date), not a thread or a mutable card"
+        },
+        "occurred_at": {
+          "type": "string",
+          "description": "When it happened, ISO 8601 with an explicit offset (the message date), not when you read it, and not in the future"
         }
       },
       "required": [
@@ -481,7 +540,7 @@
   },
   {
     "name": "gate_check",
-    "description": "Pre-submit check: role verified, dedupe clean, not no_cold_apply, no live application at the company.",
+    "description": "Pre-submit check: role verified, not no_cold_apply, no live application at the company, and this posting never applied to before. Any applied, interviewing, offer, rejected or withdrawn event on a row for the posting blocks it, even back in the queue (previous_application, matched_role_id). A posting held by several unlinked roles is blocked until resolved. Call before preparing an application; hooks check again at submit.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -642,7 +701,7 @@
   },
   {
     "name": "add_rule",
-    "description": "Add a user preference or correction as a rule, with reason and example.",
+    "description": "Add a user preference or correction as a rule, with reason and example. types says which consumers read it; omit it for global.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -658,6 +717,13 @@
           "type": "string",
           "description": "Concrete example"
         },
+        "types": {
+          "type": "array",
+          "description": "Which consumers read it: global | sourcing | scoring | forms | writing | inbox | reporting. Omit for global",
+          "items": {
+            "type": "string"
+          }
+        },
         "added_by": {
           "type": "string",
           "description": "user | pipeline"
@@ -672,10 +738,25 @@
   },
   {
     "name": "list_rules",
-    "description": "Active rules with provenance.",
+    "description": "Rules with provenance and types, one page at a time: at most 10 by default, limit up to 50. Follow next_cursor until it is null; never act on a partial set. types filters to those consumers plus global rules, which are always included. If rules changed mid-listing, the cursor is refused: restart without it. An entry with requires_detail is too large to list: read it with get_rule. Results stay under 24 KiB, so a page can hold fewer rules than limit; next_cursor says whether more remain.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "types": {
+          "type": "array",
+          "description": "Only rules for these consumers (and global ones): global | sourcing | scoring | forms | writing | inbox | reporting. Omit for all",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Page size, 1 to 50 (default 10)"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "next_cursor from the previous page. Omit types and include_inactive to keep the cursor's"
+        },
         "include_inactive": {
           "type": "boolean",
           "description": "Include deactivated rules"
@@ -686,8 +767,62 @@
     }
   },
   {
+    "name": "get_rule",
+    "description": "Read one whole rule in chunks. Only for a list_rules entry marked requires_detail. Pass the listing rules_revision as expected_revision on the first call for every rule, and compare every returned revision with it. Call until next_cursor is null, join every chunk in order, then JSON.parse the result. Never act on a partial chunk. If rules changed or revisions disagree, discard all list pages and detail chunks and restart list_rules without a cursor.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Rule id, from a list_rules entry with requires_detail"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "next_cursor from the previous chunk. Omit for the first chunk"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Chunk size in characters, 1 to 4000 (default 4000)"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "description": "The listing rules_revision; a nonnegative safe integer. Pass on the first chunk to bind it to the collection"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_rule_types",
+    "description": "Change which consumers a rule applies to. Edits the classification only: text, reason and who added it stay. Returns the types and rules_revision.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Rule id"
+        },
+        "types": {
+          "type": "array",
+          "description": "One or more of: global | sourcing | scoring | forms | writing | inbox | reporting",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "types"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "deactivate_rule",
-    "description": "Deactivate a rule.",
+    "description": "Deactivate a rule. Repeating it on an inactive rule is a no-op.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -704,7 +839,7 @@
   },
   {
     "name": "source_health",
-    "description": "Per-source status, consecutive failures, yield.",
+    "description": "Per-source status, consecutive failures, yield, and checkpoints: per source account, checked_through (end of the last complete scan; null if none yet), last_coverage and last_attempt_at.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -714,7 +849,7 @@
   },
   {
     "name": "set_source_status",
-    "description": "Record a source result for this run. Three consecutive failures mark it degraded.",
+    "description": "Record a source result for this run. Three consecutive failures mark it degraded. To also record what a mailbox, calendar or board account scan covered, pass source_account and coverage. complete (needs status ok and checked_through, the actual end of what was read) moves that account's checkpoint forward; partial and unavailable never do. checked_through is the real endpoint: the reader adds its own overlap when it picks the next search window.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -737,6 +872,18 @@
         "error": {
           "type": "string",
           "description": "Error text"
+        },
+        "source_account": {
+          "type": "string",
+          "description": "Account the scan covered (a mailbox, a board login). Needed with coverage"
+        },
+        "checked_through": {
+          "type": "string",
+          "description": "How far the scan reached, ISO 8601 with an explicit offset. Needed with complete"
+        },
+        "coverage": {
+          "type": "string",
+          "description": "complete | partial | unavailable: how much of source_account this run checked"
         }
       },
       "required": [
@@ -748,7 +895,7 @@
   },
   {
     "name": "add_interview",
-    "description": "Record an interview (or a booking link still to book: omit starts_at). Moves the role to interviewing.",
+    "description": "Record an interview, or update one. Omit starts_at for a booking link still to book; the same stage and link again, or interview_id, or the calendar event (source, source_account, source_id and occurred_at together) updates that interview instead of adding one. state: pending | scheduled | cancelled. A later message or source about a known interview passes interview_id and its own occurred_at, with no source group. An applied role moves to interviewing. Returns {interview_id, created, updated, stale, state}; stale means an update older than the newest dated one was ignored: do nothing.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -783,6 +930,34 @@
         "notes": {
           "type": "string",
           "description": "Notes"
+        },
+        "interview_id": {
+          "type": "integer",
+          "description": "Update this interview (from an earlier call or get_role) instead of adding one. It must belong to role_id"
+        },
+        "state": {
+          "type": "string",
+          "description": "pending | scheduled | cancelled. Default: scheduled with starts_at, else pending. scheduled needs a time; cancelled records a called-off interview and needs an explicit newer update"
+        },
+        "source": {
+          "type": "string",
+          "description": "Where the booking came from, e.g. google_calendar. With source_account, source_id and occurred_at"
+        },
+        "source_account": {
+          "type": "string",
+          "description": "Account that scopes source_id"
+        },
+        "source_id": {
+          "type": "string",
+          "description": "The calendar event or message id; for a recurring event, the occurrence id. A repeat updates the same interview"
+        },
+        "occurred_at": {
+          "type": "string",
+          "description": "When the event or message happened, ISO 8601 with an explicit offset, not in the future. With source, source_account and source_id, or alone with interview_id for a later sighting of that interview (another message or source). An update older than the newest dated one applied returns stale and writes nothing"
+        },
+        "run_id": {
+          "type": "integer",
+          "description": "Run id, to attribute the change"
         }
       },
       "required": [
@@ -794,7 +969,7 @@
   },
   {
     "name": "render_report",
-    "description": "Markdown daily report. With run_id it covers that run; otherwise the local day. Lead with the outcome via headline. Only read-back drafts and confirmed submissions are claimed.",
+    "description": "Markdown daily report. With run_id it covers that run; otherwise the local day. Lead with the outcome via headline. Only read-back drafts and confirmed submissions are claimed. Also returns queue_activity {new_or_changed, waiting, stale_waiting}: queued role ids whose ask changed in the scope, and the unchanged rest.",
     "inputSchema": {
       "type": "object",
       "properties": {

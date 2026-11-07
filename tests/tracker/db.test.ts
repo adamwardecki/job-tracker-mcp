@@ -7,9 +7,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import { openDb, SCHEMA_V1, SCHEMA_VERSION, tx } from '../../plugin/servers/tracker/src/db.ts';
+import { openDb, readTx, SCHEMA_V1, SCHEMA_VERSION, tx } from '../../plugin/servers/tracker/src/db.ts';
 import { secureDir, secureFile } from '../../plugin/servers/tracker/src/fsperm.ts';
+import { importLegacy } from '../../plugin/servers/tracker/src/legacy.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
+import { REWIND_TO_V5, REWIND_TO_V6, REWIND_TO_V7, REWIND_TO_V8 } from './helpers.ts';
 
 const tempDb = () => join(mkdtempSync(join(tmpdir(), 'jh-db-')), 'tracker.db');
 const addRule = (db: ReturnType<typeof openDb>, text: string) =>
@@ -71,6 +73,41 @@ test('a throw inside a nested tx rolls back the outer writes too', () => {
   assert.deepEqual(ruleTexts(db), ['after']);
 });
 
+test('a readTx inside a tx joins it and sees its uncommitted write', () => {
+  const db = openDb(':memory:');
+  tx(db, () => {
+    addRule(db, 'outer');
+    assert.deepEqual(readTx(db, () => ruleTexts(db)), ['outer']);
+    assert.equal(db.isTransaction, true, 'the read did not commit the outer transaction');
+    addRule(db, 'later');
+  });
+  assert.deepEqual(ruleTexts(db), ['outer', 'later']);
+});
+
+test('a throw inside a readTx nested in a tx rolls the outer writes back', () => {
+  const db = openDb(':memory:');
+  assert.throws(() => tx(db, () => {
+    addRule(db, 'outer');
+    readTx(db, () => {
+      throw new Error('boom');
+    });
+  }), /boom/);
+  assert.equal(db.isTransaction, false);
+  assert.deepEqual(ruleTexts(db), []);
+  tx(db, () => addRule(db, 'after'));
+  assert.deepEqual(ruleTexts(db), ['after']);
+});
+
+test('a tx inside a readTx is a bug: it throws a plain Error and the read ends cleanly', () => {
+  const db = openDb(':memory:');
+  addRule(db, 'kept');
+  assert.throws(() => readTx(db, () => tx(db, () => addRule(db, 'sneaked'))), (e) => e instanceof Error && e.constructor === Error && /read transaction/.test(e.message));
+  assert.equal(db.isTransaction, false);
+  assert.deepEqual(ruleTexts(db), ['kept']);
+  tx(db, () => addRule(db, 'after')); // neither marker is left behind
+  assert.deepEqual(readTx(db, () => ruleTexts(db)), ['kept', 'after']);
+});
+
 const userVersion = (db: DatabaseSync) => (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
 
 test('a pre-versioning database is marked v1 and migrated to the current version', () => {
@@ -104,6 +141,340 @@ test('a pre-versioning database is marked v1 and migrated to the current version
   const again = openDb(path);
   assert.equal(userVersion(again), SCHEMA_VERSION);
   again.close();
+});
+
+// A database as the release before rule types left it (schema v4): active and inactive rules, an event citing each.
+function v4Database(path: string): void {
+  const raw = new DatabaseSync(path);
+  raw.exec(SCHEMA_V1);
+  raw.exec(`
+    ALTER TABLE artifacts ADD COLUMN run_id INTEGER;
+    CREATE TABLE role_urls (role_id INTEGER NOT NULL REFERENCES roles(id), url TEXT NOT NULL, normalized_url TEXT NOT NULL, evidence TEXT, PRIMARY KEY (role_id, normalized_url));
+    CREATE TABLE role_postings (role_id INTEGER NOT NULL REFERENCES roles(id), provider TEXT NOT NULL, employer_key TEXT NOT NULL, posting_id TEXT NOT NULL, PRIMARY KEY (role_id, provider, employer_key, posting_id));
+    CREATE TABLE role_links (duplicate_role_id INTEGER PRIMARY KEY REFERENCES roles(id), canonical_role_id INTEGER NOT NULL REFERENCES roles(id), reason TEXT NOT NULL, evidence TEXT NOT NULL, created_at TEXT NOT NULL);
+    PRAGMA user_version = 4;
+    INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z');
+    INSERT INTO roles(id, company_id, title, first_seen, updated_at, status) VALUES(1, 1, 'Engineer', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'dropped');
+    INSERT INTO rules(id, text, reason, example, added_by, added_on, active) VALUES(3, 'No agencies', 'Seen twice', 'Acme Staffing', 'pipeline', '2026-02-03', 1);
+    INSERT INTO rules(id, text, reason, example, added_by, added_on, active) VALUES(9, 'No crypto', 'User said so', NULL, 'user', '2026-01-04', 0);
+    INSERT INTO events(id, role_id, ts, status, actor, reason, evidence) VALUES(1, 1, '2026-02-04T00:00:00Z', 'dropped', 'pipeline', 'Agency', 'rule:3');
+    INSERT INTO events(id, role_id, ts, status, actor, reason, evidence) VALUES(2, 1, '2026-02-05T00:00:00Z', 'dropped', 'pipeline', 'Crypto', 'rule:9');
+  `);
+  raw.close();
+}
+
+test('upgrading from v4 classifies every rule as global and keeps its provenance and citations', () => {
+  const path = tempDb();
+  v4Database(path);
+  const db = openDb(path);
+  let revision: number;
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.deepEqual(db.prepare('SELECT * FROM rules ORDER BY id').all().map((r) => ({ ...r })), [
+      { id: 3, text: 'No agencies', reason: 'Seen twice', example: 'Acme Staffing', added_by: 'pipeline', added_on: '2026-02-03', active: 1 },
+      { id: 9, text: 'No crypto', reason: 'User said so', example: null, added_by: 'user', added_on: '2026-01-04', active: 0 },
+    ]);
+    assert.deepEqual(db.prepare('SELECT rule_id, type FROM rule_types ORDER BY rule_id').all().map((r) => ({ ...r })), [
+      { rule_id: 3, type: 'global' },
+      { rule_id: 9, type: 'global' },
+    ]);
+    const t = new Tracker(db);
+    assert.deepEqual(t.listRules({ include_inactive: true }).rules.map((r) => [r.id, r.types]), [[3, ['global']], [9, ['global']]]);
+    // The events that cite a rule still resolve, and a new citation of an old rule still validates.
+    assert.deepEqual(db.prepare('SELECT id, evidence FROM events ORDER BY id').all().map((r) => ({ ...r })), [{ id: 1, evidence: 'rule:3' }, { id: 2, evidence: 'rule:9' }]);
+    t.record({ role_id: 1, status: 'dropped', reason: 'Agency again', evidence: 'rule:9', actor: 'pipeline' });
+    t.addRule({ text: 'New', reason: 'r', types: ['forms'] });
+    revision = t.listRules().rules_revision;
+    assert.equal(revision, 1);
+  } finally {
+    db.close();
+  }
+  const again = openDb(path);
+  try {
+    assert.equal(again.prepare('SELECT COUNT(*) AS n FROM rule_types').get()?.n, 3, 'reopening adds no type rows');
+    assert.equal(new Tracker(again).listRules().rules_revision, revision, 'reopening does not reset the revision');
+  } finally {
+    again.close();
+  }
+});
+
+const ROLE_ONE = 'https://jobs.ashbyhq.com/acme/one?utm_source=mail';
+
+// A database as the previous release left it: two rows for one posting, a same-title row that is another
+// posting, a role without a URL, and history on each.
+function v2Database(path: string): void {
+  const raw = new DatabaseSync(path);
+  raw.exec(SCHEMA_V1);
+  raw.exec('ALTER TABLE artifacts ADD COLUMN run_id INTEGER; PRAGMA user_version = 2;');
+  const role = raw.prepare("INSERT INTO roles(id, company_id, title, url, first_seen, updated_at, status) VALUES(?, 1, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?)");
+  raw.exec("INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z')");
+  role.run(1, 'Engineer', ROLE_ONE, 'applied');
+  role.run(2, 'Engineer', 'https://jobs.ashbyhq.com/acme/one', 'closed');
+  role.run(3, 'Engineer', 'https://jobs.ashbyhq.com/acme/two', 'found');
+  role.run(4, 'Designer', null, 'found');
+  raw.exec(`
+    INSERT INTO events(id, role_id, ts, status, actor, reason, evidence) VALUES(7, 1, '2026-01-02T00:00:00Z', 'applied', 'user', 'Sent', 'Thanks for applying');
+    INSERT INTO events(id, role_id, ts, status, outcome, actor, reason, evidence) VALUES(8, 2, '2026-01-03T00:00:00Z', 'closed', 'rejected', 'employer', 'No', 'Not moving forward');
+    INSERT INTO artifacts(id, role_id, kind, content, created_at) VALUES(5, 2, 'note', 'Prep', '2026-01-02T00:00:00Z');
+    INSERT INTO interviews(id, role_id, stage, created_at) VALUES(6, 1, 'screen', '2026-01-02T00:00:00Z');
+  `);
+  raw.close();
+}
+
+// A database as the release before event sources left it (schema v5): the current schema minus what v6 added.
+function v5Database(path: string): void {
+  const db = openDb(path);
+  db.exec(`
+    ${REWIND_TO_V5}
+    INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z');
+    INSERT INTO roles(id, company_id, title, first_seen, updated_at, status) VALUES(1, 1, 'Engineer', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'queued');
+    INSERT INTO events(id, role_id, ts, status, actor, reason) VALUES(1, 1, '2026-02-04T00:00:00Z', 'found', 'pipeline', 'Found');
+    INSERT INTO events(id, role_id, ts, status, actor, reason) VALUES(2, 1, '2026-02-05T00:00:00.000Z', 'queued', 'pipeline', 'Queued');
+  `);
+  db.close();
+}
+
+test('upgrading from v5 keeps every event, dates its receipt by its time, and makes external ids unique', () => {
+  const path = tempDb();
+  v5Database(path);
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.deepEqual(db.prepare('SELECT id, ts, received_at, source, source_account, source_id FROM events ORDER BY id').all().map((r) => ({ ...r })), [
+      { id: 1, ts: '2026-02-04T00:00:00Z', received_at: '2026-02-04T00:00:00Z', source: null, source_account: null, source_id: null },
+      { id: 2, ts: '2026-02-05T00:00:00.000Z', received_at: '2026-02-05T00:00:00.000Z', source: null, source_account: null, source_id: null },
+    ]);
+    const t = new Tracker(db);
+    const ack = { role_id: 1, actor: 'user', status: 'applied', reason: 'Ack', evidence: 'Received', source: 'gmail', source_account: 'jobs@example.test', source_id: 'm1', occurred_at: '2026-03-01T09:00:00Z' };
+    assert.equal(t.record(ack).duplicate, false);
+    assert.equal(t.record(ack).duplicate, true);
+    // The index is the backstop under the check: a second row with the same identity cannot be written at all.
+    assert.throws(() => db.exec("INSERT INTO events(role_id, ts, actor, reason, source, source_account, source_id) VALUES(1, '2026-03-02T00:00:00Z', 'user', 'x', 'gmail', 'jobs@example.test', 'm1')"), /UNIQUE/);
+    // Events without an external identity are not constrained by it.
+    db.exec("INSERT INTO events(role_id, ts, actor, reason) VALUES(1, '2026-03-02T00:00:00Z', 'user', 'a'), (1, '2026-03-02T00:00:00Z', 'user', 'b')");
+  } finally {
+    db.close();
+  }
+  const again = openDb(path);
+  try {
+    assert.equal(again.prepare('SELECT COUNT(*) AS n FROM events').get()?.n, 5, 'reopening adds nothing');
+  } finally {
+    again.close();
+  }
+});
+
+// A database as the release before source checkpoints left it (schema v6): the current schema minus the v7 table.
+function v6Database(path: string): void {
+  const db = openDb(path);
+  db.exec(`
+    ${REWIND_TO_V6}
+    INSERT INTO sources(name, last_run, status, consecutive_failures, found, applied, last_error) VALUES('gmail', '2026-02-05T00:00:00.000Z', 'failed', 2, 4, 1, '429');
+  `);
+  db.close();
+}
+
+test('upgrading from v6 adds source checkpoints, empty, and leaves the sources as they were', () => {
+  const path = tempDb();
+  v6Database(path);
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.deepEqual(db.prepare('SELECT name, last_run, status, consecutive_failures, found, applied, last_error FROM sources').all().map((r) => ({ ...r })), [
+      { name: 'gmail', last_run: '2026-02-05T00:00:00.000Z', status: 'failed', consecutive_failures: 2, found: 4, applied: 1, last_error: '429' },
+    ]);
+    const t = new Tracker(db);
+    assert.deepEqual(t.sourceHealth().checkpoints, []);
+    t.setSourceStatus({ name: 'gmail', status: 'ok', source_account: 'jobs@example.test', coverage: 'complete', checked_through: '2026-03-01T00:00:00Z' });
+    assert.equal(t.sourceHealth().checkpoints[0]?.checked_through, '2026-03-01T00:00:00.000Z');
+    assert.throws(() => db.exec("INSERT INTO source_checkpoints(source, source_account, last_coverage, last_attempt_at) VALUES('gmail', 'jobs@example.test', 'partial', 'now')"), /UNIQUE/);
+    assert.throws(() => db.exec("INSERT INTO source_checkpoints(source, source_account, last_coverage, last_attempt_at) VALUES('gmail', 'b@example.test', 'full', 'now')"), /CHECK/);
+  } finally {
+    db.close();
+  }
+  openDb(path).close(); // reopening does not migrate again
+});
+
+// A database as the release before interview states left it (schema v7): the current schema minus what v8 added, with a
+// booked interview that has its own timezone, one whose time is free text, and a booking link not yet used.
+function v7Database(path: string): void {
+  const db = openDb(path);
+  db.exec(`
+    ${REWIND_TO_V7}
+    INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z');
+    INSERT INTO roles(id, company_id, title, first_seen, updated_at, status) VALUES(1, 1, 'Engineer', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'interviewing');
+    INSERT INTO interviews(id, role_id, starts_at, tz, stage, people, link, booked_by, notes, created_at) VALUES(1, 1, '2099-11-02T09:00:00.000Z', 'Europe/Warsaw', 'Screen', 'Dana Ruiz', 'https://meet.example.test/s', 'employer', 'Bring a laptop', '2026-10-01T00:00:00.000Z');
+    INSERT INTO interviews(id, role_id, starts_at, stage, created_at) VALUES(2, 1, 'Tuesday 10am', 'Panel', '2026-10-02T00:00:00.000Z');
+    INSERT INTO interviews(id, role_id, stage, link, created_at) VALUES(3, 1, 'Technical', 'https://calendar.example.test/book/tech', '2026-10-03T00:00:00.000Z');
+  `);
+  db.close();
+}
+
+test('upgrading from v7 gives each interview a state, keeps its time zone, and lets a pending one be confirmed in place', () => {
+  const path = tempDb();
+  v7Database(path);
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.deepEqual(db.prepare('SELECT id, starts_at, tz, stage, people, link, booked_by, notes, created_at, state, updated_at, source, source_account, source_id, last_occurred_at FROM interviews ORDER BY id').all().map((r) => ({ ...r })), [
+      { id: 1, starts_at: '2099-11-02T09:00:00.000Z', tz: 'Europe/Warsaw', stage: 'Screen', people: 'Dana Ruiz', link: 'https://meet.example.test/s', booked_by: 'employer', notes: 'Bring a laptop', created_at: '2026-10-01T00:00:00.000Z', state: 'scheduled', updated_at: '2026-10-01T00:00:00.000Z', source: null, source_account: null, source_id: null, last_occurred_at: null },
+      { id: 2, starts_at: 'Tuesday 10am', tz: null, stage: 'Panel', people: null, link: null, booked_by: null, notes: null, created_at: '2026-10-02T00:00:00.000Z', state: 'scheduled', updated_at: '2026-10-02T00:00:00.000Z', source: null, source_account: null, source_id: null, last_occurred_at: null },
+      { id: 3, starts_at: null, tz: null, stage: 'Technical', people: null, link: 'https://calendar.example.test/book/tech', booked_by: null, notes: null, created_at: '2026-10-03T00:00:00.000Z', state: 'pending', updated_at: '2026-10-03T00:00:00.000Z', source: null, source_account: null, source_id: null, last_occurred_at: null },
+    ]);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM interview_changes').get()?.n, 0);
+    const t = new Tracker(db);
+    assert.deepEqual(t.openItems().interviews_to_book.map((i) => i.id), [3]);
+    assert.deepEqual(t.openItems().upcoming_interviews.map((i) => i.id), [1, 2]);
+    // The pending booking is confirmed by its link, and the migrated booked one keeps its zone when its time moves.
+    const confirmed = t.addInterview({ role_id: 1, stage: 'Technical', link: 'https://calendar.example.test/book/tech', starts_at: '2099-11-09T15:00:00+01:00' });
+    assert.deepEqual(confirmed, { interview_id: 3, created: false, updated: true, stale: false, state: 'scheduled' });
+    t.addInterview({ role_id: 1, interview_id: 1, stage: 'Screen', starts_at: '2099-11-03T10:00' });
+    assert.deepEqual({ ...db.prepare('SELECT starts_at, tz FROM interviews WHERE id = 1').get() }, { starts_at: '2099-11-03T09:00:00.000Z', tz: 'Europe/Warsaw' });
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM interviews').get()?.n, 3);
+    assert.equal(t.openItems().interviews_to_book.length, 0);
+    assert.throws(() => db.exec("INSERT INTO interviews(role_id, stage, created_at, state) VALUES(1, 'x', 'now', 'booked')"), /CHECK/);
+  } finally {
+    db.close();
+  }
+  openDb(path).close(); // reopening does not migrate again
+});
+
+test('migrating keeps every row and indexes every URL, and duplicates become a lookup conflict', () => {
+  const path = tempDb();
+  v2Database(path);
+  // Reopening must not run the backfill twice.
+  for (let i = 0; i < 2; i++) openDb(path).close();
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.deepEqual(db.prepare('SELECT id, title, url, status FROM roles ORDER BY id').all().map((r) => ({ ...r })), [
+      { id: 1, title: 'Engineer', url: ROLE_ONE, status: 'applied' },
+      { id: 2, title: 'Engineer', url: 'https://jobs.ashbyhq.com/acme/one', status: 'closed' },
+      { id: 3, title: 'Engineer', url: 'https://jobs.ashbyhq.com/acme/two', status: 'found' },
+      { id: 4, title: 'Designer', url: null, status: 'found' },
+    ]);
+    assert.deepEqual(db.prepare('SELECT id, role_id, evidence FROM events ORDER BY id').all().map((r) => ({ ...r })), [
+      { id: 7, role_id: 1, evidence: 'Thanks for applying' },
+      { id: 8, role_id: 2, evidence: 'Not moving forward' },
+    ]);
+    assert.deepEqual({ ...db.prepare('SELECT id, role_id, content FROM artifacts').get() }, { id: 5, role_id: 2, content: 'Prep' });
+    assert.deepEqual({ ...db.prepare('SELECT id, role_id FROM interviews').get() }, { id: 6, role_id: 1 });
+    assert.deepEqual(db.prepare('SELECT role_id, url, normalized_url, evidence FROM role_urls ORDER BY role_id').all().map((r) => ({ ...r })), [
+      { role_id: 1, url: ROLE_ONE, normalized_url: 'https://jobs.ashbyhq.com/acme/one', evidence: null },
+      { role_id: 2, url: 'https://jobs.ashbyhq.com/acme/one', normalized_url: 'https://jobs.ashbyhq.com/acme/one', evidence: null },
+      { role_id: 3, url: 'https://jobs.ashbyhq.com/acme/two', normalized_url: 'https://jobs.ashbyhq.com/acme/two', evidence: null },
+    ]);
+    assert.deepEqual(db.prepare('SELECT role_id, provider, employer_key, posting_id FROM role_postings ORDER BY role_id').all().map((r) => ({ ...r })), [
+      { role_id: 1, provider: 'ashby', employer_key: 'acme', posting_id: 'one' },
+      { role_id: 2, provider: 'ashby', employer_key: 'acme', posting_id: 'one' },
+      { role_id: 3, provider: 'ashby', employer_key: 'acme', posting_id: 'two' },
+    ]);
+    const t = new Tracker(db);
+    const looked = t.findCompany({ url: 'https://jobs.ashbyhq.com/acme/one' });
+    assert.equal(looked.verdict, 'skip');
+    assert.deepEqual(looked.exact_role_ids, [1, 2]);
+    assert.throws(() => t.upsertRole({ company: 'Acme', title: 'Engineer', url: 'https://jobs.ashbyhq.com/acme/one' }), /roles 1, 2/);
+    assert.equal(t.one<{ n: number }>('SELECT COUNT(*) AS n FROM roles')?.n, 4, 'a conflict creates nothing');
+    assert.equal(t.mustRole(1).url, ROLE_ONE, 'a conflict overwrites nothing');
+    assert.deepEqual(t.findCompany({ url: 'https://jobs.ashbyhq.com/acme/two' }).exact_role_ids, [3]);
+  } finally {
+    db.close();
+  }
+});
+
+test('an upgraded database links its old duplicates, and the link survives reopening', () => {
+  const path = tempDb();
+  v2Database(path);
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    const t = new Tracker(db);
+    assert.equal(t.one<{ n: number }>('SELECT COUNT(*) AS n FROM role_links')?.n, 0);
+    // Role 2's rejection is newer than role 1's application, so role 1 must hold it before it can be the card.
+    assert.throws(() => t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, reason: 'Same posting', evidence: 'Both link to acme/one' }), /role 1 is applied and role 2 is closed \(rejected\)/);
+    t.record({ role_id: 1, status: 'closed', outcome: 'rejected', actor: 'employer', reason: 'No', evidence: 'Not moving forward' });
+    t.linkDuplicateRole({ canonical_role_id: 1, duplicate_role_id: 2, reason: 'Same posting', evidence: 'Both link to acme/one' });
+  } finally {
+    db.close();
+  }
+  const again = openDb(path);
+  try {
+    const t = new Tracker(again);
+    assert.deepEqual(t.findCompany({ url: 'https://jobs.ashbyhq.com/acme/one' }).exact_role_ids, [1]);
+    assert.deepEqual(t.roleDetail({ role_id: 2 }).events.map((e) => [e.id, e.role_id]).slice(0, 2), [[7, 1], [8, 2]]);
+    assert.deepEqual(t.roleDetail({ role_id: 2 }).artifacts.map((a) => [a.id, a.role_id]), [[5, 2]]);
+    assert.deepEqual(t.roleDetail({ role_id: 2 }).interviews.map((i) => [i.id, i.role_id]), [[6, 1]]);
+  } finally {
+    again.close();
+  }
+});
+
+test('a historical URL the parser rejects survives as a raw alias and stays findable', () => {
+  const path = tempDb();
+  const urls = ['https://user:secret@careers.example/job', 'mailto:jobs@acme.example', 'see the careers page'];
+  const raw = new DatabaseSync(path);
+  raw.exec(SCHEMA_V1);
+  raw.exec('ALTER TABLE artifacts ADD COLUMN run_id INTEGER; PRAGMA user_version = 2;');
+  raw.exec("INSERT INTO companies(id, name, created_at) VALUES(1, 'Acme', '2026-01-01T00:00:00Z')");
+  const role = raw.prepare("INSERT INTO roles(company_id, title, url, first_seen, updated_at, status) VALUES(1, 'Engineer', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'found')");
+  for (const url of [...urls, '', '   ', new Uint8Array([1, 2])]) role.run(url);
+  raw.close();
+  // A throw here would stop the server from starting at all.
+  const db = openDb(path);
+  try {
+    const t = new Tracker(db);
+    assert.deepEqual(db.prepare('SELECT url, normalized_url FROM role_urls ORDER BY role_id').all().map((r) => ({ ...r })), urls.map((url) => ({ url, normalized_url: url })));
+    urls.forEach((url, i) => {
+      assert.deepEqual(t.findCompany({ url }).exact_role_ids, [i + 1]);
+      assert.equal(t.findCompany({ url }).verdict, 'skip');
+    });
+    // Updating such a role by id must not re-parse the URL it already holds.
+    assert.equal(t.upsertRole({ id: 1, title: 'Engineer', stack: 'TypeScript' }).role.url, urls[0]);
+    assert.deepEqual(t.roleDetail({ role_id: 2 }).urls.map((u) => u.url), [urls[1]]);
+    assert.deepEqual(t.roleDetail({ role_id: 2 }).postings, []);
+    // The next real link replaces the stored junk without losing it.
+    const posting = 'https://jobs.ashbyhq.com/acme/one';
+    assert.equal(t.upsertRole({ id: 3, title: 'Engineer', url: posting }).role.url, posting);
+    assert.deepEqual(t.findCompany({ url: urls[2]! }).exact_role_ids, [3]); // urls has three entries
+  } finally {
+    db.close();
+  }
+});
+
+test('URLs from importLegacy on an upgraded database are indexed like any other', () => {
+  const path = tempDb();
+  v2Database(path);
+  const db = openDb(path);
+  try {
+    const t = new Tracker(db);
+    const unusual = 'https://user:secret@careers.zenith.example/1';
+    importLegacy(t, {
+      queue: [
+        { filename: 'zenith-engineer.md', content: '# Zenith · Engineer (queued 2026-10-01)\n\n- **Posting:** https://jobs.ashbyhq.com/zenith/9?utm_source=old\n' },
+        { filename: 'orbit-engineer.md', content: `# Orbit · Engineer (queued 2026-10-01)\n\n- **Posting:** ${unusual}\n` },
+      ],
+    });
+    const zenith = t.findCompany({ url: 'https://jobs.ashbyhq.com/zenith/9' });
+    assert.equal(zenith.verdict, 'skip');
+    assert.equal(zenith.exact_role_ids.length, 1);
+    assert.deepEqual(t.roleDetail({ role_id: zenith.exact_role_ids[0]! }).postings.map((p) => ({ ...p })), [{ provider: 'ashby', employer_key: 'zenith', posting_id: '9' }]); // length checked above
+    assert.equal(t.findCompany({ url: unusual }).exact_role_ids.length, 1, 'one odd line must not abort the import');
+    assert.deepEqual(t.findCompany({ url: 'https://jobs.ashbyhq.com/acme/one' }).exact_role_ids, [1, 2], 'the backfill still stands');
+  } finally {
+    db.close();
+  }
+});
+
+test('a legacy note that gives a URL-less role its URL indexes it', () => {
+  const db = openDb(':memory:');
+  try {
+    const t = new Tracker(db);
+    const { role } = t.upsertRole({ company: 'Zenith', title: 'Engineer' });
+    importLegacy(t, { queue: [{ filename: 'zenith-note.md', content: '# Zenith · Engineer\n\n- **Posting:** https://jobs.ashbyhq.com/zenith/9\n' }] });
+    assert.equal(t.mustRole(role.id).url, 'https://jobs.ashbyhq.com/zenith/9');
+    assert.deepEqual(t.findCompany({ url: 'https://jobs.ashbyhq.com/zenith/9' }).exact_role_ids, [role.id]);
+  } finally {
+    db.close();
+  }
 });
 
 test('a database from a newer plugin is refused, read-write and read-only', () => {
@@ -249,4 +620,61 @@ test('permission tightening is best effort: unsupported chmod warns, anything el
   assert.throws(() => secureFile(file, failWith('EIO')), /EIO/);
   assert.throws(() => secureDir(dir, failWith('ENOENT')), /ENOENT/);
   secureFile(join(dir, 'missing')); // a missing file is ignored
+});
+
+// Real v8 rows: the history can prove a baseline only when every value stayed unchanged since creation.
+test('upgrading from v8 backfills only proven unchanged interviews and preserves all prior data', () => {
+  const path = tempDb();
+  const old = openDb(path);
+  const t = new Tracker(old);
+  const role = t.upsertRole({ company: 'Acme', title: 'Engineer' }).role.id;
+  const base = { role_id: role, stage: 'Screen', occurred_at: '2026-10-01T09:00:00Z', source: 'calendar', source_account: 'me@example.test' };
+  const scheduled = t.addInterview({ ...base, source_id: 'scheduled', starts_at: '2099-11-05T13:00:00Z' }).interview_id;
+  const pending = t.addInterview({ ...base, source_id: 'pending', link: 'https://calendar.example.test/book' }).interview_id;
+  const cancelled = t.addInterview({ ...base, source_id: 'cancelled', state: 'cancelled' }).interview_id;
+  const adopted = t.addInterview({ role_id: role, stage: 'Screen', link: 'https://calendar.example.test/adopt' }).interview_id;
+  t.addInterview({ ...base, interview_id: adopted, source_id: 'adopted' });
+  const changed = t.addInterview({ ...base, source_id: 'changed' }).interview_id;
+  t.addInterview({ role_id: role, interview_id: changed, stage: 'Screen', notes: 'Local edit' });
+  const missing = t.addInterview({ ...base, source_id: 'missing' }).interview_id;
+  t.run('DELETE FROM interview_changes WHERE interview_id = ?', missing);
+  const malformed = t.addInterview({ ...base, source_id: 'malformed' }).interview_id;
+  t.run("UPDATE interview_changes SET after_json = '{broken' WHERE interview_id = ?", malformed);
+  const incomplete = t.addInterview({ ...base, source_id: 'incomplete' }).interview_id;
+  t.run("UPDATE interview_changes SET after_json = json_remove(after_json, '$.notes') WHERE interview_id = ?", incomplete);
+  const noCreation = t.addInterview({ ...base, source_id: 'no-creation' }).interview_id;
+  t.run('UPDATE interview_changes SET before_json = after_json WHERE interview_id = ?', noCreation);
+  const disconnected = t.addInterview({ ...base, source_id: 'disconnected' }).interview_id;
+  t.run("UPDATE interview_changes SET received_at = '2026-01-01T00:00:00.000Z' WHERE interview_id = ?", disconnected);
+  const local = t.addInterview({ role_id: role, stage: 'Local' }).interview_id;
+  const prior = () => ['companies', 'roles', 'interviews', 'events', 'interview_changes'].map((table) => JSON.stringify(old.prepare(`SELECT * FROM ${table} ORDER BY id`).all()));
+  const before = prior();
+  old.exec(REWIND_TO_V8);
+  old.close();
+  const db = openDb(path);
+  let accepted: string;
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name = 'interview_external_state'").get(), 'the private baseline table is created');
+    assert.deepEqual(['companies', 'roles', 'interviews', 'events', 'interview_changes'].map((table) => JSON.stringify(db.prepare(`SELECT * FROM ${table} ORDER BY id`).all())), before);
+    const rows = db.prepare('SELECT * FROM interview_external_state ORDER BY interview_id').all();
+    assert.deepEqual(rows.map((r) => r.interview_id), [scheduled, pending, cancelled, adopted]);
+    for (const row of rows) {
+      assert.equal(row.occurred_at, '2026-10-01T09:00:00.000Z');
+      assert.deepEqual(Object.keys(JSON.parse(String(row.snapshot_json))), ['starts_at', 'tz', 'stage', 'people', 'link', 'booked_by', 'notes', 'state']);
+    }
+    assert.equal(rows.some((r) => r.interview_id === local), false);
+    accepted = JSON.stringify(rows);
+    if (process.platform !== 'win32') {
+      for (const f of [path, `${path}-wal`, `${path}-shm`]) assert.equal(mode(f), 0o600);
+    }
+  } finally {
+    db.close();
+  }
+  const again = openDb(path);
+  try {
+    assert.equal(JSON.stringify(again.prepare('SELECT * FROM interview_external_state ORDER BY interview_id').all()), accepted);
+  } finally {
+    again.close();
+  }
 });

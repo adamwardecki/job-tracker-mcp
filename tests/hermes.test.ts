@@ -77,6 +77,7 @@ test('slash-skill messages unwrap to the typed command; only the user instructio
 
 // --- hooks/hermes.ts e2e ---
 
+import { boardMove } from '../plugin/servers/tracker/src/board-api.ts';
 import { openDb } from '../plugin/servers/tracker/src/db.ts';
 import { Tracker } from '../plugin/servers/tracker/src/tracker.ts';
 
@@ -119,6 +120,34 @@ test('hermes.ts: a submit click needs the user approval typed as /job-tracker:ap
   assert.match(hermes('pre_tool_call', click).message, /needs the user's approval/, 'approval is consumed by one submit attempt');
 });
 
+// Applied to, rejected, then dragged back to the queue on the board. The hook reads it from a file it cannot write.
+function reopenedRole() {
+  const t = new Tracker(openDb(join(home, 'tracker.db')));
+  const role = t.upsertRole({ company: 'Beta', title: 'Founding Engineer', url: 'https://jobs.ashbyhq.com/beta/1', source: 'ashby' }).role;
+  t.transition({ role_id: role.id, to: 'verified', reason: 'checked', evidence: 'https://jobs.ashbyhq.com/beta/1 "Remote (EU)"', location_line: 'Remote (EU)', location_type: 'remote' });
+  t.transition({ role_id: role.id, to: 'scored', reason: 'fits', score: 8 });
+  t.transition({ role_id: role.id, to: 'queued', reason: 'top pick' });
+  t.transition({ role_id: role.id, to: 'applied', reason: 'submitted', evidence: 'Thanks for applying to Beta!' });
+  t.record({ role_id: role.id, status: 'closed', outcome: 'rejected', reason: 'Rejection email', evidence: 'Not moving forward', actor: 'employer' });
+  boardMove(t, { role_id: role.id, to: 'queued' });
+  t.db.close();
+  chmodSync(join(home, 'tracker.db'), 0o400);
+  return role;
+}
+
+test('hermes.ts: a submit is blocked for a posting applied to before, even after a move back to the queue', { skip: process.platform === 'win32' }, () => {
+  const role = reopenedRole();
+  const sid = 'h6';
+  hermes('pre_tool_call', { session_id: sid, tool_name: `${TRACKER}open_items`, args: {} });
+  hermes('post_tool_call', { session_id: sid, tool_call_id: 'n1', tool_name: 'browser_navigate', args: { url: 'https://jobs.ashbyhq.com/beta/1' }, result: JSON.stringify({ success: true, url: 'https://jobs.ashbyhq.com/beta/1' }) });
+  hermes('post_tool_call', { session_id: sid, tool_call_id: 'n2', tool_name: 'browser_snapshot', args: {}, result: JSON.stringify({ success: true, snapshot: '- button "Submit application" [ref=e7]' }) });
+  const approved = hermes('pre_llm_call', { session_id: sid, user_message: `/job-tracker:approve ${role.id}` });
+  assert.match(approved.context, /gate_check fails: .*This posting was applied to before/);
+  const out = hermes('pre_tool_call', { session_id: sid, tool_name: 'browser_click', args: { ref: '@e7' } });
+  assert.equal(out.action, 'block');
+  assert.match(out.message, new RegExp(`Submit blocked for role ${role.id}: .*This posting was applied to before: role ${role.id} was closed \\(rejected\\)`));
+});
+
 test('hermes.ts: a subagent turn cannot grant approval', () => {
   const role = verifiedRole();
   const out = hermes('pre_llm_call', { session_id: 'child', parent_session_id: 'h3', user_message: `/job-tracker:approve ${role.id}` });
@@ -144,6 +173,16 @@ test('hermes.ts: an unfinished sweep queues a nudge that the next turn receives'
   const next = hermes('pre_llm_call', { session_id: sid, user_message: 'ok' });
   assert.match(next.context, /The sweep is not finished/);
   assert.equal(hermes('pre_llm_call', { session_id: sid, user_message: 'ok' }), null, 'the nudge is delivered once');
+});
+
+test('hermes.ts: an event written through a linked duplicate\'s old id counts for the role upsert_role returned', () => {
+  const sid = 'h7';
+  hermes('pre_llm_call', { session_id: sid, user_message: '/job-tracker:sweep' });
+  hermes('post_tool_call', { session_id: sid, tool_call_id: 'u1', tool_name: `${TRACKER}upsert_role`, args: { id: 2, title: 'B' }, result: JSON.stringify({ role: { id: 1, title: 'B' }, created: false }) });
+  hermes('post_tool_call', { session_id: sid, tool_call_id: 't1', tool_name: `${TRACKER}transition`, args: { role_id: 2, to: 'dropped' }, result: JSON.stringify({ role: { id: 1, status: 'dropped' }, from: 'scored', to: 'dropped' }) });
+  const stop = hermes('post_llm_call', { session_id: sid });
+  assert.doesNotMatch(stop.message, /no transition\/record event/);
+  assert.match(stop.message, /render_report/, 'only the missing report is left');
 });
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');

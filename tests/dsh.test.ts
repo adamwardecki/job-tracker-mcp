@@ -2,12 +2,13 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { beforeEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { gatePrompt } from '../plugin/hooks/lib/hosts/dsh.ts';
+import { boardMove } from '../plugin/servers/tracker/src/board-api.ts';
 import { openDb } from '../plugin/servers/tracker/src/db.ts';
 import { Tracker } from '../plugin/servers/tracker/src/tracker.ts';
 
@@ -43,10 +44,15 @@ function dsh(event: string, payload: Record<string, unknown>, status = 0) {
 const deniedBy = (out: { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } } | null) =>
   out?.hookSpecificOutput?.permissionDecision === 'deny' ? out.hookSpecificOutput.permissionDecisionReason || '' : null;
 
-function verifiedRole() {
-  const t = new Tracker(openDb(join(home, 'tracker.db')));
+function verifiedRoleOn(t: Tracker) {
   const role = t.upsertRole({ company: 'Beta', title: 'Founding Engineer', url: 'https://jobs.ashbyhq.com/beta/1', source: 'ashby' }).role;
   t.transition({ role_id: role.id, to: 'verified', reason: 'checked', evidence: 'https://jobs.ashbyhq.com/beta/1 "Remote (EU)"', location_line: 'Remote (EU)', location_type: 'remote' });
+  return role;
+}
+
+function verifiedRole() {
+  const t = new Tracker(openDb(join(home, 'tracker.db')));
+  const role = verifiedRoleOn(t);
   t.db.close();
   return role;
 }
@@ -77,6 +83,25 @@ test('dsh.ts: a submit click needs the user approval typed as /job-tracker-appro
   assert.match(deniedBy(dsh('pre-tool', click(sid)).out) || '', /needs the user's approval/, 'approval is consumed by one submit attempt');
 });
 
+test('dsh.ts: a submit is blocked for a posting applied to before, even after a move back to the queue', { skip: process.platform === 'win32' }, () => {
+  const t = new Tracker(openDb(join(home, 'tracker.db')));
+  const role = verifiedRoleOn(t);
+  t.transition({ role_id: role.id, to: 'scored', reason: 'fits', score: 8 });
+  t.transition({ role_id: role.id, to: 'queued', reason: 'top pick' });
+  t.transition({ role_id: role.id, to: 'applied', reason: 'submitted', evidence: 'Thanks for applying to Beta!' });
+  t.record({ role_id: role.id, status: 'closed', outcome: 'rejected', reason: 'Rejection email', evidence: 'Not moving forward', actor: 'employer' });
+  boardMove(t, { role_id: role.id, to: 'queued' });
+  t.db.close();
+  // The hook reads it from a file it cannot write.
+  chmodSync(join(home, 'tracker.db'), 0o400);
+  const sid = 'd6';
+  dsh('pre-tool', { session_id: sid, tool_name: `${TRACKER}open_items`, tool_input: {} });
+  openApplication(sid);
+  const approved = dsh('prompt', { session_id: sid, prompt: `/job-tracker-approve ${role.id}` }).out;
+  assert.match(approved.hookSpecificOutput.additionalContext, /gate_check fails: .*This posting was applied to before/);
+  assert.match(deniedBy(dsh('pre-tool', click(sid)).out) || '', new RegExp(`Submit blocked for role ${role.id}: .*This posting was applied to before: role ${role.id} was closed \\(rejected\\)`));
+});
+
 test('dsh.ts: an approval that opens a fresh session (a subagent task) is not recorded', () => {
   // dsh gives a subagent its own session and sends its task through the same prompt hook. A fresh session
   // has no browser page in its step log, so the approval cannot bind to a form.
@@ -105,6 +130,16 @@ test('dsh.ts: tracker errors in the step log do not count as done', () => {
   dsh('prompt', { session_id: sid, prompt: '/job-tracker-sweep' });
   dsh('post-tool', { session_id: sid, tool_use_id: 'r1', tool_name: `${TRACKER}render_report`, tool_input: {}, tool_response: JSON.stringify({ error: 'no run' }) });
   assert.match(dsh('stop', { session_id: sid }).out.reason, /No daily report rendered/);
+});
+
+test('dsh.ts: an event written through a linked duplicate\'s old id counts for the role upsert_role returned', () => {
+  const sid = 'd7';
+  dsh('prompt', { session_id: sid, prompt: '/job-tracker-sweep' });
+  dsh('post-tool', { session_id: sid, tool_use_id: 'u1', tool_name: `${TRACKER}upsert_role`, tool_input: { id: 2, title: 'B' }, tool_response: JSON.stringify({ role: { id: 1, title: 'B' }, created: false }) });
+  dsh('post-tool', { session_id: sid, tool_use_id: 't1', tool_name: `${TRACKER}transition`, tool_input: { role_id: 2, to: 'dropped' }, tool_response: JSON.stringify({ role: { id: 1, status: 'dropped' }, from: 'scored', to: 'dropped' }) });
+  const { reason } = dsh('stop', { session_id: sid }).out;
+  assert.doesNotMatch(reason, /no transition\/record event/);
+  assert.match(reason, /render_report/, 'only the missing report is left');
 });
 
 // --- hooks/dsh-hooks.json ---

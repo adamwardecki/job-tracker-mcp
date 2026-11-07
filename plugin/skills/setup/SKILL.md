@@ -120,7 +120,7 @@ Explain that hooks enforce the second list regardless of this config. `save_conf
 ### 11. Calibration run
 - Run the sweep procedure from `/job-tracker:sweep` with `--limit 5 --calibration`.
 - Show the 5 results with the verdict and the one-line reason for each. For queued ones, add the ready-to-type command with the real id, e.g. `/job-tracker:apply 42`, never a `<id>` placeholder.
-- For each "no, because..." from the user, call `add_rule` with the text, the user's reason and the example. For each "yes, but you dropped it", follow `/job-tracker:correct`.
+- Before adding rules, Rules: load all types (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). A new rule must not repeat or contradict one. For each "no, because..." from the user, call `add_rule` with the text, the user's reason, the example and the `types` of the consumers it affects (omit for global). For each "yes, but you dropped it", follow `/job-tracker:correct`, which also governs deactivation and free-text preferences.
 - Offer `/job-tracker:import` if the user has a legacy pipeline.
 
 ## Exit

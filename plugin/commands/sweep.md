@@ -31,18 +31,19 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
    - Call `setup_status`. If the tracker itself is unreachable, stop and say so: there is nowhere to record work.
    - Detect capabilities: which connectors respond (Gmail, Google Calendar, LinkedIn, Drive), which browser is reachable (Claude in Chrome, the host's built-in browser such as Hermes `browser_*` tools, or none), and whether a local folder is readable. Detect by checking the tool list (use tool search if tools are deferred) and making one cheap read call per connector. A tool that exists but errors counts as unavailable.
    - Call `start_run` with `kind` (`sweep`, or `calibration` if `--calibration`) and the capabilities object. Keep the returned `run_id`.
-   - Call `get_profile` and `list_rules`. Apply every active rule for the rest of the run.
-   - Call `open_items` and `source_health`. Another session may have touched roles today; build on its events, do not duplicate them.
+   - Call `get_profile`. Rules: load `reporting` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`). Apply them when you write the report. Every skill and subagent loads its own types. If your own read fails, or any subagent returns `blocked: rules unreadable`, the run is incomplete: put that first under **Needs you**, still render and deliver the report, and do not queue or prepare roles the blocked agent was to handle.
+   - Call `open_items` and `source_health` (its `checkpoints` say where each mailbox, calendar and board was last fully read). Another session may have touched roles today; build on its events, do not duplicate them.
 
-2. **Inbox and calendar.** If Gmail or Calendar is connected, follow the `inbox-and-calendar` skill. If not, note it for the report and continue.
+2. **Inbox and calendar.** If Gmail or Calendar is connected, follow the `inbox-and-calendar` skill (windows from the checkpoints, coverage for every account). Report any connected source it lists as `partial` or `unavailable`. If not connected, note it for the report and continue.
 
-3. **Source.** Follow the `source-roles` skill to choose today's sources from config and capabilities. Launch one `sourcer` agent per available source, in parallel. Browser sources are skipped when no browser is reachable; list each skip in the report (do not mark the source failed for it). Collect each sourcer's lead list.
+3. **Source.** Follow the `source-roles` skill to choose today's sources from config and capabilities. Launch one `sourcer` agent per available source, in parallel, and tell each the rule types to load: `sourcing`. Browser sources are skipped when no browser is reachable; list each skip in the report (do not mark the source failed for it). Collect each sourcer's lead list.
 
-4. **Dedupe.** The sourcers already call `find_company` before `upsert_role`. For any lead they marked `seen` or `skip`, do not verify again. A company with `no_cold_apply` or a live application is never prepared.
+4. **Dedupe.** The sourcers already call `find_company` before `upsert_role`. A lead they marked `skip` (the posting is already tracked, a live application at the company, or `no_cold_apply`) was not upserted: do not verify it again. A `seen` lead they upserted is a new requisition (Dedupe and Identity in `source-roles`) and goes on to step 5. Why: a rejection blocks only the posting it was for; there is no company ban. A company with `no_cold_apply` or a live application is never prepared. Leads listed as `possible duplicate of <ids>` go to their scorer with those ids.
 
-5. **Verify and score.** For each `found` role from this run, launch a `scorer` agent (one role per agent, several in parallel). Each scorer follows `verify-employer` then `score-role` and writes `transition` events with evidence. Respect `--limit`.
+5. **Verify and score.** For each `found` role from this run, launch a `scorer` agent (one role per agent, several in parallel), telling each the rule types to load: `scoring`. Each scorer follows `verify-employer` then `score-role` and writes `transition` events with evidence. Respect `--limit`.
 
 6. **Prepare.** Take the top scored roles (default 3, at most 8, in score order) that cleared every hard filter. For each:
+   - Call `gate_check` first. If it fails, do not prepare the role; put its problems in the report. Why: a posting applied to before (`previous_application`), or one with a live application or `no_cold_apply` at the company, can never be submitted, so a note for it is wasted.
    - Follow the `write-note` skill to write the cover note. `lint_prose` must pass.
    - Save it with `add_artifact` (`kind: "cover_note"`).
    - `transition` the role to `queued` with a reason naming the note, the `run_id`, and `blocked_by: "browser"` if no browser was available this run, else `blocked_by: "user"`.
@@ -53,7 +54,9 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
 
 7. **Report.** Call `render_report` with today's date (YYYY-MM-DD), the `run_id`, and a `headline` (one or two sentences: the outcome, e.g. "3 roles queued, 1 interview to book, 2 rejections"). Check that it states which capabilities were missing and what was queued or skipped because of it. If it does not, add one line under Needs you. End the report with the line `Board: run /job-tracker:board`. Why: a scheduled run can't open the board, and its link changes each time the board starts.
 
-8. **Audit.** Launch the `auditor` agent with: today's date, the `run_id`, the rendered report, the list of artifact ids and Gmail draft ids created in this run, and the list of tool names you called (including any a hook denied). Put every FAIL line it returns at the top of the report's **Needs you** section.
+   Under **Needs you** the report has **New or changed today** (queued roles that entered the queue or whose question or blocker changed in this run, in detail), **Other open actions** (unresolved questions, unconfirmed drafts, bookings to confirm and audit failures, whatever their age), and **Still waiting (N)** (queued roles unchanged in this run, with the 14+ day ones named). Keep that split when you edit the report: do not move a waiting role up, describe it as researched or scored today, or add an event to an old role to make it appear. Why: most of the queue is carried over from earlier days, and listing it in full every day buries what is new and makes the old decisions look fresh. The result also has `queue_activity`; pass it to the auditor.
+
+8. **Audit.** Launch the `auditor` agent with: today's date, the rule types to load (`reporting`), the `run_id`, the run's start time (`capabilities.detected_at` from `start_run`), the rendered report and its `queue_activity`, the list of artifact ids and Gmail draft ids created in this run, and the list of tool names you called (including any a hook denied). Put every FAIL line it returns at the top of the report's **Needs you** section.
 
 9. **Deliver** per `schedule.report_delivery`:
    - `artifact` (default): the report is your last message.
@@ -64,4 +67,4 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
 
 ## When sources are caught up
 
-If every lead today is a company already in the tracker, say "sources are caught up" in the report and stop. Do not widen the filters to manufacture a shortlist.
+If every lead today is a posting already in the tracker (`skip`), say "sources are caught up" in the report and stop. A new requisition at a known company is not caught up. Do not widen the filters to manufacture a shortlist.

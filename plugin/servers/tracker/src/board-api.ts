@@ -2,7 +2,7 @@
 
 import { ToolError } from './errors.ts';
 import type { Status, Tracker } from './tracker.ts';
-import { STATUSES, userMoves } from './tracker.ts';
+import { groupOf, isCard, STATUSES, userMoves } from './tracker.ts';
 import { isRecord, oneOf } from './util.ts';
 
 // These steps need research with evidence (the verify-employer skill), so a drag can't do them.
@@ -29,11 +29,12 @@ export interface BoardRole {
 }
 
 export function boardView(t: Tracker) {
+  // One card per linked group: a duplicate's history counts toward its canonical role's card.
   const rows = t.q<BoardRole & { verified_at: string | null }>(`SELECT r.id, c.name AS company, r.title, COALESCE(r.status, 'found') AS status, r.score, r.location_type, r.url,
       r.comp_min, r.comp_max, r.comp_currency, r.comp_period, r.verified_at,
-      (SELECT MAX(ts) FROM events e WHERE e.role_id = r.id) AS last_event,
-      CASE WHEN r.status = 'queued' THEN (SELECT question FROM events e WHERE e.role_id = r.id AND e.status = 'queued' ORDER BY e.ts DESC, e.id DESC LIMIT 1) END AS question
-    FROM roles r JOIN companies c ON c.id = r.company_id ORDER BY r.score DESC NULLS LAST, r.updated_at DESC`);
+      (SELECT MAX(ts) FROM events e WHERE e.role_id IN ${groupOf('r.id')}) AS last_event,
+      CASE WHEN r.status = 'queued' THEN (SELECT question FROM events e WHERE e.role_id IN ${groupOf('r.id')} AND e.status = 'queued' ORDER BY e.ts DESC, e.id DESC LIMIT 1) END AS question
+    FROM roles r JOIN companies c ON c.id = r.company_id WHERE ${isCard('r.id')} ORDER BY r.score DESC NULLS LAST, r.updated_at DESC`);
   // Each card carries the lanes it may be dragged to, so the page lights up only those.
   const roles = rows.map(({ verified_at, ...r }) => ({ ...r, moves: userMoves({ ...r, verified_at }).moves }));
   const rules = t.q<{ id: number; text: string }>('SELECT id, text FROM rules WHERE active = 1 ORDER BY id');
@@ -61,7 +62,7 @@ export function boardMove(t: Tracker, input: unknown) {
   if (!oneOf(STATUSES, to)) throw new ToolError(`to must be one of: ${STATUSES.join(', ')}`);
   if (CLAUDE_ONLY.includes(to)) throw new ToolError(`Moving to ${to} needs Claude: run a sweep, or ask Claude to verify role ${role_id}.`);
   // A same-status transition is legal (re-running a step with new evidence) but would only add a no-op event here.
-  const current = t.roleRow(role_id);
+  const current = t.cardRow(role_id);
   if (current && (current.status || 'found') === to) throw new ToolError(`Role ${role_id} is already ${to}.`);
   const reason = optionalString('reason', body.reason)?.trim() || DEFAULT_REASON;
   const args = { role_id, to, reason, evidence: optionalString('evidence', body.evidence), outcome: optionalString('outcome', body.outcome) };

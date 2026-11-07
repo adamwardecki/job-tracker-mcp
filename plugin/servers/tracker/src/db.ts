@@ -3,7 +3,9 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { secureDir, secureFile } from './fsperm.ts';
+import { urlIdentity } from './posting.ts';
 import { isValidTimeZone, toUtcIso } from './time.ts';
+import { isRecord } from './util.ts';
 
 export function jobTrackerHome(): string {
   return process.env.JOB_TRACKER_HOME || join(homedir(), '.job-tracker');
@@ -156,6 +158,28 @@ export interface RoleRow {
   updated_at: string;
 }
 
+export interface RoleUrlRow {
+  role_id: number;
+  url: string;
+  normalized_url: string;
+  evidence: string | null;
+}
+
+export interface RolePostingRow {
+  role_id: number;
+  provider: string;
+  employer_key: string;
+  posting_id: string;
+}
+
+export interface RoleLinkRow {
+  duplicate_role_id: number;
+  canonical_role_id: number;
+  reason: string;
+  evidence: string;
+  created_at: string;
+}
+
 export interface EventRow {
   id: number;
   role_id: number;
@@ -169,6 +193,10 @@ export interface EventRow {
   reason: string;
   evidence: string | null;
   run_id: number | null;
+  source: string | null;
+  source_account: string | null;
+  source_id: string | null;
+  received_at: string | null;
 }
 
 export interface ArtifactRow {
@@ -195,6 +223,14 @@ export interface SourceRow {
   last_error: string | null;
 }
 
+export interface SourceCheckpointRow {
+  source: string;
+  source_account: string;
+  checked_through: string | null;
+  last_coverage: 'complete' | 'partial' | 'unavailable';
+  last_attempt_at: string;
+}
+
 export interface RuleRow {
   id: number;
   text: string;
@@ -203,6 +239,11 @@ export interface RuleRow {
   added_by: string;
   added_on: string;
   active: number;
+}
+
+export interface RuleTypeRow {
+  rule_id: number;
+  type: string;
 }
 
 export interface ProfileRow {
@@ -227,6 +268,27 @@ export interface InterviewRow {
   booked_by: string | null;
   notes: string | null;
   created_at: string;
+  // pending: a booking still to make; scheduled: has a time; cancelled: called off.
+  state: 'pending' | 'scheduled' | 'cancelled';
+  updated_at: string | null;
+  // The calendar event or message this row was recorded from, when it came from outside.
+  source: string | null;
+  source_account: string | null;
+  source_id: string | null;
+  // When the newest dated update applied to it happened (the message's or event's own time); null until one has, as for
+  // a row made by hand. Hand edits do not move it.
+  last_occurred_at: string | null;
+}
+
+// One applied change to an interview: what it was, what it became. before_json is null for a new row.
+export interface InterviewChangeRow {
+  id: number;
+  interview_id: number;
+  occurred_at: string;
+  received_at: string;
+  run_id: number | null;
+  before_json: string | null;
+  after_json: string;
 }
 
 export interface RunRow {
@@ -286,7 +348,11 @@ export function openDb(path: string = defaultDbPath(), { readOnly = false }: { r
 // Nested calls join the outer transaction: they neither begin nor commit, and an inner
 // failure only rolls anything back if it propagates out of the outermost call.
 const inTx = new WeakSet<DatabaseSync>();
+// The outermost transactions that readTx began. A write there would be a deferred transaction's lock upgrade.
+const readOnlyTx = new WeakSet<DatabaseSync>();
 export function tx<T>(db: DatabaseSync, fn: () => T): T {
+  // A bug in the caller, not something the model can fix, so it is a plain Error.
+  if (readOnlyTx.has(db)) throw new Error('tx was called inside readTx: a read transaction must not write.');
   if (inTx.has(db)) return fn();
   db.exec('BEGIN IMMEDIATE');
   inTx.add(db);
@@ -303,11 +369,32 @@ export function tx<T>(db: DatabaseSync, fn: () => T): T {
   }
 }
 
+// A read-only transaction: a deferred BEGIN takes no write lock, so it does not wait on or block the board
+// server's writes, and every query in `fn` sees one snapshot. Joins an outer transaction like `tx`. `fn` must
+// not write: tx refuses to run inside it, since a write could not upgrade a snapshot another connection has since changed.
+export function readTx<T>(db: DatabaseSync, fn: () => T): T {
+  if (inTx.has(db)) return fn();
+  db.exec('BEGIN');
+  inTx.add(db);
+  readOnlyTx.add(db);
+  try {
+    const out = fn();
+    db.exec('COMMIT');
+    return out;
+  } catch (err) {
+    if (db.isTransaction) db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    readOnlyTx.delete(db);
+    inTx.delete(db);
+  }
+}
+
 export function now(): string {
   return new Date().toISOString();
 }
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 9;
 
 // MIGRATIONS[i] takes the schema from version i + 1 to i + 2. Append only; never edit a shipped one.
 const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
@@ -331,6 +418,159 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       } catch {
         // Not a parseable time: leave it for the user to see.
       }
+    }
+  },
+  // 3: every URL and ATS posting a role answers to. Keys are per role, not global: rows that already share a
+  // posting must survive the migration and show up as a lookup conflict, since which one is right is not ours to guess.
+  (db) => {
+    db.exec(`
+      CREATE TABLE role_urls (
+        role_id INTEGER NOT NULL REFERENCES roles(id),
+        url TEXT NOT NULL,
+        normalized_url TEXT NOT NULL,
+        evidence TEXT,
+        PRIMARY KEY (role_id, normalized_url)
+      );
+      CREATE INDEX role_urls_lookup ON role_urls(normalized_url);
+      CREATE TABLE role_postings (
+        role_id INTEGER NOT NULL REFERENCES roles(id),
+        provider TEXT NOT NULL,
+        employer_key TEXT NOT NULL,
+        posting_id TEXT NOT NULL,
+        PRIMARY KEY (role_id, provider, employer_key, posting_id)
+      );
+      CREATE INDEX role_postings_lookup ON role_postings(provider, employer_key, posting_id);
+    `);
+    // The SQL is written out here, not shared with the tracker, so this step stays what it was when it shipped.
+    const addUrl = db.prepare('INSERT OR IGNORE INTO role_urls(role_id, url, normalized_url, evidence) VALUES(?, ?, ?, NULL)');
+    const addKey = db.prepare('INSERT OR IGNORE INTO role_postings(role_id, provider, employer_key, posting_id) VALUES(?, ?, ?, ?)');
+    const rows = db.prepare("SELECT id, url FROM roles WHERE typeof(url) = 'text' ORDER BY id").all() as { id: number; url: string }[];
+    for (const r of rows) {
+      const { normalized_url, posting } = urlIdentity(r.url);
+      if (!normalized_url) continue;
+      addUrl.run(r.id, r.url, normalized_url);
+      if (posting) addKey.run(r.id, posting.provider, posting.employer_key, posting.posting_id);
+    }
+  },
+  // 4: historical duplicates linked to the role kept as their card. Both rows and everything pointing at them stay.
+  (db) => {
+    db.exec(`
+      CREATE TABLE role_links (
+        duplicate_role_id INTEGER PRIMARY KEY REFERENCES roles(id),
+        canonical_role_id INTEGER NOT NULL REFERENCES roles(id),
+        reason TEXT NOT NULL,
+        evidence TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX role_links_canonical ON role_links(canonical_role_id);
+    `);
+  },
+  // 5: rule types and a revision counter. The rules table is untouched, so text, provenance and every rule:<id>
+  // citation stay as they were; each existing rule, active or not, becomes global. The SQL is written out here.
+  (db) => {
+    db.exec(`
+      CREATE TABLE rule_types (
+        rule_id INTEGER NOT NULL REFERENCES rules(id),
+        type TEXT NOT NULL,
+        PRIMARY KEY (rule_id, type)
+      );
+      CREATE TABLE rule_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        revision INTEGER NOT NULL
+      );
+      INSERT INTO rule_types(rule_id, type) SELECT id, 'global' FROM rules;
+      INSERT INTO rule_state(id, revision) VALUES(1, 0);
+    `);
+  },
+  // 6: where an event came from. ts stays the time it happened (for events from a mailbox or board, the message's
+  // own time); received_at is when the tracker heard of it, which for every existing event was ts. The unique index
+  // covers external events only, so the many events without a source stay unconstrained. The SQL is written out here.
+  (db) => {
+    db.exec(`
+      ALTER TABLE events ADD COLUMN source TEXT;
+      ALTER TABLE events ADD COLUMN source_account TEXT;
+      ALTER TABLE events ADD COLUMN source_id TEXT;
+      ALTER TABLE events ADD COLUMN received_at TEXT;
+      UPDATE events SET received_at = ts;
+      CREATE UNIQUE INDEX events_external ON events(source, source_account, source_id) WHERE source IS NOT NULL AND source_account IS NOT NULL AND source_id IS NOT NULL;
+    `);
+  },
+  // 7: where the last fully successful scan of one source account ended, apart from sources.last_run, which moves on
+  // failure too. checked_through stays null until a complete scan; last_coverage and last_attempt_at record the latest
+  // attempt of any kind. The SQL is written out here.
+  (db) => {
+    db.exec(`
+      CREATE TABLE source_checkpoints (
+        source TEXT NOT NULL,
+        source_account TEXT NOT NULL,
+        checked_through TEXT,
+        last_coverage TEXT NOT NULL CHECK (last_coverage IN ('complete', 'partial', 'unavailable')),
+        last_attempt_at TEXT NOT NULL,
+        PRIMARY KEY (source, source_account)
+      );
+    `);
+  },
+  // 8: an interview has a state, apart from whether it has a time, so a booking can be confirmed in place, rescheduled
+  // or cancelled. A row with a time becomes scheduled, any other pending. The unique index covers rows that came from
+  // outside; interview_changes keeps what each applied update replaced. The SQL is written out here.
+  (db) => {
+    db.exec(`
+      ALTER TABLE interviews ADD COLUMN state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'scheduled', 'cancelled'));
+      ALTER TABLE interviews ADD COLUMN updated_at TEXT;
+      ALTER TABLE interviews ADD COLUMN source TEXT;
+      ALTER TABLE interviews ADD COLUMN source_account TEXT;
+      ALTER TABLE interviews ADD COLUMN source_id TEXT;
+      ALTER TABLE interviews ADD COLUMN last_occurred_at TEXT;
+      UPDATE interviews SET state = CASE WHEN starts_at IS NOT NULL THEN 'scheduled' ELSE 'pending' END, updated_at = created_at;
+      CREATE UNIQUE INDEX interviews_external ON interviews(source, source_account, source_id) WHERE source IS NOT NULL AND source_account IS NOT NULL AND source_id IS NOT NULL;
+      CREATE TABLE interview_changes (
+        id INTEGER PRIMARY KEY,
+        interview_id INTEGER NOT NULL REFERENCES interviews(id),
+        occurred_at TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        run_id INTEGER,
+        before_json TEXT,
+        after_json TEXT NOT NULL
+      );
+      CREATE INDEX interview_changes_interview ON interview_changes(interview_id);
+    `);
+  },
+  // 9: the last accepted dated interview values, including calls that changed no fields. Old histories cannot
+  // distinguish all local edits from external updates, so only a complete, unchanged history proves a baseline.
+  (db) => {
+    db.exec(`
+      CREATE TABLE interview_external_state (
+        interview_id INTEGER PRIMARY KEY REFERENCES interviews(id),
+        occurred_at TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL
+      );
+    `);
+    // Freeze this release's eight value fields and null normalization here, independent of later tracker changes.
+    const fields = ['starts_at', 'tz', 'stage', 'people', 'link', 'booked_by', 'notes', 'state'] as const;
+    const normalize = (value: unknown): string | null => {
+      if (!isRecord(value)) return null;
+      const row = value;
+      if (fields.some((k) => !Object.hasOwn(row, k) || (row[k] !== null && typeof row[k] !== 'string'))) return null;
+      if (!['pending', 'scheduled', 'cancelled'].includes(String(row.state))) return null;
+      return JSON.stringify(Object.fromEntries(fields.map((k) => [k, row[k] ?? null])));
+    };
+    const parse = (text: string): string | null => {
+      try {
+        return normalize(JSON.parse(text));
+      } catch {
+        return null; // Damaged or incomplete history is unknown, never guessed from the current row.
+      }
+    };
+    const history = db.prepare('SELECT before_json, after_json, received_at FROM interview_changes WHERE interview_id = ? ORDER BY id');
+    const save = db.prepare('INSERT INTO interview_external_state(interview_id, occurred_at, snapshot_json) VALUES(?, ?, ?)');
+    const rows = db.prepare('SELECT * FROM interviews WHERE last_occurred_at IS NOT NULL').all() as Pick<InterviewRow, 'id' | 'created_at' | 'last_occurred_at'>[];
+    for (const row of rows) {
+      const current = normalize(row);
+      const changes = history.all(row.id) as Pick<InterviewChangeRow, 'before_json' | 'after_json' | 'received_at'>[];
+      const first = changes[0];
+      if (!current || !first || first.before_json !== null || first.received_at !== row.created_at) continue;
+      if (changes.some((change, i) => parse(change.after_json) !== current || (i > 0 && (change.before_json === null || parse(change.before_json) !== current)))) continue;
+      save.run(row.id, row.last_occurred_at, current);
     }
   },
 ];
