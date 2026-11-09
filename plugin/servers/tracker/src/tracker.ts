@@ -1,8 +1,11 @@
 // Domain logic behind the tracker tools. Every write goes through here; nothing else touches the DB.
 
+import { resolve } from 'node:path';
 import type { DatabaseSync, SQLInputValue, StatementResultingChanges } from 'node:sqlite';
 import type { ConfigSections, Profile, SectionName } from './config.ts';
 import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './config.ts';
+import type { CvRecord } from './cv.ts';
+import { checkCvFile, copyCv, cvFileState, sha256File } from './cv.ts';
 import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RuleTypeRow, RunRow, SourceCheckpointRow, SourceRow } from './db.ts';
 import { now, readTx, tx } from './db.ts';
 import { ToolError } from './errors.ts';
@@ -413,6 +416,22 @@ export class Tracker {
     req(typeof content === 'string' && content.trim(), 'content is required');
     this.run('INSERT INTO documents(name, content, updated_at) VALUES(?, ?, ?) ON CONFLICT(name) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at', name, content, now());
     return { saved: name, chars: content.length };
+  }
+
+  // ---------- CV file ----------
+
+  saveCv({ path, copy }: ArgsFor<'save_cv'>) {
+    const bytes = checkCvFile(path);
+    const stored = copy ? copyCv(path, this.dbPath) : resolve(path);
+    const cv: CvRecord = { path: stored, mode: copy ? 'copied' : 'linked', sha256: sha256File(stored), bytes, saved_at: now() };
+    this.run("INSERT INTO profile(key, value) VALUES('cv', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(cv));
+    return { path: cv.path, mode: cv.mode, bytes };
+  }
+
+  getCv() {
+    const cv = parseJson<CvRecord | null>(this.one<{ value: string }>("SELECT value FROM profile WHERE key = 'cv'")?.value, null);
+    if (!cv) return { missing: true as const };
+    return { path: cv.path, mode: cv.mode, ...cvFileState(cv), saved_at: cv.saved_at };
   }
 
   // ---------- setup and runs ----------
