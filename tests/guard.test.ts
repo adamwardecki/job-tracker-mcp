@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -25,6 +25,45 @@ interface GuardOut {
   delete_controls: { label: string }[];
 }
 
+// Chrome on macOS prints the DOM but may not exit; stop it once the document is out.
+function dumpDom(file: string, timeoutMs: number): Promise<string> {
+  assert.ok(CHROME, 'Chrome not found');
+  return new Promise<string>((resolve, reject) => {
+    const p = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(dir, `profile-${Math.random().toString(36).slice(2)}`)}`, '--dump-dom', `file://${file}`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let buf = '';
+    let err = '';
+    const timer = setTimeout(() => {
+      p.kill('SIGKILL');
+      reject(new Error(`Chrome timed out after ${timeoutMs}ms; stderr: ${err.slice(-500) || '(none)'}`));
+    }, timeoutMs);
+    p.stderr.on('data', (d: Buffer) => {
+      err += d;
+    });
+    p.stdout.on('data', (d: Buffer) => {
+      buf += d;
+      if (buf.includes('</html>')) {
+        clearTimeout(timer);
+        p.kill('SIGKILL');
+        resolve(buf);
+      }
+    });
+    p.on('exit', () => {
+      clearTimeout(timer);
+      resolve(buf);
+    });
+  });
+}
+
+// The first Chrome start on a fresh CI runner pays for cold disk and font caches while the rest of the
+// suite runs in parallel: about 11s on Ubuntu, and past 30s on a slow runner. Pay it once here, with room,
+// so the 30s limit on each guard run below still catches a real hang.
+before(async () => {
+  if (!CHROME) return;
+  const file = join(dir, 'warmup.html');
+  writeFileSync(file, '<!doctype html><html><body></body></html>');
+  await dumpDom(file, 120000);
+}, { timeout: 130000 });
+
 // check: [[column, title], ...] boxes to tick before running the guard.
 async function runGuard(input: Record<string, unknown>, check: [string, string][]): Promise<GuardOut> {
   assert.ok(CHROME, 'Chrome not found');
@@ -39,27 +78,7 @@ async function runGuard(input: Record<string, unknown>, check: [string, string][
     const pre = document.createElement('pre'); pre.id = 'out'; pre.textContent = line; document.body.appendChild(pre);`;
   const file = join(dir, `case-${Math.random().toString(36).slice(2)}.html`);
   writeFileSync(file, board.replace('</body>', `<script>${script}</script></body>`));
-  // Chrome on macOS prints the DOM but may not exit; stop it once the document is out.
-  const dom = await new Promise<string>((resolve, reject) => {
-    const p = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(dir, `profile-${Math.random().toString(36).slice(2)}`)}`, '--dump-dom', `file://${file}`], { stdio: ['ignore', 'pipe', 'ignore'] });
-    let buf = '';
-    const timer = setTimeout(() => {
-      p.kill('SIGKILL');
-      reject(new Error('Chrome timed out'));
-    }, 30000);
-    p.stdout.on('data', (d: Buffer) => {
-      buf += d;
-      if (buf.includes('</html>')) {
-        clearTimeout(timer);
-        p.kill('SIGKILL');
-        resolve(buf);
-      }
-    });
-    p.on('exit', () => {
-      clearTimeout(timer);
-      resolve(buf);
-    });
-  });
+  const dom = await dumpDom(file, 30000);
   const m = dom.match(/<pre id="out">JOBHUNT_TRIAGE_GUARD (\{.*?\}) JOBHUNT_END<\/pre>/s);
   assert.ok(m, `guard produced no output: ${(dom.match(/<pre id="err">[^<]*/) || [dom.slice(-300)])[0]}`);
   // &amp; goes last, so a title containing "&lt;" is not decoded twice.
