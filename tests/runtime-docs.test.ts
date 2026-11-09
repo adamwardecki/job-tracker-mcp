@@ -300,6 +300,11 @@ test('drafts that need the CV attach the saved file, and the claim is checked', 
   assert.match(inbox, /`get_cv`/);
   assert.match(inbox, /Gmail draft attachments/);
   assert.match(inbox, /attach the CV \(`<path>`\) before sending/);
+  // Artifacts are insert-only, so the CV is decided before the draft is written and its evidence recorded once.
+  const drafts = inbox.slice(inbox.indexOf('### 4. Reply drafts'), inbox.indexOf('### 5.'));
+  assert.ok(drafts.indexOf('`get_cv`') !== -1 && drafts.indexOf('`get_cv`') < drafts.indexOf('`create_draft`'), 'get_cv comes before create_draft in section 4');
+  assert.ok(drafts.indexOf('`create_draft`') < drafts.indexOf('`add_artifact`'));
+  assert.match(drafts, /Attachment: none, user must attach/);
   assert.match(read('skills/write-note/SKILL.md'), /only when the CV will be attached/);
   assert.match(read('agents/auditor.md'), /reported "with CV"/);
 });
