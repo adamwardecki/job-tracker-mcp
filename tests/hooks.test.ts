@@ -533,6 +533,9 @@ test('in Gmail, a key combination that sends is blocked; plain keys and other si
     assert.match(await key(gmail, `${CHROME}computer`, { action: 'key', text }), /sends the email in Gmail/, text);
   }
   assert.match(await key(gmail, 'mcp__playwright__browser_press_key', { key: 'Control+Enter' }), /sends the email in Gmail/);
+  assert.match(await key(gmail, 'mcp__playwright__browser_press_key', { keys: ['Control', 'Enter'] }), /sends the email in Gmail/);
+  assert.match(await key(gmail, 'mcp__playwright__browser_press_key', { keys: ['Meta', 'Return'] }), /sends the email in Gmail/);
+  assert.equal(await key(gmail, 'mcp__playwright__browser_press_key', { keys: ['Enter'] }), '');
   assert.equal(await key(gmail, `${CHROME}computer`, { action: 'key', text: 'Return' }), '');
   assert.equal(await key(gmail, `${CHROME}computer`, { action: 'key', text: 'Escape' }), '');
   assert.equal(await key(docs, `${CHROME}computer`, { action: 'key', text: 'cmd+Return' }), '');

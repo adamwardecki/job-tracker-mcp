@@ -48,9 +48,9 @@ export function browserAction(short: string, input: ToolInput): BrowserAction {
   return 'other';
 }
 
-// The keys a key-press tool will send: computer's text, Playwright's key, Hermes' key.
+// The keys a key-press tool will send: computer's text, Playwright's key, Hermes' key; any of them may be an array.
 export function keyText(input: ToolInput): string {
-  return [input.text, input.key, input.keys].filter((v) => typeof v === 'string').join(' ');
+  return [input.text, input.key, input.keys].flatMap((v) => (Array.isArray(v) ? v : [v])).filter((v) => typeof v === 'string').join(' ');
 }
 
 // Cmd/Ctrl+Enter sends an open Gmail compose window.
