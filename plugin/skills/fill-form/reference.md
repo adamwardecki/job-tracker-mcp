@@ -76,8 +76,16 @@ Invisible checks that pass on their own: fine. Any visible challenge, puzzle or 
 ## File uploads
 
 1. Hidden input: `el.style.display='block'; el.setAttribute('aria-label','CV upload')`, then re-read the page for a fresh ref.
-2. `file_upload` with the CV path. If the path is rejected as not readable by the session, stage the file into the session first and use the staged path.
+2. `file_upload` with the path from `get_cv`. If the path is rejected as not readable by the session, stage the file into the session first and use the staged path.
 3. Confirm the filename is shown. Some forms parse the CV and overwrite fields you already filled; re-read all fields after upload.
+
+### Gmail draft attachments
+
+Used by `inbox-and-calendar` when the mail connector cannot attach files.
+1. Open `https://mail.google.com/mail/u/0/#drafts` and open the draft by its subject.
+2. Find the compose window's `input[type=file]` (Gmail keeps it hidden), expose it as in step 1 above, and `file_upload` the path from `get_cv`.
+3. Wait until the attachment chip shows the file name with no progress bar, and take a screenshot.
+4. Close the compose window with its close control (the X, labelled "Save & close"). Never use "Discard draft" or a send key: the hooks block sending, and discarding deletes the draft.
 
 ## Useful snippets
 

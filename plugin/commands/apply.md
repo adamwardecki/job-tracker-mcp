@@ -28,7 +28,7 @@ Apply to one role with the user present. Argument: `$ARGUMENTS`
 4. **Make sure it is verified and scored.** If the role is not yet `verified`, follow `verify-employer`, then call `gate_check` again and stop on any problem. If not `scored`, follow `score-role`. A drop ends the flow; tell the user the quote.
 5. **Read the form before writing anything.** Open the apply form, decline the cookie banner, and dump every question with its type, required flag and `maxLength` (see `fill-form`). Stop early if a question is a hard-filter gate (onsite days, right to work somewhere the user cannot, overtime) and put the quote to the user.
 6. **Write.** Follow `write-note` for the cover note and every free-text answer, sized to each field's limit. Respect any AI-use policy on the form. Save with `add_artifact` (`cover_note`, `form_answers`).
-7. **Fill.** Follow `fill-form`. Read every value back out of the page. Upload the CV.
+7. **Fill.** Follow `fill-form`. Read every value back out of the page. Upload the CV from `get_cv`; if there is no saved CV file, leave the upload and say so in the summary.
 8. **Show the user the summary**: role id, company, title, location line, every field and the value now in it, anything left blank and why. Then say exactly:
    "To submit, type `/job-tracker:approve 42`. I will not submit without it." (with this role's real id in place of 42)
    Then stop and wait.
