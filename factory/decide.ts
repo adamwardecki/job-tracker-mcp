@@ -90,8 +90,92 @@ export function decideEvent(ev: FactoryEvent, snap: IssueSnapshot, ctx: Ctx): Ac
   }
 }
 
-function runFinished(_issue: number, _st: FactoryState, _snap: IssueSnapshot, _run: RunSnapshot, _ctx: Ctx): Action[] {
-  return [];
+function block(issue: number, prev: FactoryState, reason: string, ctx: Ctx): Action[] {
+  const blockedFrom = prev.stage === 'blocked' ? prev.blockedFrom : prev.stage;
+  return [
+    ...enter(issue, prev, 'blocked', ctx, { blockedFrom }),
+    { kind: 'comment', issue, body: `Factory stopped at **${blockedFrom}**: ${reason}\n\nFix the cause, then comment \`/retry\`.` },
+  ];
+}
+
+// A stage run failed or broke its contract. The sweep retries it after RETRY_AFTER_MS (a subscription usage window
+// may need to reset); the last allowed attempt blocks instead.
+function fail(issue: number, prev: FactoryState, reason: string, ctx: Ctx): Action[] {
+  const attempts = prev.attempts + 1;
+  if (attempts >= MAX_ATTEMPTS) return block(issue, prev, `${reason} (attempt ${attempts} of ${MAX_ATTEMPTS}).`, ctx);
+  return [{ kind: 'save', issue, state: { ...prev, attempts, failedAt: ctx.now.toISOString() } }];
+}
+
+function toFix(issue: number, prev: FactoryState, snap: IssueSnapshot, reason: FixReason, ctx: Ctx): Action[] {
+  // Only CI's and the reviewer's rounds count toward the cap; the maintainer's requests and rebases do not.
+  const round = prev.round + (reason === 'ci' || reason === 'review' ? 1 : 0);
+  if (round > MAX_ROUNDS) return block(issue, prev, `still not passing after ${MAX_ROUNDS} fix rounds.`, ctx);
+  return enter(issue, prev, 'fixing', ctx, { round, fixReason: reason, headSha: snap.pr?.headSha });
+}
+
+function askApproval(issue: number, prev: FactoryState, approvalFor: 'plan' | 'diff', hits: string[], ctx: Ctx, patch: Partial<FactoryState> = {}): Action[] {
+  const what = approvalFor === 'plan' ? 'The brief touches' : 'The PR changes';
+  const list = hits.map((h) => `- \`${h}\``).join('\n');
+  return [
+    ...enter(issue, prev, 'awaiting-approval', ctx, { ...patch, approvalFor }),
+    { kind: 'comment', issue, body: `${what} risky paths (\`factory/risky-paths.txt\`):\n\n${list}\n\nComment \`/approve\` to continue or \`/stop\` to stop.` },
+  ];
+}
+
+function runFinished(issue: number, st: FactoryState, snap: IssueSnapshot, run: RunSnapshot, ctx: Ctx): Action[] {
+  const expected = st.stage === 'ci' ? 'ci' : RUNNER_FOR[st.stage];
+  if (!expected || run.workflow !== expected || !run.completedAt || st.runs.includes(run.url)) return [];
+  if (run.conclusion === 'cancelled' || run.conclusion === 'skipped') return [];
+  const seen: FactoryState = { ...st, runs: [...st.runs, run.url] };
+  if (expected === 'ci') {
+    // CI runs per push; only the run for the PR's current head decides.
+    if (!snap.pr || run.headSha !== snap.pr.headSha) return [];
+    return run.conclusion === 'success' ? enter(issue, seen, 'in-review', ctx) : toFix(issue, seen, snap, 'ci', ctx);
+  }
+  // A run that finished before this stage began belongs to an earlier attempt.
+  if (!notBefore(run.completedAt, st.since)) return [];
+  if (run.conclusion !== 'success') return fail(issue, seen, `the ${expected} run ended with "${run.conclusion}"`, ctx);
+  switch (expected) {
+    case 'plan':
+      return planned(issue, seen, snap, ctx);
+    case 'build':
+      return built(issue, seen, snap, ctx);
+    case 'review':
+      return reviewed(issue, seen, snap, ctx);
+    case 'fix':
+      return fixed(issue, seen, snap, ctx);
+  }
+}
+
+function planned(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx): Action[] {
+  if (snap.labels.some((l) => oneOf(TRIAGE_STOP, l))) return block(issue, st, 'the planner needs a human; see its comment.', ctx);
+  const brief = snap.brief && notBefore(snap.brief.at, st.since) ? snap.brief : null;
+  if (!brief || !snap.labels.includes(TRIAGE_READY)) return fail(issue, st, 'the planner finished without a brief and the ready-for-agent label', ctx);
+  const hits = riskyTouches(brief.touches, ctx.risky);
+  if (hits.length > 0) return askApproval(issue, st, 'plan', hits, ctx, { brief: brief.id });
+  return enter(issue, st, 'building', ctx, { brief: brief.id });
+}
+
+function built(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx): Action[] {
+  if (!snap.pr?.open) return fail(issue, st, `the builder finished without an open PR from \`${branchFor(issue)}\``, ctx);
+  return enter(issue, st, 'ci', ctx, { pr: snap.pr.number });
+}
+
+function reviewed(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx): Action[] {
+  const review = snap.review && notBefore(snap.review.at, st.since) ? snap.review : null;
+  if (!review || !snap.pr) return fail(issue, st, 'the reviewer finished without posting a factory review', ctx);
+  if (review.blocking > 0) return toFix(issue, st, snap, 'review', ctx);
+  // The diff is checked again here: a plan can drift, or have been steered, after its paths were approved.
+  const hits = riskyFiles(snap.pr.files, ctx.risky);
+  if (hits.length > 0) return askApproval(issue, st, 'diff', hits, ctx);
+  const actions = enter(issue, st, 'ready', ctx);
+  actions.push({ kind: 'pr-ready', pr: snap.pr.number });
+  return actions;
+}
+
+function fixed(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx): Action[] {
+  if (!snap.pr || snap.pr.headSha === st.headSha) return fail(issue, st, 'the fixer finished without pushing a commit', ctx);
+  return enter(issue, st, 'ci', ctx);
 }
 
 function command(_issue: number, _st: FactoryState, _snap: IssueSnapshot, _cmd: Command, _ctx: Ctx): Action[] {
