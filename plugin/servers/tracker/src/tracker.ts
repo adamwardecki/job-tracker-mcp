@@ -5,7 +5,7 @@ import type { DatabaseSync, SQLInputValue, StatementResultingChanges } from 'nod
 import type { ConfigSections, Profile, SectionName } from './config.ts';
 import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './config.ts';
 import type { CvRecord } from './cv.ts';
-import { checkCvFile, copyCv, cvFileState, sha256File } from './cv.ts';
+import { checkCvFile, copyCv, cvFileState, hashCvFile } from './cv.ts';
 import type { ArtifactRow, CompanyRow, EventRow, InterviewRow, RoleLinkRow, RolePostingRow, RoleRow, RoleUrlRow, RuleRow, RuleTypeRow, RunRow, SourceCheckpointRow, SourceRow } from './db.ts';
 import { now, readTx, tx } from './db.ts';
 import { ToolError } from './errors.ts';
@@ -423,7 +423,7 @@ export class Tracker {
   saveCv({ path, copy }: ArgsFor<'save_cv'>) {
     const bytes = checkCvFile(path);
     const stored = copy ? copyCv(path, this.dbPath) : resolve(path);
-    const cv: CvRecord = { path: stored, mode: copy ? 'copied' : 'linked', sha256: sha256File(stored), bytes, saved_at: now() };
+    const cv: CvRecord = { path: stored, mode: copy ? 'copied' : 'linked', sha256: hashCvFile(stored), bytes, saved_at: now() };
     this.run("INSERT INTO profile(key, value) VALUES('cv', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(cv));
     return { path: cv.path, mode: cv.mode, bytes };
   }
@@ -447,6 +447,7 @@ export class Tracker {
     const cv = this.getCv();
     if ('missing' in cv) add('cv_file', 'red', 'Save the CV file: drop it into the chat, or give its path.');
     else if (!cv.exists) add('cv_file', 'red', `The CV at ${cv.path} is gone. Save it again.`);
+    else if (!cv.readable) add('cv_file', 'red', `The CV at ${cv.path} cannot be read (${cv.error}). Fix its permissions or save it again.`);
     else if (cv.changed_since_saved) add('cv_file', 'amber', 'The CV changed since it was saved. Re-import the profile, then save the CV again.');
     else add('cv_file', 'green', `CV file: ${basename(cv.path)} (${cv.mode})`);
     add('filters', saved.has('filters') ? 'green' : 'red', saved.has('filters') ? 'Hard filters saved' : 'Hard filters not set.');

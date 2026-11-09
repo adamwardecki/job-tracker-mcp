@@ -168,7 +168,7 @@
   },
   {
     "name": "get_cv",
-    "description": "Path to the user's CV file for uploads and email attachments, whether it still exists, and whether it changed since it was saved.",
+    "description": "Path to the user's CV file for uploads and email attachments, whether it still exists, and whether it changed since it was saved. Returns missing: true when no CV is saved.",
     "inputSchema": {
       "type": "object",
       "properties": {},
