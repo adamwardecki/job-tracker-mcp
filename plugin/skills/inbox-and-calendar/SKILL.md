@@ -91,6 +91,11 @@ Classify into one of:
 3. `create_draft` in the recruiter inbox, threaded as a reply where the connector supports it.
 4. **Read back**: `get_draft` with the returned draft id. If not found, check `list_drafts`. If it is in neither, the draft does not exist: try once more, and if it still fails, report "draft could not be saved" and put the text in a `record` note. Never report a draft you have not read back.
 5. `add_artifact` with `kind: "gmail_draft"`, `ref` = draft id, `content` = body. Then `verify_artifact` with `artifact_id` and `readback` = the text returned by `get_draft`.
+6. **Attach the CV** when the message asks for it, or when the draft says the CV is attached. Call `get_cv` first; if it is `missing`, or `exists: false` or `readable: false`, leave "attached" out of the body and list the draft under Needs you with "no saved CV file".
+   - If `create_draft` (or `update_draft`) takes an attachment parameter (`attachments`, `attachment`, `files` or similar, taking a file path), pass the `get_cv` path when creating the draft.
+   - Otherwise, if a browser is available in this run, attach it in Gmail as in `${CLAUDE_PLUGIN_ROOT}/skills/fill-form/reference.md` "Gmail draft attachments" (Hermes: `${HERMES_SKILL_DIR}/../../skills/fill-form/reference.md`), then `get_draft` again.
+   - With no browser, or when both fail: keep the text draft and list it under Needs you as "Draft for <company>: attach the CV (`<path>`) before sending."
+   - Report a draft as "with CV" only when a `get_draft` read-back lists the attachment or a screenshot shows the attachment chip, and write that evidence into the `gmail_draft` artifact's content. Why: `create_draft` once returned ids for drafts that did not exist, so an attachment claim needs the same proof as the draft.
 
 ### 5. No-cold-apply
 A company with an open broker intro, a recruiter-run process, or a direct conversation with a founder or hiring manager must never get a cold application. Call `set_no_cold_apply` with the `company_id` (from `find_company`; `upsert_role` the company's role first if it is new), `on: true` and a `reason` naming the channel (e.g. "broker intro open", "recruiter process", "direct thread with the CTO"). `find_company` then returns `skip` and `gate_check` blocks a submit. When the intro or process closes, call it again with `on: false` and `record` a note.

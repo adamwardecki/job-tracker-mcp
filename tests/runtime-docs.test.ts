@@ -294,3 +294,12 @@ test('the inbox skill surfaces an unknown interview replay baseline without inve
   assert.match(s, /genuinely newer dated update/);
   assert.match(s, /Why: pre-upgrade history cannot always prove the accepted external values/);
 });
+
+test('drafts that need the CV attach the saved file, and the claim is checked', () => {
+  const inbox = read('skills/inbox-and-calendar/SKILL.md');
+  assert.match(inbox, /`get_cv`/);
+  assert.match(inbox, /Gmail draft attachments/);
+  assert.match(inbox, /attach the CV \(`<path>`\) before sending/);
+  assert.match(read('skills/write-note/SKILL.md'), /only when the CV will be attached/);
+  assert.match(read('agents/auditor.md'), /reported "with CV"/);
+});
