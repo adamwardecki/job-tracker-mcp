@@ -768,6 +768,10 @@ export class Tracker {
         req(oneOf(['remote', 'hybrid', 'onsite', 'unknown'], a.location_type), 'location_type: remote | hybrid | onsite | unknown');
       }
       if (a.to === 'queued' && a.blocked_by) req(oneOf(['browser', 'user', 'login', 'captcha', 'other'], a.blocked_by), 'blocked_by: browser | user | login | captcha | other');
+      if (a.asked_salary != null) {
+        req(a.to === 'applied', 'asked_salary goes with applied only: the salary entered on the application form.');
+        req(a.asked_salary.trim(), 'asked_salary is empty. Pass the salary field\'s value as entered, or omit it if the form had no salary field.');
+      }
       const ev: EventInput = { ...a, status: a.to, actor };
       this.validateEvent(ev, { selfReported });
       if (a.to === 'verified') {
@@ -776,6 +780,7 @@ export class Tracker {
       if (a.score != null || a.score_notes != null) {
         this.run('UPDATE roles SET score = COALESCE(?, score), score_notes = COALESCE(?, score_notes) WHERE id = ?', a.score ?? null, a.score_notes ?? null, a.role_id);
       }
+      if (a.asked_salary != null) this.run('UPDATE roles SET asked_salary = ? WHERE id = ?', a.asked_salary.trim(), a.role_id);
       this.insertEvent(ev);
       return { role: this.roleRow(a.role_id), from, to: a.to };
     });

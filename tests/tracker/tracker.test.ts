@@ -102,6 +102,29 @@ test('AC5: pay floor drops only when the band maximum is below it', () => {
   assert.equal(t.checkPay({ comp_max: 100000, currency: 'USD', fx_rate: 0.75 }).verdict, 'drop');
 });
 
+test('applied records the salary the form asked for, and only applied takes it', async () => {
+  const t = fresh();
+  const c = call(t);
+  const { role } = t.upsertRole({ company: 'Acme', title: 'Product Engineer', url: 'https://jobs.example.com/acme/pe', source: 'hn' });
+  verify(t, role.id);
+  assert.throws(() => t.transition({ role_id: role.id, to: 'scored', reason: 'ok', asked_salary: '90000 EUR' }), /asked_salary/);
+  t.transition({ role_id: role.id, to: 'scored', reason: 'ok' });
+  t.transition({ role_id: role.id, to: 'queued', reason: 'ok' });
+  assert.equal(t.roleRow(role.id)?.asked_salary, null);
+  assert.throws(() => t.transition({ role_id: role.id, to: 'applied', reason: 'submitted', evidence: 'Thanks', asked_salary: '  ' }), /asked_salary/);
+  assert.equal(t.roleRow(role.id)?.status, 'queued', 'a rejected call writes nothing');
+  const res = await c('transition', { role_id: role.id, to: 'applied', reason: 'submitted', evidence: 'Thanks for applying', asked_salary: '95,000 EUR per year' });
+  assert.equal(res.error, '');
+  assert.equal(t.roleDetail({ role_id: role.id }).role.asked_salary, '95,000 EUR per year');
+  // A form with no salary field leaves it unset.
+  const other = t.upsertRole({ company: 'Beta', title: 'Engineer', url: 'https://jobs.example.com/beta/e', source: 'hn' }).role;
+  verify(t, other.id);
+  t.transition({ role_id: other.id, to: 'scored', reason: 'ok' });
+  t.transition({ role_id: other.id, to: 'queued', reason: 'ok' });
+  t.transition({ role_id: other.id, to: 'applied', reason: 'submitted', evidence: 'Thanks' });
+  assert.equal(t.roleRow(other.id)?.asked_salary, null);
+});
+
 test('state machine: illegal moves, required fields, verified_at only via verify', () => {
   const t = fresh();
   const { role } = t.upsertRole({ company: 'Acme', title: 'Product Engineer', url: 'https://jobs.example.com/acme/product-engineer', source: 'hn' });

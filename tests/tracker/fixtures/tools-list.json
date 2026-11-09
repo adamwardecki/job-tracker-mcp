@@ -365,7 +365,7 @@
   },
   {
     "name": "transition",
-    "description": "Move a role through found → verified → scored → queued → applied → interviewing → offer (dropped from found/verified/scored/queued; closed from queued/applied/interviewing/offer). Rejects illegal moves. verified needs evidence (URL + verbatim location line), location_line and location_type. dropped needs evidence (quote or rule:<id>). applied needs the confirmation text. closed needs outcome.",
+    "description": "Move a role through found → verified → scored → queued → applied → interviewing → offer (dropped from found/verified/scored/queued; closed from queued/applied/interviewing/offer). Rejects illegal moves. verified needs evidence (URL + verbatim location line), location_line and location_type. dropped needs evidence (quote or rule:<id>). applied needs the confirmation text, and asked_salary if the form had a salary field. closed needs outcome.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -416,6 +416,10 @@
         "score_notes": {
           "type": "string",
           "description": "scored only: short notes, including gaps kept internal"
+        },
+        "asked_salary": {
+          "type": "string",
+          "description": "applied only: the salary entered in the form's salary field, verbatim with currency and period. Omit if the form had none"
         },
         "run_id": {
           "type": "integer",

@@ -1,7 +1,14 @@
 // Shared by tests in more than one file.
 
+// Turns a current database into the release before the asked salary (schema v9).
+export const REWIND_TO_V9 = `
+  ALTER TABLE roles DROP COLUMN asked_salary;
+  PRAGMA user_version = 9;
+`;
+
 // Turns a current database into the release before accepted interview snapshots (schema v8).
 export const REWIND_TO_V8 = `
+  ${REWIND_TO_V9}
   DROP TABLE interview_external_state;
   PRAGMA user_version = 8;
 `;
