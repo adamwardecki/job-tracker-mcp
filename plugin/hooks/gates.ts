@@ -108,9 +108,10 @@ async function browserGate(payload: HookPayload, session: SessionState, short: s
   const host = C.hostOf(url);
 
   if (action === 'key') {
-    if (/(^|\.)mail\.google\.com$/.test(host) && C.SEND_KEYS.test(C.keyText(input))) {
-      deny(payload, session, 'That key combination sends the email in Gmail. Sending is blocked; leave it as a draft.');
-    }
+    if (!C.SEND_KEYS.test(C.keyText(input))) return;
+    if (/(^|\.)mail\.google\.com$/.test(host)) deny(payload, session, 'That key combination sends the email in Gmail. Sending is blocked; leave it as a draft.');
+    // Fail closed: without the page, a send combination cannot be told from a harmless shortcut.
+    else if (!host) deny(payload, session, 'That key combination may send a message, and the current page could not be identified. Re-read the page first.');
     return;
   }
 

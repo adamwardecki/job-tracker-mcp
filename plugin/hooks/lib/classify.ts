@@ -53,8 +53,11 @@ export function keyText(input: ToolInput): string {
   return [input.text, input.key, input.keys].flatMap((v) => (Array.isArray(v) ? v : [v])).filter((v) => typeof v === 'string').join(' ');
 }
 
-// Cmd/Ctrl+Enter sends an open Gmail compose window.
-export const SEND_KEYS = /\b(?:cmd|command|meta|ctrl|control|super)\b.*\b(?:enter|return)\b|\b(?:enter|return)\b.*\b(?:cmd|command|meta|ctrl|control|super)\b/i;
+// Cmd/Ctrl+Enter sends an open Gmail compose window. Tools spell the modifier and the key many ways
+// (ControlOrMeta, CmdOrCtrl, NumpadEnter, KP_Enter), so modifiers may carry trailing word characters.
+const MOD = String.raw`\b(?:cmd|command|meta|ctrl|control|super)\w*`;
+const ENTER = String.raw`\b(?:numpad|kp_)?(?:enter|return)\b`;
+export const SEND_KEYS = new RegExp(`${MOD}.*${ENTER}|${ENTER}.*${MOD}`, 'i');
 
 // Tools and computer actions that only look at a page. A list of reads rather than of actions, so an
 // unknown tool counts as acting.
