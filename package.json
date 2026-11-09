@@ -11,7 +11,7 @@
   "scripts": {
     "setup": "npm ci --prefix dev",
     "test": "npm run typecheck && npm run test:node && python3 -m unittest discover -s tests -p 'test_*.py'",
-    "test:node": "node --no-warnings --test tests/tracker/*.test.ts tests/*.test.ts",
+    "test:node": "node --no-warnings --test tests/tracker/*.test.ts tests/factory/*.test.ts tests/*.test.ts",
     "typecheck": "npm --prefix dev exec --no -- tsc",
     "lint": "npm --prefix dev exec --no -- biome check .",
     "lint:fix": "npm --prefix dev exec --no -- biome check --write .",
