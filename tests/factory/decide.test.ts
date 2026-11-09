@@ -203,3 +203,95 @@ test('a fix that pushed goes back to CI; one that pushed nothing is a failed att
   const idle = finished(snap(st('fixing', { pr: 51, headSha: 'sha-1' }), { pr: pr() }), run('fix'));
   assert.equal(saves(idle)[0]?.attempts, 1);
 });
+
+const cmd = (s: IssueSnapshot, command: 'approve' | 'stop' | 'retry', actor = 'adamwardecki') =>
+  decideEvent({ kind: 'command', issue: 7, command, actor }, s, ctx);
+
+test('/approve on a plan starts the build; only the maintainer can approve', () => {
+  const s = snap(st('awaiting-approval', { approvalFor: 'plan', brief: 900 }));
+  assert.deepEqual(dispatches(cmd(s, 'approve')), ['build']);
+  assert.equal(saves(cmd(s, 'approve'))[0]?.approvalFor, undefined);
+  assert.deepEqual(cmd(s, 'approve', 'someone'), []);
+});
+
+test('/approve on a risky diff marks the PR ready', () => {
+  const a = cmd(snap(st('awaiting-approval', { approvalFor: 'diff', pr: 51 })), 'approve');
+  assert.deepEqual(stages(a), ['ready']);
+  assert.ok(a.some((x) => x.kind === 'pr-ready' && x.pr === 51));
+});
+
+test('/approve outside awaiting-approval does nothing', () => {
+  assert.deepEqual(cmd(snap(st('building')), 'approve'), []);
+});
+
+test('/stop blocks an issue in any live stage', () => {
+  const a = cmd(snap(st('fixing')), 'stop');
+  assert.deepEqual(stages(a), ['blocked']);
+  assert.equal(saves(a)[0]?.blockedFrom, 'fixing');
+  assert.deepEqual(cmd(snap(st('done')), 'stop'), []);
+});
+
+test('/retry resumes the blocked stage with a fresh round count', () => {
+  const a = cmd(snap(st('blocked', { blockedFrom: 'planning', round: 3 })), 'retry');
+  assert.deepEqual(stages(a), ['planning']);
+  assert.equal(saves(a)[0]?.round, 0);
+  assert.deepEqual(dispatches(a), ['plan']);
+});
+
+test('/retry at CI goes to the fixer', () => {
+  const a = cmd(snap(st('blocked', { blockedFrom: 'ci', pr: 51 }), { pr: pr() }), 'retry');
+  assert.deepEqual(stages(a), ['fixing']);
+  assert.equal(saves(a)[0]?.fixReason, 'ci');
+});
+
+test('the maintainer requesting changes on a ready PR starts an uncounted fix round', () => {
+  const s = snap(st('ready', { pr: 51, round: 3 }), { pr: pr() });
+  const a = decideEvent({ kind: 'changes-requested', issue: 7, actor: 'adamwardecki' }, s, ctx);
+  assert.deepEqual(stages(a), ['fixing']);
+  assert.equal(saves(a)[0]?.round, 3);
+  assert.equal(saves(a)[0]?.fixReason, 'maintainer');
+  assert.deepEqual(decideEvent({ kind: 'changes-requested', issue: 7, actor: 'someone' }, s, ctx), []);
+});
+
+test('the sweep retries a failed stage after an hour and keeps the attempt count', () => {
+  const early = snap(st('building', { attempts: 1, failedAt: '2026-11-09T11:30:00Z' }));
+  assert.deepEqual(sweep([early], ctx), []);
+  const late = snap(st('building', { attempts: 1, failedAt: '2026-11-09T10:30:00Z' }));
+  const a = sweep([late], ctx);
+  assert.deepEqual(dispatches(a), ['build']);
+  assert.equal(saves(a)[0]?.attempts, 1);
+  assert.equal(saves(a)[0]?.failedAt, undefined);
+});
+
+test('the sweep processes a finished run whose event was missed', () => {
+  const s = snap(st('building'), { pr: pr(), lastRun: run('build') });
+  assert.deepEqual(stages(sweep([s], ctx)), ['ci']);
+});
+
+test('the sweep blocks a stage with no progress for 90 minutes', () => {
+  const s = snap(st('in-review', { since: '2026-11-09T10:00:00Z' }), { lastRun: run('review', null, { completedAt: null }) });
+  const a = sweep([s], ctx);
+  assert.deepEqual(stages(a), ['blocked']);
+  assert.match(comments(a)[0] ?? '', /90 minutes/);
+});
+
+test('the sweep processes a missed /approve', () => {
+  const s = snap(st('awaiting-approval', { approvalFor: 'plan' }), { lastCommand: { command: 'approve', at: '2026-11-09T11:10:00Z' } });
+  assert.deepEqual(dispatches(sweep([s], ctx)), ['build']);
+  const old = snap(st('awaiting-approval', { approvalFor: 'plan' }), { lastCommand: { command: 'approve', at: '2026-11-09T10:10:00Z' } });
+  assert.deepEqual(sweep([old], ctx), []);
+});
+
+test('the sweep picks up an agent:queued label whose event was missed, then starts it', () => {
+  const a = sweep([snap(null, { labels: ['agent:queued'] })], ctx);
+  assert.deepEqual(stages(a), ['queued', 'planning']);
+  assert.deepEqual(dispatches(a), ['plan']);
+});
+
+test('the sweep sends a conflicting ready PR back to rebase before starting new work', () => {
+  const ready = { ...snap(st('ready', { pr: 51 }), { pr: pr({ conflicting: true }) }), number: 3 };
+  const queued = { ...snap(st('queued')), number: 4 };
+  const a = sweep([ready, queued], ctx);
+  assert.deepEqual(stages(a), ['fixing']);
+  assert.equal(saves(a)[0]?.fixReason, 'rebase');
+});

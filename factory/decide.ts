@@ -84,7 +84,7 @@ export function decideEvent(ev: FactoryEvent, snap: IssueSnapshot, ctx: Ctx): Ac
     case 'run-finished':
       return st ? runFinished(ev.issue, st, snap, ev.run, ctx) : [];
     case 'changes-requested':
-      return [];
+      return ev.actor === MAINTAINER && st?.stage === 'ready' ? toFix(ev.issue, st, snap, 'maintainer', ctx) : [];
     case 'pr-closed':
       return st && st.stage !== 'done' ? enter(ev.issue, st, 'done', ctx) : [];
   }
@@ -178,8 +178,27 @@ function fixed(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx): 
   return enter(issue, st, 'ci', ctx);
 }
 
-function command(_issue: number, _st: FactoryState, _snap: IssueSnapshot, _cmd: Command, _ctx: Ctx): Action[] {
-  return [];
+function command(issue: number, st: FactoryState, snap: IssueSnapshot, cmd: Command, ctx: Ctx): Action[] {
+  switch (cmd) {
+    case 'approve': {
+      if (st.stage !== 'awaiting-approval') return [];
+      if (st.approvalFor !== 'diff') return enter(issue, st, 'building', ctx, { approvalFor: undefined });
+      const actions = enter(issue, st, 'ready', ctx, { approvalFor: undefined });
+      if (st.pr) actions.push({ kind: 'pr-ready', pr: st.pr });
+      return actions;
+    }
+    case 'stop':
+      return st.stage === 'blocked' || st.stage === 'done' ? [] : block(issue, st, 'stopped by the maintainer.', ctx);
+    case 'retry': {
+      if (st.stage !== 'blocked' || !st.blockedFrom) return [];
+      // CI cannot be re-run from here, so a retry at CI goes to the fixer with the failing log.
+      if (st.blockedFrom === 'ci' || st.blockedFrom === 'fixing') {
+        const fixReason = st.blockedFrom === 'ci' ? 'ci' : st.fixReason;
+        return enter(issue, st, 'fixing', ctx, { round: 0, blockedFrom: undefined, fixReason, headSha: snap.pr?.headSha });
+      }
+      return enter(issue, st, st.blockedFrom, ctx, { round: 0, blockedFrom: undefined });
+    }
+  }
 }
 
 // Starts at most one issue: first a ready PR that now conflicts with main (back to the fixer to rebase), otherwise
@@ -188,6 +207,10 @@ function startNext(snaps: readonly IssueSnapshot[], actions: readonly Action[], 
   const after = new Map<number, FactoryState | null>(snaps.map((s) => [s.number, s.state]));
   for (const a of actions) if (a.kind === 'save') after.set(a.issue, a.state);
   if ([...after.values()].some((s) => s && ACTIVE_STAGES.includes(s.stage))) return [];
+  for (const s of snaps) {
+    const state = after.get(s.number);
+    if (state?.stage === 'ready' && s.pr?.conflicting) return toFix(s.number, state, s, 'rebase', ctx);
+  }
   const queued = [...after.entries()]
     .filter((e): e is [number, FactoryState] => e[1]?.stage === 'queued')
     .sort((a, b) => Date.parse(a[1].since) - Date.parse(b[1].since));
@@ -199,6 +222,32 @@ export function next(snaps: readonly IssueSnapshot[], ctx: Ctx): Action[] {
   return startNext(snaps, [], ctx);
 }
 
+// The 30-minute sweep. Recovers what the event path can miss (the router's concurrency group drops pending runs),
+// retries failed stages, blocks stuck ones, then starts the next issue if the factory is idle.
 export function sweep(snaps: readonly IssueSnapshot[], ctx: Ctx): Action[] {
-  return startNext(snaps, [], ctx);
+  const actions = snaps.flatMap((s) => sweepOne(s, ctx));
+  return [...actions, ...startNext(snaps, actions, ctx)];
+}
+
+function sweepOne(snap: IssueSnapshot, ctx: Ctx): Action[] {
+  const st = snap.state;
+  // Only users with triage access can add labels, so the label alone is enough to queue.
+  if (!st) return snap.labels.includes(stageLabel('queued')) ? [{ kind: 'save', issue: snap.number, state: initialState('queued', ctx.now) }] : [];
+  if (snap.lastCommand && notBefore(snap.lastCommand.at, st.since)) {
+    const acted = command(snap.number, st, snap, snap.lastCommand.command, ctx);
+    if (acted.length > 0) return acted;
+  }
+  if (!ACTIVE_STAGES.includes(st.stage)) return [];
+  if (st.failedAt) {
+    const due = ctx.now.getTime() - Date.parse(st.failedAt) >= RETRY_AFTER_MS;
+    return due ? enter(snap.number, st, st.stage, ctx, { attempts: st.attempts }) : [];
+  }
+  if (snap.lastRun) {
+    const acted = runFinished(snap.number, st, snap, snap.lastRun, ctx);
+    if (acted.length > 0) return acted;
+  }
+  if (ctx.now.getTime() - Date.parse(st.since) > STUCK_AFTER_MS) {
+    return block(snap.number, st, `no progress for ${STUCK_AFTER_MS / 60000} minutes.`, ctx);
+  }
+  return [];
 }
