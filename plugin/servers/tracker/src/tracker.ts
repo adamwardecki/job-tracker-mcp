@@ -1,6 +1,6 @@
 // Domain logic behind the tracker tools. Every write goes through here; nothing else touches the DB.
 
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import type { DatabaseSync, SQLInputValue, StatementResultingChanges } from 'node:sqlite';
 import type { ConfigSections, Profile, SectionName } from './config.ts';
 import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './config.ts';
@@ -444,6 +444,11 @@ export class Tracker {
     const items: { key: string; state: 'green' | 'amber' | 'red'; detail: string; decision: string | undefined }[] = [];
     const add = (key: string, state: 'green' | 'amber' | 'red', detail: string) => items.push({ key, state: decisions[key] && state !== 'green' ? 'amber' : state, detail, decision: decisions[key] || undefined });
     add('profile_document', docs.has('profile') ? 'green' : 'red', docs.has('profile') ? 'profile.md saved' : 'Import a CV and save the profile document (with a stack line per role).');
+    const cv = this.getCv();
+    if ('missing' in cv) add('cv_file', 'red', 'Save the CV file: drop it into the chat, or give its path.');
+    else if (!cv.exists) add('cv_file', 'red', `The CV at ${cv.path} is gone. Save it again.`);
+    else if (cv.changed_since_saved) add('cv_file', 'amber', 'The CV changed since it was saved. Re-import the profile, then save the CV again.');
+    else add('cv_file', 'green', `CV file: ${basename(cv.path)} (${cv.mode})`);
     add('filters', saved.has('filters') ? 'green' : 'red', saved.has('filters') ? 'Hard filters saved' : 'Hard filters not set.');
     add('prefs', saved.has('prefs') ? 'green' : 'amber', saved.has('prefs') ? 'Soft preferences saved' : 'Soft preferences not set; scoring will be coarse.');
     add('writing', saved.has('writing') ? 'green' : 'amber', saved.has('writing') ? 'Writing rules saved' : 'Using default writing rules.');

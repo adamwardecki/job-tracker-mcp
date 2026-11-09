@@ -129,3 +129,21 @@ test('save_cv and get_cv are callable over tools/call, and bad files come back a
   assert.equal(ok.isError ?? false, false);
   assert.match((await callTool('get_cv', {})).content[0].text, /"exists": ?true/);
 });
+
+test('setup_status cv_file: red until saved, red when gone, amber when changed, green otherwise', () => {
+  const t = onDisk();
+  const item = () => t.setupStatus().items.find((i) => i.key === 'cv_file');
+  const keys = t.setupStatus().items.map((i) => i.key);
+  assert.equal(keys.indexOf('cv_file'), keys.indexOf('profile_document') + 1);
+  assert.equal(item()?.state, 'red');
+  assert.match(item()?.detail || '', /drop it into the chat/);
+  const p = file('cv.pdf', 'v1');
+  t.saveCv({ path: p });
+  assert.equal(item()?.state, 'green');
+  assert.equal(item()?.detail, 'CV file: cv.pdf (linked)');
+  writeFileSync(p, 'v2');
+  assert.equal(item()?.state, 'amber');
+  rmSync(p);
+  assert.equal(item()?.state, 'red');
+  assert.match(item()?.detail || '', /is gone/);
+});
