@@ -3,7 +3,7 @@
 import { labelForRef } from './transcript.ts';
 import type { ToolInput, ToolStep } from './types.ts';
 
-export type BrowserAction = 'click' | 'type' | 'input' | 'js' | 'other';
+export type BrowserAction = 'click' | 'type' | 'input' | 'js' | 'key' | 'other';
 
 export function splitToolName(name: unknown): { server: string; short: string } {
   const parts = String(name || '').split('__');
@@ -40,11 +40,21 @@ export function browserAction(short: string, input: ToolInput): BrowserAction {
   if (/^(click|browser_click|left_click|double_click|triple_click|tap)$/.test(s)) return 'click';
   if (s === 'computer' && /click/.test(action)) return 'click';
   if (s === 'computer' && action === 'type') return 'type';
+  if (s === 'computer' && action === 'key') return 'key';
+  if (/^(key|press_key|browser_press_key|browser_press|keyboard_press)$/.test(s)) return 'key';
   if (/^(form_input|browser_type|fill|fill_form|browser_fill_form|type|set_value|select_option|browser_select_option)$/.test(s)) return 'input';
   if (/^(javascript_tool|javascript_exec|browser_evaluate|evaluate|execute_script|run_javascript|browser_exec)$/.test(s)) return 'js';
   if (s === 'browser_console') return input.expression ? 'js' : 'other'; // Hermes: reading console output is harmless
   return 'other';
 }
+
+// The keys a key-press tool will send: computer's text, Playwright's key, Hermes' key.
+export function keyText(input: ToolInput): string {
+  return [input.text, input.key, input.keys].filter((v) => typeof v === 'string').join(' ');
+}
+
+// Cmd/Ctrl+Enter sends an open Gmail compose window.
+export const SEND_KEYS = /\b(?:cmd|command|meta|ctrl|control|super)\b.*\b(?:enter|return)\b|\b(?:enter|return)\b.*\b(?:cmd|command|meta|ctrl|control|super)\b/i;
 
 // Tools and computer actions that only look at a page. A list of reads rather than of actions, so an
 // unknown tool counts as acting.

@@ -107,6 +107,13 @@ async function browserGate(payload: HookPayload, session: SessionState, short: s
   const url = page?.url || '';
   const host = C.hostOf(url);
 
+  if (action === 'key') {
+    if (/(^|\.)mail\.google\.com$/.test(host) && C.SEND_KEYS.test(C.keyText(input))) {
+      deny(payload, session, 'That key combination sends the email in Gmail. Sending is blocked; leave it as a draft.');
+    }
+    return;
+  }
+
   if (action === 'js') {
     const intent = C.jsIntent(input.text || input.code || input.script || input.function || input.expression);
     if (intent === 'submit') return submitGate(payload, session, 'a scripted submit/apply click', page);
