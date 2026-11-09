@@ -39,14 +39,20 @@ async function runGuard(input: Record<string, unknown>, check: [string, string][
     const pre = document.createElement('pre'); pre.id = 'out'; pre.textContent = line; document.body.appendChild(pre);`;
   const file = join(dir, `case-${Math.random().toString(36).slice(2)}.html`);
   writeFileSync(file, board.replace('</body>', `<script>${script}</script></body>`));
+  // Chrome launches have exceeded 30s on CI; allow more time on slow runners.
+  const timeoutMs = 120000;
   // Chrome on macOS prints the DOM but may not exit; stop it once the document is out.
   const dom = await new Promise<string>((resolve, reject) => {
-    const p = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(dir, `profile-${Math.random().toString(36).slice(2)}`)}`, '--dump-dom', `file://${file}`], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const p = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(dir, `profile-${Math.random().toString(36).slice(2)}`)}`, '--dump-dom', `file://${file}`], { stdio: ['ignore', 'pipe', 'pipe'] });
     let buf = '';
+    let err = '';
     const timer = setTimeout(() => {
       p.kill('SIGKILL');
-      reject(new Error('Chrome timed out'));
-    }, 30000);
+      reject(new Error(`Chrome timed out after ${timeoutMs}ms; stderr: ${err.slice(-500) || '(none)'}`));
+    }, timeoutMs);
+    p.stderr.on('data', (d: Buffer) => {
+      err += d;
+    });
     p.stdout.on('data', (d: Buffer) => {
       buf += d;
       if (buf.includes('</html>')) {
