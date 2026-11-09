@@ -32,6 +32,6 @@ Apply to one role with the user present. Argument: `$ARGUMENTS`
 8. **Show the user the summary**: role id, company, title, location line, every field and the value now in it, anything left blank and why. Then say exactly:
    "To submit, type `/job-tracker:approve 42`. I will not submit without it." (with this role's real id in place of 42)
    Then stop and wait.
-9. After the user's `/job-tracker:approve` message arrives (see that command), click Submit once. Capture the confirmation page text, `transition` the role to `applied` with that text as `evidence`, and `add_artifact` (`kind: "confirmation"`).
+9. After the user's `/job-tracker:approve` message arrives (see that command), click Submit once. Capture the confirmation page text, `transition` the role to `applied` with that text as `evidence` (plus `asked_salary`, the salary field's value as submitted, if the form had one), and `add_artifact` (`kind: "confirmation"`).
 10. **Account-gated flows** (join.com, Workday, anything behind sign-in): prepare everything, leave the tab open, `record` with `status: "queued"` and a `question` saying what is left, and tell the user.
 11. Call `finish_run` with a one-line summary.

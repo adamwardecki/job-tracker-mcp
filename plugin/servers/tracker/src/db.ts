@@ -156,6 +156,7 @@ export interface RoleRow {
   score_notes: string | null;
   status: string | null;
   updated_at: string;
+  asked_salary: string | null;
 }
 
 export interface RoleUrlRow {
@@ -394,7 +395,7 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 // MIGRATIONS[i] takes the schema from version i + 1 to i + 2. Append only; never edit a shipped one.
 const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
@@ -572,6 +573,11 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       if (changes.some((change, i) => parse(change.after_json) !== current || (i > 0 && (change.before_json === null || parse(change.before_json) !== current)))) continue;
       save.run(row.id, row.last_occurred_at, current);
     }
+  },
+  // 10: the salary the user asked for on the application form, verbatim as entered. Null for every existing role:
+  // what was asked before is not on record.
+  (db) => {
+    db.exec('ALTER TABLE roles ADD COLUMN asked_salary TEXT');
   },
 ];
 

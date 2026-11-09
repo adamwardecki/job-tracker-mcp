@@ -65,6 +65,7 @@ For each field, in page order:
 2. Click it once. If validation errors appear, fix the named fields (fresh `find`, fresh screenshot), then click submit again. The approval stands for the session.
 3. **Capture the confirmation**: the page text after submit (thank-you message, application id) or the confirmation email. No confirmation text means not applied.
 4. `transition` the role to `applied` with `evidence` = the confirmation text verbatim, and `add_artifact` with `kind: "confirmation"`, `ref` = the page URL, `content` = the text.
+   If the form had a salary field (expected, desired or current salary), pass `asked_salary` = the value submitted in it, verbatim with currency and period as read back in step 5 (e.g. "95,000 EUR per year"). Omit it when there was no such field. Why: the figure you asked for is what the offer and any negotiation get measured against, and the form is the only record of it.
 5. If the confirmation is ambiguous, `record` a note and tell the user; do not record `applied`.
 
 ## Verifying writes on profile-style forms

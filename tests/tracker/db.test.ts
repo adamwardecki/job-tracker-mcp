@@ -11,7 +11,7 @@ import { openDb, readTx, SCHEMA_V1, SCHEMA_VERSION, tx } from '../../plugin/serv
 import { secureDir, secureFile } from '../../plugin/servers/tracker/src/fsperm.ts';
 import { importLegacy } from '../../plugin/servers/tracker/src/legacy.ts';
 import { Tracker } from '../../plugin/servers/tracker/src/tracker.ts';
-import { REWIND_TO_V5, REWIND_TO_V6, REWIND_TO_V7, REWIND_TO_V8 } from './helpers.ts';
+import { REWIND_TO_V5, REWIND_TO_V6, REWIND_TO_V7, REWIND_TO_V8, REWIND_TO_V9 } from './helpers.ts';
 
 const tempDb = () => join(mkdtempSync(join(tmpdir(), 'jh-db-')), 'tracker.db');
 const addRule = (db: ReturnType<typeof openDb>, text: string) =>
@@ -678,3 +678,32 @@ test('upgrading from v8 backfills only proven unchanged interviews and preserves
     again.close();
   }
 });
+
+test('upgrading from v9 adds an empty asked_salary to every role and keeps the rest', () => {
+  const path = tempDb();
+  const old = openDb(path);
+  const t = new Tracker(old);
+  const role = t.upsertRole({ company: 'Acme', title: 'Engineer', url: 'https://jobs.example.test/acme/1' }).role.id;
+  old.exec(REWIND_TO_V9);
+  const before = JSON.stringify(old.prepare('SELECT * FROM roles ORDER BY id').all());
+  old.close();
+  const db = openDb(path);
+  try {
+    assert.equal(userVersion(db), SCHEMA_VERSION);
+    const rows = db.prepare('SELECT * FROM roles ORDER BY id').all();
+    assert.deepEqual(rows.map((r) => r.asked_salary), [null]);
+    assert.equal(JSON.stringify(rows.map(({ asked_salary: _, ...r }) => r)), before);
+    const tracker = new Tracker(db);
+    verifyAndQueue(tracker, role);
+    tracker.transition({ role_id: role, to: 'applied', reason: 'Submitted', evidence: 'Thanks for applying', asked_salary: '90k EUR' });
+    assert.equal(tracker.roleRow(role)?.asked_salary, '90k EUR');
+  } finally {
+    db.close();
+  }
+});
+
+function verifyAndQueue(t: Tracker, role_id: number): void {
+  t.transition({ role_id, to: 'verified', reason: 'Checked', evidence: 'https://jobs.example.test/acme/1: "Remote"', location_line: 'Remote', location_type: 'remote' });
+  t.transition({ role_id, to: 'scored', reason: 'Fits' });
+  t.transition({ role_id, to: 'queued', reason: 'Next' });
+}
