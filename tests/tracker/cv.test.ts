@@ -76,12 +76,12 @@ test('cvFileState reports a missing file and a changed file', () => {
   assert.deepEqual(cvFileState({ ...saved, path: join(dir, 'gone.pdf') }), { exists: false, readable: false, changed_since_saved: false });
 });
 
-test('cvFileState does not read the file when its size already differs', { skip: skipChmod }, () => {
+test('cvFileState still checks readability when the size already differs', { skip: skipChmod }, () => {
   const p = file('cv.pdf', 'v1');
   const saved = { path: p, sha256: sha256File(p), bytes: 99 };
   chmodSync(p, 0);
   try {
-    assert.deepEqual(cvFileState(saved), { exists: true, readable: true, changed_since_saved: true });
+    assert.deepEqual(cvFileState(saved), { exists: true, readable: false, changed_since_saved: false, error: 'EACCES' });
   } finally {
     chmodSync(p, 0o600);
   }

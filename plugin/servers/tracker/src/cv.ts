@@ -3,7 +3,7 @@
 
 import { createHash } from 'node:crypto';
 import type { Stats } from 'node:fs';
-import { copyFileSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, copyFileSync, openSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { ToolError } from './errors.ts';
 import { secureDir, secureFile } from './fsperm.ts';
@@ -92,8 +92,12 @@ export function cvFileState(cv: Pick<CvRecord, 'path' | 'sha256' | 'bytes'>): Cv
   try {
     const st = statSync(cv.path, { throwIfNoEntry: false });
     if (!st?.isFile()) return { exists: false, readable: false, changed_since_saved: false };
-    // A different size means a different file, so skip reading (and hashing) a file we already know changed.
-    if (st.size !== cv.bytes) return { exists: true, readable: true, changed_since_saved: true };
+    // Check that a changed-size file is still readable without hashing its contents.
+    if (st.size !== cv.bytes) {
+      const fd = openSync(cv.path, 'r');
+      closeSync(fd);
+      return { exists: true, readable: true, changed_since_saved: true };
+    }
     return { exists: true, readable: true, changed_since_saved: sha256File(cv.path) !== cv.sha256 };
   } catch (e) {
     const code = errnoCode(e);
