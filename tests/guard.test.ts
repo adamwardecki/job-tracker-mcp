@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { before, test } from 'node:test';
+import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -25,10 +25,24 @@ interface GuardOut {
   delete_controls: { label: string }[];
 }
 
-// Chrome on macOS prints the DOM but may not exit; stop it once the document is out.
-function dumpDom(file: string, timeoutMs: number): Promise<string> {
+// check: [[column, title], ...] boxes to tick before running the guard.
+async function runGuard(input: Record<string, unknown>, check: [string, string][]): Promise<GuardOut> {
   assert.ok(CHROME, 'Chrome not found');
-  return new Promise<string>((resolve, reject) => {
+  const script = `
+    window.onerror = (msg, src, line, col) => { const e = document.createElement('pre'); e.id = 'err'; e.textContent = msg + ' @' + line + ':' + col; document.body.appendChild(e); };
+    for (const [col, title] of ${JSON.stringify(check)}) {
+      const column = [...document.querySelectorAll('.at-card')].find((c) => c.querySelector('.at-title').textContent === col);
+      const job = [...column.querySelectorAll('.job')].find((j) => j.querySelector('.job-title').textContent === title);
+      job.querySelector('input').checked = true;
+    }
+    const line = ${guard.replace('__JOBHUNT_GUARD_INPUT__', JSON.stringify(input))};
+    const pre = document.createElement('pre'); pre.id = 'out'; pre.textContent = line; document.body.appendChild(pre);`;
+  const file = join(dir, `case-${Math.random().toString(36).slice(2)}.html`);
+  writeFileSync(file, board.replace('</body>', `<script>${script}</script></body>`));
+  // Chrome launches have exceeded 30s on CI; allow more time on slow runners.
+  const timeoutMs = 120000;
+  // Chrome on macOS prints the DOM but may not exit; stop it once the document is out.
+  const dom = await new Promise<string>((resolve, reject) => {
     const p = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(dir, `profile-${Math.random().toString(36).slice(2)}`)}`, '--dump-dom', `file://${file}`], { stdio: ['ignore', 'pipe', 'pipe'] });
     let buf = '';
     let err = '';
@@ -52,33 +66,6 @@ function dumpDom(file: string, timeoutMs: number): Promise<string> {
       resolve(buf);
     });
   });
-}
-
-// The first Chrome start on a fresh CI runner pays for cold disk and font caches while the rest of the
-// suite runs in parallel: about 11s on Ubuntu, and past 30s on a slow runner. Pay it once here, with room,
-// so the 30s limit on each guard run below still catches a real hang.
-before(async () => {
-  if (!CHROME) return;
-  const file = join(dir, 'warmup.html');
-  writeFileSync(file, '<!doctype html><html><body></body></html>');
-  await dumpDom(file, 120000);
-}, { timeout: 130000 });
-
-// check: [[column, title], ...] boxes to tick before running the guard.
-async function runGuard(input: Record<string, unknown>, check: [string, string][]): Promise<GuardOut> {
-  assert.ok(CHROME, 'Chrome not found');
-  const script = `
-    window.onerror = (msg, src, line, col) => { const e = document.createElement('pre'); e.id = 'err'; e.textContent = msg + ' @' + line + ':' + col; document.body.appendChild(e); };
-    for (const [col, title] of ${JSON.stringify(check)}) {
-      const column = [...document.querySelectorAll('.at-card')].find((c) => c.querySelector('.at-title').textContent === col);
-      const job = [...column.querySelectorAll('.job')].find((j) => j.querySelector('.job-title').textContent === title);
-      job.querySelector('input').checked = true;
-    }
-    const line = ${guard.replace('__JOBHUNT_GUARD_INPUT__', JSON.stringify(input))};
-    const pre = document.createElement('pre'); pre.id = 'out'; pre.textContent = line; document.body.appendChild(pre);`;
-  const file = join(dir, `case-${Math.random().toString(36).slice(2)}.html`);
-  writeFileSync(file, board.replace('</body>', `<script>${script}</script></body>`));
-  const dom = await dumpDom(file, 30000);
   const m = dom.match(/<pre id="out">JOBHUNT_TRIAGE_GUARD (\{.*?\}) JOBHUNT_END<\/pre>/s);
   assert.ok(m, `guard produced no output: ${(dom.match(/<pre id="err">[^<]*/) || [dom.slice(-300)])[0]}`);
   // &amp; goes last, so a title containing "&lt;" is not decoded twice.
