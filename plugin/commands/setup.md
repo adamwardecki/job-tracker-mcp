@@ -1,6 +1,6 @@
 ---
 description: Set up the job-hunt plugin (CV, filters, accounts, connectors, schedule, calibration run). Resumable.
-argument-hint: "[step name to jump to, e.g. filters | accounts | schedule]"
+argument-hint: "[step name to jump to, e.g. cv | filters | accounts | schedule]"
 ---
 
 Run the job-hunt setup.

@@ -83,7 +83,7 @@ Invisible checks that pass on their own: fine. Any visible challenge, puzzle or 
 
 Used by `inbox-and-calendar` when the mail connector cannot attach files.
 1. Open `https://mail.google.com/mail/u/0/#drafts` and open the draft by its subject.
-2. Find the compose window's `input[type=file]` (Gmail keeps it hidden), expose it as in step 1 above, and `file_upload` the path from `get_cv`.
+2. Find the compose window's `input[type=file]` (Gmail keeps it hidden), expose it as in step 1 above, and `file_upload` the path from `get_cv`. Do not click the paperclip / Attach files button: it opens the system file picker, which browser tools cannot drive. Use the hidden file input only.
 3. Wait until the attachment chip shows the file name with no progress bar, and take a screenshot.
 4. Close the compose window with its close control (the X, labelled "Save & close"). Never use "Discard draft" or a send key: the hooks block sending, and discarding deletes the draft.
 

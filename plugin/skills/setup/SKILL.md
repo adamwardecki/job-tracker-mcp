@@ -52,10 +52,11 @@ Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts/` (Hermes: `${HERMES_SKILL_DIR}/.
 9. After an install, run the check again. When it passes (exit 0), say: "Node.js is installed. Quit Claude completely and reopen it, then type /job-tracker:setup to carry on." Stop here: the tracker only starts when the app starts. If it still fails, show its message and stop; do not offer the installer again in this setup run.
 
 ### 1. CV import
+A `cv_file` item in `setup_status` that is not green resumes at this step.
 - Ask how they want to give the CV, offering these in order:
   1. **Drop the file into the chat.** Call `save_cv` with its path and `copy: true`. Why: where the app keeps a dropped file can be temporary, so the tracker keeps its own copy next to its database. If you can see the file's contents but no path on disk, say the drop did not come with a location and ask for the path (option 2). Why: the tracker can only save a file it can open.
-  2. **It is already on their computer.** Ask for the full path and call `save_cv` with it (it stays where it is). Offer `copy: true` if they would rather the tracker keep its own copy.
-  3. **Paste the text.** Use it for the profile only, and tell the user that applications and emails need the file, so `cv_file` stays open until they give it.
+  2. **It is already on their computer.** Ask for the full path and call `save_cv` with it (it stays where it is). Offer `copy: true` if they would rather the tracker keep its own copy. Say that a copy does not follow edits to the original: to replace it, drop or give the new file again.
+  3. **Paste the text.** Use it for the profile only, and tell the user that applications and emails need the file, so `cv_file` stays open until they give it. If they want to finish setup without a file, offer `record_setup_decision` for `cv_file` with their words. Why: otherwise setup loops back to the red item every time.
 - `save_cv` errors say what is wrong (not found, not a PDF or Word file, over 25 MB). Relay them in plain words and ask again.
 - Read the CV's text from the file (or the paste) to draft the profile.
 - Draft the `profile` document using `templates/profile.md`. For **every role**, write a stack line listing the technologies used in that role, taken from the CV text for that role.

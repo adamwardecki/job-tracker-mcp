@@ -49,7 +49,7 @@ For each field, in page order:
 5. Yes/No button pairs and dropdowns can silently lose their value when a nearby widget is clicked. After the section is complete, **re-verify each by screenshot**.
 
 ### 4. Upload the CV
-1. Call `get_cv`. If it returns `missing`, or `exists: false` or `readable: false`, do not upload anything: leave the field, list it in the step 5 summary as "CV not uploaded: no saved CV file", and point the user to `/job-tracker:setup cv_file`. Why: a guessed path uploads the wrong file or nothing, and the form looks complete when it is not. If `changed_since_saved` is true, upload it anyway and say in the summary that the profile may describe an older CV.
+1. Call `get_cv`. If it returns `missing`, or `exists: false` or `readable: false`, do not upload anything: leave the field, list it in the step 5 summary as "CV not uploaded: no saved CV file", and point the user to `/job-tracker:setup cv`. Why: a guessed path uploads the wrong file or nothing, and the form looks complete when it is not. If `changed_since_saved` is true, upload it anyway and say in the summary that the profile may describe an older CV.
 2. Find the file input. If it is hidden (`input[type=file]` with `display:none`), expose it: set it visible and give it an `aria-label`, then re-read the accessibility tree for a fresh ref.
 3. Call `file_upload` with the `path` from `get_cv`. If it answers that the session is not allowed to read that path, stage the file into the session first (the host's file-staging tool, if any) and upload the staged path.
 4. Confirm the file name appears on the page.
