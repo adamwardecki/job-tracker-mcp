@@ -34,3 +34,51 @@ test('riskyTouches flags concrete paths and wildcards that could cover a risky p
 test('an empty Touches list counts as risky', () => {
   assert.deepEqual(riskyTouches([], RISKY), ['(no Touches listed)']);
 });
+
+test('glob literals are escaped, ? is one character and a/**/b spans zero or more directories', () => {
+  assert.ok(globToRegExp('a.b').test('a.b'));
+  assert.ok(!globToRegExp('a.b').test('axb'));
+  assert.ok(globToRegExp('factor?/x.ts').test('factory/x.ts'));
+  assert.ok(!globToRegExp('factor?/x.ts').test('factor/x.ts'));
+  assert.ok(!globToRegExp('a?b').test('a/b'));
+  assert.ok(globToRegExp('a/**/b').test('a/b'));
+  assert.ok(globToRegExp('a/**/b').test('a/x/y/b'));
+  assert.ok(!globToRegExp('a/**/b').test('a/x/y/c'));
+});
+
+const WIDE = [...RISKY, 'factory/**'];
+
+test('riskyTouches flags wildcard entries whose literal prefix meets a risky glob', () => {
+  for (const t of ['plugin/*/gates.ts', '**/hooks.json', '*/hooks/main.ts', 'factor?/main.ts', '.git*/workflows/ci.yml']) {
+    assert.deepEqual(riskyTouches([t], WIDE), [t], t);
+  }
+});
+
+test('riskyTouches flags directories that contain a risky path', () => {
+  for (const t of ['plugin/hooks', 'plugin/hooks/', '.github', 'factory', 'plugin/servers/tracker']) {
+    assert.deepEqual(riskyTouches([t], WIDE), [t], t);
+  }
+  // A directory entry can hold files a wildcard risky glob matches even when the glob's literal prefix is shorter.
+  assert.deepEqual(riskyTouches(['plugin/hooks'], ['plugin/*/gates.ts']), ['plugin/hooks']);
+  assert.deepEqual(riskyTouches(['plugin/servers/tracker/src/db.tsx'], ['plugin/servers/tracker/src/db.ts']), []);
+});
+
+test('riskyTouches normalises paths before matching', () => {
+  for (const t of ['plugin//hooks/gates.ts', 'plugin/./hooks/x.ts', '/plugin/hooks/x.ts', '././plugin/hooks/x.ts', 'plugin/x/../hooks/x.ts', 'plugin\\hooks\\x.ts']) {
+    assert.deepEqual(riskyTouches([t], WIDE), [t], t);
+  }
+});
+
+test('riskyTouches flags entries that normalise to nothing or leave the repo', () => {
+  for (const t of ['', '.', './', '/', 'a/..', '..', '../x.ts', 'docs/../../x.ts']) {
+    assert.deepEqual(riskyTouches([t], WIDE), [t], JSON.stringify(t));
+  }
+});
+
+test('riskyTouches leaves paths outside the risky globs alone', () => {
+  assert.deepEqual(riskyTouches(['docs/setup.md', './docs/setup.md', 'tests/factory/*.test.ts', 'plugin/hooksx/a.ts'], WIDE), []);
+});
+
+test('riskyFiles normalises changed paths', () => {
+  assert.deepEqual(riskyFiles(['./plugin/hooks/gates.ts', 'plugin//hooks/x.ts', 'docs/setup.md'], WIDE), ['./plugin/hooks/gates.ts', 'plugin//hooks/x.ts']);
+});

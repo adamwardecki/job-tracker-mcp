@@ -88,7 +88,11 @@ export async function pullBranch(gh: Gh, pr: number): Promise<string> {
 
 export async function pullSnapshot(gh: Gh, pr: number): Promise<PullSnapshot & { nodeId: string }> {
   const p = await gh.call('GET', `/repos/${gh.repo}/pulls/${pr}`);
-  const files = (await paged(gh, `/repos/${gh.repo}/pulls/${pr}/files`)).map((f) => str(dig(f, 'filename')));
+  // A rename lists its old path too: moving a file out of a risky directory changes that directory.
+  const files = (await paged(gh, `/repos/${gh.repo}/pulls/${pr}/files`)).flatMap((f) => {
+    const old = str(dig(f, 'previous_filename'));
+    return old ? [str(dig(f, 'filename')), old] : [str(dig(f, 'filename'))];
+  });
   return {
     number: pr,
     headSha: str(dig(p, 'head', 'sha')),
