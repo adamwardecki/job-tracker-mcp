@@ -518,3 +518,44 @@ test('Stop fails open when its reminder counter cannot be saved', { skip: proces
   await stop({ session_id: sid, transcript_path: transcript([]), stop_hook_active: true });
   assert.equal(outputs.length, 0);
 });
+
+test('in Gmail, a key combination that sends is blocked; plain keys and other sites are not', async () => {
+  const sid = session();
+  await markSession(sid);
+  const gmail = transcript([[`${CHROME}navigate`, { url: 'https://mail.google.com/mail/u/0/#drafts', tabId: 1 }, 'Navigated to https://mail.google.com/mail/u/0/#drafts']]);
+  const docs = transcript([[`${CHROME}navigate`, { url: 'https://docs.example.com/', tabId: 1 }, 'Navigated to https://docs.example.com/']]);
+  const key = async (path: string, tool: string, input: Record<string, unknown>) => {
+    outputs = [];
+    await preTool({ session_id: sid, transcript_path: path, tool_name: tool, tool_input: { tabId: 1, ...input } });
+    return reason();
+  };
+  for (const text of ['cmd+Return', 'ctrl+Enter', 'Meta+Enter', 'Control+Return']) {
+    assert.match(await key(gmail, `${CHROME}computer`, { action: 'key', text }), /sends the email in Gmail/, text);
+  }
+  assert.match(await key(gmail, 'mcp__playwright__browser_press_key', { key: 'Control+Enter' }), /sends the email in Gmail/);
+  assert.match(await key(gmail, 'mcp__playwright__browser_press_key', { keys: ['Control', 'Enter'] }), /sends the email in Gmail/);
+  assert.match(await key(gmail, 'mcp__playwright__browser_press_key', { keys: ['Meta', 'Return'] }), /sends the email in Gmail/);
+  for (const text of ['ControlOrMeta+Enter', 'CmdOrCtrl+Enter', 'Control+NumpadEnter', 'ctrl+KP_Enter', 'Enter+ControlOrMeta']) {
+    assert.match(await key(gmail, `${CHROME}computer`, { action: 'key', text }), /sends the email in Gmail/, text);
+  }
+  assert.match(await key(gmail, 'mcp__playwright__browser_press_key', { keys: ['ControlOrMeta', 'Enter'] }), /sends the email in Gmail/);
+  assert.equal(await key(gmail, 'mcp__playwright__browser_press_key', { keys: ['Enter'] }), '');
+  assert.equal(await key(gmail, `${CHROME}computer`, { action: 'key', text: 'Return' }), '');
+  assert.equal(await key(gmail, `${CHROME}computer`, { action: 'key', text: 'Escape' }), '');
+  assert.equal(await key(docs, `${CHROME}computer`, { action: 'key', text: 'cmd+Return' }), '');
+});
+
+test('a key combination that sends is blocked when the page cannot be identified', async () => {
+  const sid = session();
+  await markSession(sid);
+  const blank = transcript([]);
+  const key = async (input: Record<string, unknown>) => {
+    outputs = [];
+    await preTool({ session_id: sid, transcript_path: blank, tool_name: `${CHROME}computer`, tool_input: { tabId: 1, action: 'key', ...input } });
+    return reason();
+  };
+  assert.match(await key({ text: 'cmd+Return' }), /could not be identified/);
+  assert.match(await key({ text: 'ControlOrMeta+Enter' }), /could not be identified/);
+  assert.equal(await key({ text: 'Enter' }), '');
+  assert.equal(await key({ text: 'Escape' }), '');
+});

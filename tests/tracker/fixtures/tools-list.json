@@ -146,6 +146,37 @@
     }
   },
   {
+    "name": "save_cv",
+    "description": "Record the user's CV file. Link it where it lives, or copy: true to keep a copy next to the tracker database (always copy a file the user dropped into the chat).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Absolute path to the CV file (.pdf, .docx or .doc, up to 25 MB)"
+        },
+        "copy": {
+          "type": "boolean",
+          "description": "true to keep a copy next to the tracker database instead of linking the file where it lives"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_cv",
+    "description": "Path to the user's CV file for uploads and email attachments, whether it still exists, and whether it changed since it was saved. Returns missing: true when no CV is saved.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "find_company",
     "description": "Dedupe check. Pass url when you have one: an exact URL or ATS posting, under any company and any recorded alias, is checked first and listed in exact_role_ids. Then fuzzy match on name, aliases, domain and ATS slug. verdict: new | seen | skip (live application, same posting, or no_cold_apply). seen is a known company with nothing blocking: a different requisition there is a lead, even after a rejection. skip for a tracked posting is for discovery; to apply to a known queued role, pass its id to gate_check.",
     "inputSchema": {

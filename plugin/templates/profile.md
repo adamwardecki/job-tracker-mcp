@@ -18,7 +18,6 @@ inferred (not literally in your CV) with "(inferred)" until you confirm it.
 - **Based in:** <City, Country>
 - **Timezone:** <e.g. Europe/Berlin>
 - **Links (for forms, not email signatures):** <LinkedIn URL>, <GitHub URL>, <portfolio URL>
-- **CV file:** <path or Drive link to the CV PDF the plugin uploads>
 - **Availability:** <e.g. from <Month Year>, notice period N weeks>
 
 ## Summary

@@ -54,7 +54,7 @@ Never echo the job description back. Never restate the CV; the CV carries the cr
 ## Emails and reply drafts
 
 - Plain, short, answers the question asked.
-- Signature: name only (`writing.signature_style`). No bare URLs; Gmail rewrites them into redirect links. Say "CV attached, with links on it" if relevant.
+- Signature: name only (`writing.signature_style`). No bare URLs; Gmail rewrites them into redirect links. Say "CV attached, with links on it" only when the CV will be attached (see `inbox-and-calendar` step 4). Why: a draft that says attached and is not makes the user look careless if they send it unchanged.
 - Never propose availability when the recruiter sent a booking link (see `inbox-and-calendar`).
 
 ## Humanizer pass

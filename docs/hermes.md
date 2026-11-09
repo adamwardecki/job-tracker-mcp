@@ -41,6 +41,6 @@ by hand.
    sweeps** there is no next turn, so an incomplete sweep can end without a report.
 2. **Approval parsing depends on Hermes' slash-skill message format** (`[IMPORTANT: The user has
    invoked the "..."`). Hermes could change that string. The markers are copied verbatim.
-3. **Browser bypass routes Hermes adds:** `browser_cdp` and `browser_press` (Enter in a field) are not checked by the submit rules. The Claude version has the same gap with key presses.
+3. **Browser bypass routes Hermes adds:** `browser_cdp` and `browser_press` (Enter in a field) are not checked by the submit rules. Cmd/Ctrl+Enter is blocked on mail.google.com, and on pages the hook cannot identify, on Hermes `browser_press` as on Claude Code. Plain Enter, or Tab then Enter onto Send, is still not gated.
 4. **One skill namespace on Hermes:** the `setup` skill is named `job-tracker:setup-guide` on Hermes.
 5. **No per-agent model on Hermes:** `model: sonnet` in `agents/*.md` is ignored.

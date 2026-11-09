@@ -40,6 +40,7 @@ test('Hermes browser actions and @refs are understood', () => {
   assert.equal(browserAction('browser_console', { expression: 'document.title' }), 'js');
   assert.equal(browserAction('browser_console', {}), 'other');
   assert.equal(browserAction('browser_exec', { code: 'js("1")' }), 'js');
+  assert.equal(browserAction('browser_press', { key: 'Enter' }), 'key');
   const steps: ToolStep[] = [{ kind: 'result', id: 'a', name: 'mcp__hermes_browser__browser_snapshot', text: 'snapshot: - button "Submit application" [ref=e5]\n- link "Jobs" [ref=e50]', isError: false }];
   assert.equal(resolveLabel({ ref: '@e5' }, steps), 'snapshot: - button "Submit application" [ref=e5]');
 });
@@ -307,4 +308,14 @@ test('hermes-install.sh fails, without saying Done, when the tracker did not get
   assert.notEqual(r.status, 0);
   assert.doesNotMatch(r.stdout, /Done\./);
   assert.match(r.stderr, /job_hunt_tracker/);
+});
+
+test('hermes.ts: in Gmail, Ctrl+Enter is blocked as a send', () => {
+  const sid = 'h-gmail-key';
+  hermes('pre_tool_call', { session_id: sid, tool_name: `${TRACKER}open_items`, args: {} }); // marks the session
+  hermes('post_tool_call', { session_id: sid, tool_call_id: 'g1', tool_name: 'browser_navigate', args: { url: 'https://mail.google.com/mail/u/0/#drafts' }, result: JSON.stringify({ success: true, url: 'https://mail.google.com/mail/u/0/#drafts' }) });
+  const out = hermes('pre_tool_call', { session_id: sid, tool_name: 'browser_press', args: { key: 'Control+Enter' } });
+  assert.equal(out?.action, 'block');
+  assert.match(out.message, /sends the email in Gmail/);
+  assert.equal(hermes('pre_tool_call', { session_id: sid, tool_name: 'browser_press', args: { key: 'Enter' } }), null);
 });
