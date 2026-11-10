@@ -265,3 +265,11 @@ test('scrubbed stages get the sandbox the scrub needs', () => {
   assert.match(step, /kernel\.apparmor_restrict_unprivileged_userns=0/);
   assert.ok(stage.indexOf('Install subprocess isolation dependencies') < stage.indexOf('uses: anthropics/claude-code-action@'));
 });
+
+test('the router\'s App token can mark factory PRs ready', () => {
+  // GITHUB_TOKEN gets "Resource not accessible by integration" from markPullRequestReadyForReview on PRs the App
+  // opened, so main.ts uses the App token for it.
+  const router = read('.github/workflows/factory-router.yml');
+  assert.match(router, /permission-actions: write\n(?: +#.*\n)* +permission-pull-requests: write\n/);
+  assert.match(read('factory/main.ts'), /markReady\(dispatcher, /);
+});
