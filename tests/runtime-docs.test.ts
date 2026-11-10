@@ -69,7 +69,11 @@ test('the board command opens the browser and the sweep report points to it', ()
   const board = read('commands/board.md');
   assert.match(board, /Call `open_board` with `open: true`\./);
   assert.match(board, /Why: /);
-  assert.match(read('commands/sweep.md'), /End the report with the line `Board: run \/job-tracker:board`\./);
+  const sweep = read('commands/sweep.md');
+  assert.match(sweep, /End the report with the question `Open the job board now\? Reply yes, or run \/job-tracker:board later\.` as its final line\./);
+  assert.match(sweep, /Never open the board yourself or call `open_board` with `open: true` during the sweep\. Why: /);
+  assert.match(sweep, /If the user replies yes in this session, follow `\/job-tracker:board` \(call `open_board` with `open: true`\)\./);
+  assert.doesNotMatch(sweep, /Board: run \/job-tracker:board/);
 });
 
 // Rule delivery (B4): list_rules pages, so a prompt that calls it once sees only part of the rules. The retrieval
