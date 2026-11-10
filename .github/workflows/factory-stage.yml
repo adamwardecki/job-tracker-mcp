@@ -15,6 +15,11 @@ on:
       contents: { type: string, required: true }
       issues: { type: string, required: true }
       pull_requests: { type: string, required: true }
+      # '1' strips the action's credentials from the agent's subprocesses (tests, git, gh).
+      scrub_env: { type: string, required: false, default: '' }
+    secrets:
+      FACTORY_APP_PRIVATE_KEY: { required: true }
+      CLAUDE_CODE_OAUTH_TOKEN: { required: true }
 
 jobs:
   run:
@@ -32,8 +37,17 @@ jobs:
           ISSUE: ${{ inputs.issue }}
         run: '[[ "$ISSUE" =~ ^[0-9]+$ ]]'
 
+      # These name the bot to the action and to the context builder; a malformed value stops the run here.
+      - name: Check the factory variables
+        env:
+          BOT_ID: ${{ vars.FACTORY_BOT_ID }}
+          APP_SLUG: ${{ vars.FACTORY_APP_SLUG }}
+        run: |
+          [[ "$BOT_ID" =~ ^[0-9]+$ ]] || { echo '::error::FACTORY_BOT_ID must be the bot user id (digits only)'; exit 1; }
+          [[ "$APP_SLUG" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo '::error::FACTORY_APP_SLUG must be the App slug'; exit 1; }
+
       - id: app
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ vars.FACTORY_APP_ID }}
           private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
@@ -41,19 +55,19 @@ jobs:
           permission-issues: ${{ inputs.issues }}
           permission-pull-requests: ${{ inputs.pull_requests }}
 
-      # main's checkout: the context builder and the skills pin come from here, never from the PR branch.
+      # main's checkout: the context builder, the skills pin and the dev tools come from here, never from the PR branch.
       - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
           token: ${{ steps.app.outputs.token }}
 
+      # No npm cache: a cache saved here would be in main's scope, which release.yml restores.
       - uses: actions/setup-node@v7
         with:
           node-version: 24.x
-          cache: npm
-          cache-dependency-path: dev/package-lock.json
 
+      # The CI log comes only from the run the router recorded. A run looked up by branch name could be a fork's.
       - name: Build the stage context
         if: inputs.stage != 'plan'
         env:
@@ -61,12 +75,13 @@ jobs:
           ISSUE: ${{ inputs.issue }}
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           FACTORY_BOT_LOGIN: ${{ vars.FACTORY_APP_SLUG }}[bot]
         run: |
-          mkdir -p .factory
-          node --no-warnings factory/stage-context.ts "$STAGE" "$ISSUE" > .factory/context.md
-          if grep -q '^## CI failure$' .factory/context.md; then
-            run_id=$(gh run list --workflow ci.yml --branch "factory/issue-$ISSUE" --limit 1 --json databaseId --jq '.[0].databaseId')
+          node --no-warnings factory/stage-context.ts "$STAGE" "$ISSUE" .factory
+          if [[ -f .factory/ci-run-id ]]; then
+            run_id=$(cat .factory/ci-run-id)
+            [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::bad ci-run-id: $run_id"; exit 1; }
             { echo '```'; gh run view "$run_id" --log-failed | tail -n 300; echo '```'; } >> .factory/context.md
           fi
 
@@ -76,7 +91,8 @@ jobs:
           echo "repo=$(jq -r '.extraKnownMarketplaces.mattpocock.source.repo' .claude/settings.json)" >> "$GITHUB_OUTPUT"
           echo "ref=$(jq -r '.extraKnownMarketplaces.mattpocock.source.ref' .claude/settings.json)" >> "$GITHUB_OUTPUT"
 
-      # Outside the workspace, so the agents cannot commit it.
+      # The clone is outside the workspace. triage and implement cannot be called through the Skill tool
+      # (disable-model-invocation), so the stage skills read them from .factory/mp, which git ignores.
       - name: Fetch Matt Pocock's skills at the pin
         env:
           REPO: ${{ steps.pin.outputs.repo }}
@@ -84,20 +100,25 @@ jobs:
         run: |
           git clone --quiet "https://github.com/$REPO" "$RUNNER_TEMP/mp-skills"
           git -C "$RUNNER_TEMP/mp-skills" checkout --quiet "$REF"
+          mkdir -p .factory
+          rm -rf .factory/mp
+          cp -R "$RUNNER_TEMP/mp-skills/skills/engineering" .factory/mp
+
+      # Before the switch, so the PR branch's lockfile and package scripts are never installed. Only the stages that
+      # run tests need the tools.
+      - name: Install dev tools
+        if: inputs.stage == 'build' || inputs.stage == 'fix'
+        run: npm ci --prefix dev --ignore-scripts
 
       - name: Switch to the PR branch
         if: inputs.stage == 'review' || inputs.stage == 'fix'
         env:
           ISSUE: ${{ inputs.issue }}
-        run: |
-          git checkout "factory/issue-$ISSUE"
-          # Stage prompts and settings always come from main, so a branch cannot rewrite its own reviewer.
-          git checkout origin/main -- .claude
+        run: git checkout "factory/issue-$ISSUE"
 
-      - name: Install dev tools
-        run: npm run setup
-
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1
+        env:
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: ${{ inputs.scrub_env }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app.outputs.token }}

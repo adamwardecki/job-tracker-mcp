@@ -18,7 +18,9 @@ permissions:
 jobs:
   stage:
     uses: ./.github/workflows/factory-stage.yml
-    secrets: inherit
+    secrets:
+      FACTORY_APP_PRIVATE_KEY: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     with:
       stage: plan
       issue: ${{ inputs.issue }}
@@ -27,5 +29,6 @@ jobs:
       timeout: 20
       contents: read
       issues: write
+      scrub_env: ''
       pull_requests: ''
-      allowed_tools: 'Read,Grep,Glob,Write,Skill,Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(npm run setup),Bash(node --no-warnings --test:*)'
+      allowed_tools: 'Read,Grep,Glob,Write,Skill,Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*)'

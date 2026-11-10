@@ -1,5 +1,6 @@
 # Paths the maintainer approves before the factory builds or ships a change (AGENTS.md "Ask first").
-# The router checks the brief's Touches list against this file, and the PR's diff again before marking it ready.
+# The router checks the brief's Touches list against this file, and the PR's diff again before the review and fix
+# agents run on the branch and before marking it ready.
 # Globs: ** crosses directories, * stays inside one.
 
 # Safety gates and hook wiring
@@ -32,3 +33,17 @@ dev/package-lock.json
 .claude/**
 AGENTS.md
 factory/**
+
+# Files the agents load or run: Claude Code settings and instructions, git config the checkout applies, and the
+# tool configs the test and lint commands read. From review on, agents run on the PR branch.
+.mcp.json
+.claude.json
+**/CLAUDE.md
+**/CLAUDE.local.md
+CONTRIBUTING.md
+.gitignore
+.gitmodules
+.husky/**
+.ripgreprc
+biome.json
+tsconfig.json

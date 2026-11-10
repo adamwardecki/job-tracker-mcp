@@ -27,10 +27,12 @@ permissions:
 jobs:
   route:
     # The maintainer's own actions, finished runs and the sweep wake the router. Comments and labels from the
-    # factory's agents would otherwise queue runs that push real events out of the concurrency group.
+    # factory's agents would otherwise queue runs that push real events out of the concurrency group. Runs from
+    # forks never count (main.ts checks again), so they must not take a place in the group either.
     if: >-
       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'workflow_run' || github.actor == 'adamwardecki'
+      (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name != 'workflow_run' && github.actor == 'adamwardecki')
     concurrency:
       group: factory-router
       cancel-in-progress: false
@@ -48,7 +50,7 @@ jobs:
       # Dispatches use the App token, so the stage runs report back through workflow_run. Labels and comments use
       # GITHUB_TOKEN, so they do not wake the router again.
       - id: app
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ vars.FACTORY_APP_ID }}
           private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}

@@ -18,7 +18,9 @@ permissions:
 jobs:
   stage:
     uses: ./.github/workflows/factory-stage.yml
-    secrets: inherit
+    secrets:
+      FACTORY_APP_PRIVATE_KEY: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     with:
       stage: build
       issue: ${{ inputs.issue }}
@@ -27,5 +29,6 @@ jobs:
       timeout: 45
       contents: write
       issues: ''
+      scrub_env: '1'
       pull_requests: write
-      allowed_tools: 'Read,Grep,Glob,Edit,Write,Skill,Agent,Bash(git:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(npm run setup),Bash(npm test),Bash(npm run test:node),Bash(npm run typecheck),Bash(npm run lint),Bash(npm run lint:fix),Bash(npm --prefix dev exec --no -- biome ci .),Bash(node --no-warnings --test:*),Bash(claude plugin validate:*)'
+      allowed_tools: 'Read,Grep,Glob,Edit,Write,Skill,Agent,Bash(git:*),Bash(gh pr create:*),Bash(npm run setup),Bash(npm test),Bash(npm run test:node),Bash(npm run typecheck),Bash(npm run lint),Bash(npm run lint:fix),Bash(npm --prefix dev exec --no -- biome ci .),Bash(node --no-warnings --test:*),Bash(claude plugin validate:*)'
