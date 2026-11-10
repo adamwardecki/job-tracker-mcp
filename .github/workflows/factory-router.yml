@@ -62,6 +62,8 @@ jobs:
           app-id: ${{ vars.FACTORY_APP_ID }}
           private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
           permission-actions: write
+          # Marking a factory PR ready needs the App: GITHUB_TOKEN is refused on PRs the App opened.
+          permission-pull-requests: write
       - run: node --no-warnings factory/main.ts
         env:
           GITHUB_TOKEN: ${{ github.token }}

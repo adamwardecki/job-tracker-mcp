@@ -52,9 +52,11 @@ async function apply(gh: Gh, dispatcher: Gh, loaded: Map<number, Loaded>, action
       case 'pr-ready': {
         const found = [...loaded.values()].find((x) => x.snap.pr?.number === a.pr);
         if (!found?.prNodeId) throw new Error(`PR #${a.pr} is not in the loaded snapshots`);
-        // A PR back from a fix round on an already-ready PR is not a draft; GitHub refuses to mark it ready again.
-        if (found.snap.pr?.draft) await markReady(gh, found.prNodeId);
-        await requestReview(gh, a.pr, MAINTAINER);
+        // The App token, not GITHUB_TOKEN: GitHub refuses markPullRequestReadyForReview from GITHUB_TOKEN on a PR
+        // another app opened ("Resource not accessible by integration"). A PR back from a fix round on an
+        // already-ready PR is not a draft; GitHub refuses to mark it ready again.
+        if (found.snap.pr?.draft) await markReady(dispatcher, found.prNodeId);
+        await requestReview(dispatcher, a.pr, MAINTAINER);
         break;
       }
     }

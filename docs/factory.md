@@ -168,7 +168,6 @@ Check these on the first runs:
   the agent's commands can then read the action's credentials.
 - The build agent cannot run `gh issue view`: its tool allowlist has no `gh issue` command. Its token has no issues
   permission, but an installation token can likely still read a public repo's issues, so the allowlist is the guard.
-- `markPullRequestReadyForReview` works with `GITHUB_TOKEN`.
 - Installing `mattpocock-skills` from `.claude/settings.json` accepts a commit SHA as `ref`. If not, pin a tag, and
   relax the pin test in `tests/factory/workflows.test.ts`, which accepts only a commit SHA.
 - The prompt `/factory-plan 12` invokes the project skill with `12` as `$ARGUMENTS`.
