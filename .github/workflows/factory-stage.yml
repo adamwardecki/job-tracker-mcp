@@ -141,3 +141,15 @@ jobs:
             --allowedTools "${{ inputs.allowed_tools }}"
           plugin_marketplaces: ${{ runner.temp }}/mp-skills
           plugins: mattpocock-skills@mattpocock
+
+      # The action hides Claude's output, so a run that dies at startup (a bad token, an unknown model) shows only
+      # "is_error:true". Print the error line for those runs alone: they made no model call, so nothing in the
+      # result can quote issue text or code into this public log.
+      - name: Show why Claude stopped before starting
+        if: failure()
+        run: |
+          file="$RUNNER_TEMP/claude-execution-output.json"
+          [ -f "$file" ] || exit 0
+          jq -r '[.[] | select(.type == "result")] | last
+            | select(.is_error and (.total_cost_usd // 0) == 0 and (.modelUsage // {} | length) == 0)
+            | [.result, (.errors // [] | .[])] | map(select(. != null) | tostring) | .[]' "$file" | head -c 500
