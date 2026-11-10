@@ -1,0 +1,34 @@
+# Paths the maintainer approves before the factory builds or ships a change (AGENTS.md "Ask first").
+# The router checks the brief's Touches list against this file, and the PR's diff again before marking it ready.
+# Globs: ** crosses directories, * stays inside one.
+
+# Safety gates and hook wiring
+plugin/hooks/**
+plugin/__init__.py
+
+# Tracker schema, tool contract and its public reference
+plugin/servers/tracker/src/db.ts
+plugin/servers/tracker/src/tools.ts
+plugin/servers/tracker/src/mcp.ts
+tests/tracker/fixtures/tools-list.json
+docs/tracker-api.md
+
+# Versions, manifests and release
+package.json
+plugin/package.json
+plugin/plugin.yaml
+plugin/.claude-plugin/plugin.json
+plugin/servers/tracker/package.json
+server.json
+registry/**
+.claude-plugin/**
+
+# Dependencies
+dev/package.json
+dev/package-lock.json
+
+# The factory itself and the agents' own instructions
+.github/**
+.claude/**
+AGENTS.md
+factory/**
