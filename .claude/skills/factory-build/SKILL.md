@@ -17,6 +17,10 @@ You are the builder in the agent factory (`docs/factory.md`).
   maintainer changes the factory's own config.
 - If the brief cannot be built as written, stop without opening a PR and say why in your final message. Why: the
   router counts that as a failed attempt and stops after two. That is better than a PR that does something else.
+- If `npm test` fails only on an untracked root `package-lock.json`, or lint only on an unreadable `.mcp.json`, and
+  you did not create either file, note it in your PR body and move on. Do not delete or edit them. Why: the
+  agent sandbox leaves those files in the workspace, so they aren't part of the branch, and the PR's CI checks are
+  the ones that count.
 
 ## Steps
 

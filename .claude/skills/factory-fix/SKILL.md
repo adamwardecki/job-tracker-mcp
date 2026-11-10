@@ -16,6 +16,10 @@ You are the fixer in the agent factory (`docs/factory.md`). You are on branch `f
   change. Change nothing else. Why: unrelated edits make the next review round longer.
 - Change nothing under `.github/`, `.claude/` or `factory/`. Why: same rule as the builder.
 - Rebase onto `origin/main`; never merge it into the branch. Why: AGENTS.md; the repo squash-merges.
+- If `npm test` fails only on an untracked root `package-lock.json`, or lint only on an unreadable `.mcp.json`, and
+  you did not create either file, note it in your PR comment and move on. Do not delete or edit them. Why: the
+  agent sandbox leaves those files in the workspace, so they aren't part of the branch, and the PR's CI checks are
+  the ones that count.
 
 ## Steps
 
