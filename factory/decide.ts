@@ -140,20 +140,24 @@ function unapprovedRisky(st: FactoryState, pr: PullSnapshot | null, ctx: Ctx): s
 // package scripts), so a risky diff waits for /approve before any of them runs, and before the PR is marked ready.
 // null when the diff passes. The patch is what the stage would have been entered with; it is kept for /approve.
 function diffGate(issue: number, st: FactoryState, snap: IssueSnapshot, to: AfterApproval, ctx: Ctx, patch: Partial<FactoryState> = {}): Action[] | null {
+  // No PR means no diff to check, not a clean one: review and fix would run on whatever the branch holds.
+  if (!snap.pr && to !== 'ready') return block(issue, st, `no PR from \`${branchFor(issue)}\` was found, so its diff cannot be checked.`, 'no-pr', ctx);
   const hits = unapprovedRisky(st, snap.pr, ctx);
   if (hits.length === 0) return null;
   return askApproval(issue, st, 'diff', hits, ctx, { ...patch, afterApproval: to, approvalSha: snap.pr?.headSha });
 }
 
-// Enter the stage the diff gate guards, if the diff passes.
+// Enter the stage the diff gate guards, if the diff passes. Review and fix record the head the gate checked: the
+// stage job refuses to run on another (a stale fixer may push in between).
 function onward(issue: number, st: FactoryState, snap: IssueSnapshot, to: AfterApproval, ctx: Ctx, patch: Partial<FactoryState> = {}): Action[] {
   const gate = diffGate(issue, st, snap, to, ctx, patch);
   if (gate) return gate;
+  const gatedSha = snap.pr?.headSha;
   switch (to) {
     case 'review':
-      return enter(issue, st, 'in-review', ctx, patch);
+      return enter(issue, st, 'in-review', ctx, { ...patch, gatedSha });
     case 'fix':
-      return enter(issue, st, 'fixing', ctx, { ...patch, headSha: snap.pr?.headSha });
+      return enter(issue, st, 'fixing', ctx, { ...patch, headSha: gatedSha, gatedSha });
     case 'ready':
       return toReady(issue, { ...st, ...patch }, snap.pr?.number ?? st.pr, ctx);
   }
@@ -301,8 +305,10 @@ function startNext(snaps: readonly IssueSnapshot[], actions: readonly Action[], 
   return first ? enter(first[0], first[1], 'planning', ctx) : [];
 }
 
-export function next(snaps: readonly IssueSnapshot[], ctx: Ctx): Action[] {
-  return startNext(snaps, [], ctx);
+// After an event, main.ts passes the event's actions: in a dry run nothing was written, so the reloaded snapshots
+// still show the issue as it was before the event.
+export function next(snaps: readonly IssueSnapshot[], ctx: Ctx, eventActions: readonly Action[] = []): Action[] {
+  return startNext(snaps, eventActions, ctx);
 }
 
 // The 30-minute sweep. Recovers what the event path can miss (the router's concurrency group drops pending runs),
@@ -325,6 +331,9 @@ function sweepOne(snap: IssueSnapshot, ctx: Ctx): Action[] {
   const st = snap.state;
   if (queuedByMaintainer(snap)) return [{ kind: 'save', issue: snap.number, state: initialState('queued', ctx.now) }];
   if (!st) return [];
+  // The close event can be dropped by the router's concurrency group. Only the PR the state recorded counts: before
+  // a run records one, the loader finds the branch's last PR, which may be from a run that already finished.
+  if (snap.pr && !snap.pr.open && st.stage !== 'done' && snap.pr.number === st.pr) return enter(snap.number, st, 'done', ctx);
   // snapshot.ts already keeps only the maintainer's commands; checked again so a loader change cannot open this up.
   if (snap.lastCommand?.actor === MAINTAINER && notBefore(snap.lastCommand.at, st.since)) {
     const acted = command(snap.number, st, snap, snap.lastCommand.command, ctx);
@@ -340,7 +349,9 @@ function sweepOne(snap: IssueSnapshot, ctx: Ctx): Action[] {
     // A failed fixer may have pushed before it failed, so its retry is gated like any other run on the branch.
     const to = st.stage === 'fixing' ? 'fix' : st.stage === 'in-review' ? 'review' : null;
     const gate = to ? diffGate(snap.number, st, snap, to, ctx) : null;
-    return gate ?? enter(snap.number, st, st.stage, ctx, { attempts: st.attempts });
+    if (gate) return gate;
+    // The retry runs on the head the gate just checked, which moved if the failed fixer pushed.
+    return enter(snap.number, st, st.stage, ctx, { attempts: st.attempts, ...(to ? { gatedSha: snap.pr?.headSha } : {}) });
   }
   if (snap.lastRun) {
     const acted = runFinished(snap.number, st, snap, snap.lastRun, ctx);

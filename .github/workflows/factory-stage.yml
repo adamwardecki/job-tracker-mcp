@@ -110,11 +110,17 @@ jobs:
         if: inputs.stage == 'build' || inputs.stage == 'fix'
         run: npm ci --prefix dev --ignore-scripts
 
+      # The router checked this head's diff before dispatching the stage. A push since then (a stale fixer's) was not
+      # checked, so the job stops; the sweep's retry checks the new head.
       - name: Switch to the PR branch
         if: inputs.stage == 'review' || inputs.stage == 'fix'
         env:
           ISSUE: ${{ inputs.issue }}
-        run: git checkout "factory/issue-$ISSUE"
+        run: |
+          git checkout "factory/issue-$ISSUE"
+          gated=$(cat .factory/head-sha)
+          head=$(git rev-parse HEAD)
+          [[ "$head" == "$gated" ]] || { echo "::error::the PR head $head is not the head the router checked ($gated)"; exit 1; }
 
       - uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1
         env:

@@ -664,3 +664,87 @@ test('the sweep recovers the maintainer\'s changes-requested review on a ready P
   const risky = sweep([snap(st('ready', { pr: 51 }), { ...at('2026-11-09T11:30:00Z'), pr: pr(RISKY_PR) })], ctx);
   assert.deepEqual(stages(risky), ['awaiting-approval']);
 });
+
+// The event path: main.ts applies the event's actions, then asks next with them, so a dry run (which writes
+// nothing to reload) logs the same sequence a real run takes
+
+test('next after an event sees the event\'s saves, as the sweep does', () => {
+  const s = snap(null, { labels: ['agent:queued'], queuedBy: { login: 'adamwardecki', at: '2026-11-09T11:50:00Z' } });
+  const ev = decideEvent({ kind: 'queued', issue: 7, actor: 'adamwardecki' }, s, ctx);
+  assert.deepEqual(next([s], ctx), []);
+  const after = next([s], ctx, ev);
+  assert.deepEqual(
+    [...ev, ...after].map((a) => a.kind),
+    ['save', 'save', 'unlabel', 'dispatch'],
+  );
+  assert.deepEqual(stages(after), ['planning']);
+  assert.deepEqual(dispatches(after), ['plan']);
+});
+
+test('next after an event that made an issue active starts nothing', () => {
+  const waiting = snap(st('awaiting-approval', { approvalFor: 'plan', brief: 900 }), { brief: { ...BRIEF, id: 900 } });
+  const queued = { ...snap(st('queued')), number: 3 };
+  const ev = cmd(waiting, 'approve');
+  assert.deepEqual(stages(ev), ['building']);
+  assert.deepEqual(stages(next([waiting, queued], ctx)), ['planning']);
+  assert.deepEqual(next([waiting, queued], ctx, ev), []);
+});
+
+// A PR close the router missed
+
+test('the sweep finishes an issue whose own PR was closed', () => {
+  for (const stage of ['ci', 'in-review', 'fixing', 'ready', 'awaiting-approval', 'blocked'] as const) {
+    assert.deepEqual(stages(sweep([snap(st(stage, { pr: 51 }), { pr: pr({ open: false }) })], ctx)), ['done'], stage);
+  }
+  assert.deepEqual(sweep([snap(st('done', { pr: 51 }), { pr: pr({ open: false }) })], ctx), []);
+  // Another PR closing does not finish it.
+  assert.deepEqual(stages(sweep([snap(st('ready', { pr: 50 }), { pr: pr({ open: false }) })], ctx)), []);
+});
+
+test('the sweep does not finish a re-queued issue on the closed PR of its earlier run', () => {
+  // A new run has no PR yet; the loader finds the last one from the branch, which closed before the issue was queued.
+  for (const stage of ['planning', 'building'] as const) {
+    assert.ok(!stages(sweep([snap(st(stage), { pr: pr({ open: false }) })], ctx)).includes('done'), stage);
+  }
+});
+
+// The head the router let through: the stage refuses to run on any other
+
+test('dispatching the reviewer or the fixer records the PR head the diff gate checked', () => {
+  const green = finished(snap(st('ci', { pr: 51 }), { pr: pr({ headSha: 'sha-9' }) }), run('ci', 'success', { headSha: 'sha-9' }));
+  assert.deepEqual(dispatches(green), ['review']);
+  assert.equal(saves(green)[0]?.gatedSha, 'sha-9');
+  const red = finished(snap(st('ci', { pr: 51 }), { pr: pr({ headSha: 'sha-9' }) }), run('ci', 'failure', { headSha: 'sha-9' }));
+  assert.deepEqual(dispatches(red), ['fix']);
+  assert.equal(saves(red)[0]?.gatedSha, 'sha-9');
+  const approved = cmd(snap(gated({ afterApproval: 'review' }), { pr: pr(RISKY_PR) }), 'approve');
+  assert.equal(saves(approved)[0]?.gatedSha, 'sha-1');
+});
+
+test('a sweep retry of the reviewer or the fixer records the head it checked, which may have moved', () => {
+  const failed = { attempts: 1, failedAt: '2026-11-09T10:30:00Z', pr: 51, gatedSha: 'sha-0', headSha: 'sha-0' };
+  for (const stage of ['in-review', 'fixing'] as const) {
+    const a = sweep([snap(st(stage, failed), { pr: pr({ headSha: 'sha-2' }) })], ctx);
+    assert.equal(dispatches(a).length, 1, stage);
+    assert.equal(saves(a)[0]?.gatedSha, 'sha-2', stage);
+  }
+  // The fixer's own push check still compares with the head it was first dispatched on.
+  const fix = sweep([snap(st('fixing', failed), { pr: pr({ headSha: 'sha-2' }) })], ctx);
+  assert.equal(saves(fix)[0]?.headSha, 'sha-0');
+});
+
+test('without a PR the reviewer and the fixer are not dispatched; the issue blocks', () => {
+  const cases = [
+    decideEvent({ kind: 'changes-requested', issue: 7, actor: 'adamwardecki' }, snap(st('ready', { pr: 51 })), ctx),
+    cmd(snap(st('blocked', { blockedFrom: 'in-review', blockedFor: 'stuck', pr: 51 })), 'retry'),
+    cmd(snap(gated({ afterApproval: 'fix', fixReason: 'ci' })), 'approve'),
+    sweep([snap(st('in-review', { attempts: 1, failedAt: '2026-11-09T10:30:00Z', pr: 51 }))], ctx),
+    sweep([snap(st('fixing', { attempts: 1, failedAt: '2026-11-09T10:30:00Z', pr: 51, headSha: 'sha-0' }))], ctx),
+  ];
+  for (const a of cases) {
+    assert.deepEqual(dispatches(a), []);
+    assert.deepEqual(stages(a), ['blocked']);
+    assert.equal(saves(a)[0]?.blockedFor, 'no-pr');
+    assert.match(comments(a)[0] ?? '', /PR/);
+  }
+});

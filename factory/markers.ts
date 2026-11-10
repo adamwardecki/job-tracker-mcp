@@ -7,8 +7,9 @@ import { STAGES, type Stage } from './config.ts';
 export const FIX_REASONS = ['ci', 'review', 'maintainer', 'rebase'] as const;
 export type FixReason = (typeof FIX_REASONS)[number];
 
-// Why an issue is blocked; /retry picks its way back in from this. 'human' is a planner that asked for one.
-export const BLOCK_REASONS = ['rounds', 'rebases', 'attempts', 'stuck', 'stop', 'human'] as const;
+// Why an issue is blocked; /retry picks its way back in from this. 'human' is a planner that asked for one; 'no-pr'
+// is a review or fix round with no PR whose diff the gate could check.
+export const BLOCK_REASONS = ['rounds', 'rebases', 'attempts', 'stuck', 'stop', 'human', 'no-pr'] as const;
 export type BlockReason = (typeof BLOCK_REASONS)[number];
 
 export const COMMANDS = ['approve', 'stop', 'retry'] as const;
@@ -36,6 +37,7 @@ export type FactoryState = {
   blockedFor?: BlockReason;
   rebases?: number; // rebases since the PR last reached ready any other way (MAX_REBASES)
   headSha?: string; // PR head when the fixer was dispatched; unchanged after it means it pushed nothing
+  gatedSha?: string; // PR head the diff gate checked when it let review or fix run; the stage runs on no other
   fixReason?: FixReason;
   runs: string[];
 };
@@ -96,6 +98,7 @@ export function parseState(body: string): FactoryState | null {
   if (oneOf(BLOCK_REASONS, v.blockedFor)) s.blockedFor = v.blockedFor;
   if (count(v.rebases)) s.rebases = v.rebases;
   if (typeof v.headSha === 'string') s.headSha = v.headSha;
+  if (sha(v.gatedSha)) s.gatedSha = v.gatedSha;
   if (oneOf(FIX_REASONS, v.fixReason)) s.fixReason = v.fixReason;
   return s;
 }

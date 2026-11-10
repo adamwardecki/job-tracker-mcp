@@ -1,5 +1,5 @@
-// CLI for the stage workflow: writes the stage's context to <outDir>/context.md and, for a CI fix round, the id of
-// the failed CI run to <outDir>/ci-run-id. Runs from main's checkout, before the job switches to the PR branch, so a
+// CLI for the stage workflow: writes the stage's context to <outDir>/context.md, for review and fix the PR head the
+// router checked to <outDir>/head-sha, and, for a CI fix round, the id of the failed CI run to <outDir>/ci-run-id. Runs from main's checkout, before the job switches to the PR branch, so a
 // branch cannot change what its own agents are told.
 // Usage: node --no-warnings factory/stage-context.ts <build|review|fix> <issue> <outDir>
 // Env: GITHUB_TOKEN, GITHUB_REPOSITORY, FACTORY_BOT_LOGIN.
@@ -8,7 +8,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { errorText, oneOf } from '../plugin/servers/tracker/src/util.ts';
 import { factoryBotLogin } from './config.ts';
-import { buildContext, ciRunId, contextLookups } from './context.ts';
+import { buildContext, ciRunId, contextLookups, gatedHead } from './context.ts';
 import { client, commentEditors, listComments, listReviewComments, listReviews } from './github.ts';
 import { stateCandidate, stateFrom } from './snapshot.ts';
 
@@ -34,10 +34,12 @@ async function main(): Promise<void> {
   const found = stateFrom(comments, edits);
   if (!found) throw new Error(`Issue #${issue}: the factory state comment was edited by someone other than the router`);
 
+  const head = gatedHead(found.state, stage);
   mkdirSync(outDir, { recursive: true });
-  // A ci-run-id left from an earlier run (a local one) must not stand in for this round's.
-  rmSync(join(outDir, 'ci-run-id'), { force: true });
+  // Files left from an earlier run (a local one) must not stand in for this round's.
+  for (const f of ['ci-run-id', 'head-sha']) rmSync(join(outDir, f), { force: true });
   writeFileSync(join(outDir, 'context.md'), buildContext({ ...threads, state: found.state, stage, issue, edits }));
+  if (head !== null) writeFileSync(join(outDir, 'head-sha'), `${head}\n`);
   if (stage === 'fix' && found.state.fixReason === 'ci') {
     const id = ciRunId(found.state, repo);
     // Without a recorded run the fixer works without the log; picking a run by branch name could pick a fork's.

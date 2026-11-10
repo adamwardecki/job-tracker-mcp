@@ -128,3 +128,13 @@ test('the files the agents load or run are risky paths', () => {
   const loaded = ['.mcp.json', '.claude.json', '**/CLAUDE.md', '**/CLAUDE.local.md', 'CONTRIBUTING.md', '.gitignore', '.gitmodules', '.husky/**', '.ripgreprc', 'biome.json', 'tsconfig.json'];
   for (const p of loaded) assert.ok(risky.includes(p), p);
 });
+
+test('review and fix run only on the PR head the router checked', () => {
+  const stage = read('.github/workflows/factory-stage.yml');
+  const sw = stage.indexOf('git checkout "factory/issue-$ISSUE"');
+  const check = stage.indexOf('[[ "$head" == "$gated" ]] || {');
+  assert.ok(sw > 0 && check > sw, 'the head is checked after the switch');
+  assert.ok(stage.includes('gated=$(cat .factory/head-sha)'));
+  assert.ok(stage.includes('head=$(git rev-parse HEAD)'));
+  assert.ok(stage.indexOf('factory/stage-context.ts') < sw, 'head-sha is written from main before the switch');
+});

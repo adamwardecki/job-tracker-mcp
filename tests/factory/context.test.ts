@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildContext, ciRunId, contextLookups } from '../../factory/context.ts';
+import { buildContext, ciRunId, contextLookups, gatedHead } from '../../factory/context.ts';
 import type { Edit } from '../../factory/github.ts';
 import type { FactoryState } from '../../factory/markers.ts';
 
@@ -156,4 +156,13 @@ test('ciRunId refuses a missing, foreign or malformed run URL', () => {
   assert.equal(id('https://github.com/o/r/actions/runs/1e3'), null);
   assert.equal(id('https://github.com/o/r/actions/runs/99999999999999999999'), null);
   assert.equal(ciRunId({ ...state, ciRun: 'https://github.com/o/r/actions/runs/1' }, ''), null);
+});
+
+test('gatedHead gives review and fix the head the router checked, and refuses to guess', () => {
+  const head = 'a'.repeat(40);
+  assert.equal(gatedHead({ ...state, gatedSha: head }, 'review'), head);
+  assert.equal(gatedHead({ ...state, gatedSha: head }, 'fix'), head);
+  assert.equal(gatedHead({ ...state, gatedSha: head }, 'build'), null);
+  assert.throws(() => gatedHead(state, 'review'), /no PR head recorded/);
+  for (const bad of ['sha-1', 'A'.repeat(40), `${head}\nx`, 'a'.repeat(39)]) assert.throws(() => gatedHead({ ...state, gatedSha: bad }, 'fix'), /not a commit SHA/, bad);
 });

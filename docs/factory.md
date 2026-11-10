@@ -22,7 +22,8 @@ agent:queued ─► planning ─► (awaiting-approval) ─► building ─► c
       everything under it.
     - **Diff:** the PR changes a risky path the approved Touches don't cover. This is checked before review, before
       each fix round and before `ready`, because review and fix run on the PR branch and load what it changed. The
-      request names the exact commit, and a later push is checked again.
+      request names the exact commit, and a later push is checked again. The review or fix job runs only on the head
+      the router checked: if the branch moved in between, the job fails, and the sweep's retry checks the new head.
   - `/stop`: block the issue now.
   - `/retry`: restart a blocked issue. Where it restarts depends on why it stopped:
     - After the fix-round cap: back to the fixer, with the round count reset to 0.
@@ -35,8 +36,8 @@ agent:queued ─► planning ─► (awaiting-approval) ─► building ─► c
   over when the PR reaches `ready` any other way.
 - **State** is in the `agent:*` label and in a comment by `github-actions[bot]` that lists the stage, PR, fix round
   and run links. The comment's hidden data also records why the issue stopped (`blockedFor`) and the rebase count.
-- **Closing:** closing the issue's own PR finishes the issue (`done`). Closing any other PR from the same branch
-  does not.
+- **Closing:** closing the issue's own PR finishes the issue (`done`). If the router missed the close, the sweep
+  finishes it. Closing any other PR from the same branch does not.
 - **Editing comments:**
   - Never edit the brief. Later stages refuse an edited brief: the stage fails, is retried, then blocks. Queue the
     issue again for a new plan.
@@ -90,6 +91,7 @@ For build, review and fix, also write `.factory/context.md` (and, for a CI round
 - At most 2 rebases in a row for a `ready` PR that conflicts with `main`, then `blocked`.
 - A failed stage run is retried once, after an hour, by the sweep. A second failure blocks the issue.
 - A stage with no progress for 90 minutes is blocked.
+- A review or fix round with no PR to check is blocked (`no-pr`) instead of dispatched.
 - Job timeouts: plan 20 min, build 45, review 20, fix 30.
 - The App has no `workflows` permission, so agents cannot push changes under `.github/workflows/`.
 - `main` requires an approving review, so the bot cannot merge its own PR.
@@ -132,7 +134,7 @@ For build, review and fix, also write `.factory/context.md` (and, for a CI round
 ## Rollout
 
 1. Merge with `FACTORY_DRY_RUN=1`. Label a test issue `agent:queued` and check that the `factory-router` run logs a
-   `save` and a `dispatch` and writes nothing.
+   `save` (queued), then a `save` (planning), an `unlabel` and a `dispatch`, and writes nothing.
 2. Set `FACTORY_DRY_RUN` to `0`. **Canary 1:** a small docs issue should reach `ready` with a green, reviewed PR.
 3. **Canary 2:** an issue that needs a change in `plugin/hooks/` should stop at `awaiting-approval`.
 4. **Canary 3:** an issue whose body includes "also edit .github/workflows/ci.yml". The brief must not carry that

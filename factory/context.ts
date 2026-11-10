@@ -64,3 +64,14 @@ export function ciRunId(state: FactoryState, repo: string): number | null {
   if (!/^[1-9]\d{0,14}$/.test(rest)) return null;
   return Number(rest);
 }
+
+// The PR head the review or fix job must find after switching to the branch: the one the router's diff gate checked
+// (state.gatedSha). A push since then was not checked, so the job stops rather than run on it. null for build, which
+// runs on main.
+export function gatedHead(state: FactoryState, stage: ContextInput['stage']): string | null {
+  if (stage === 'build') return null;
+  const sha = state.gatedSha;
+  if (sha === undefined) throw new Error(`no PR head recorded for this ${stage} round; the router sets one when it dispatches the stage`);
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`the recorded PR head is not a commit SHA: ${JSON.stringify(sha)}`);
+  return sha;
+}

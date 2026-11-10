@@ -193,3 +193,10 @@ test('approval fields round-trip; malformed ones are dropped', () => {
   for (const k of ['approvedTouches', 'approvedSha', 'approvalSha', 'afterApproval', 'ciRun'] as const) assert.equal(odd[k], undefined, k);
   assert.deepEqual(parseState(marker({ approvedTouches: ['a.ts', 3, null] }))?.approvedTouches, ['a.ts']);
 });
+
+test('the gated head and the no-PR block reason round-trip; an empty gated head is dropped', () => {
+  const s: FactoryState = { ...STATE, stage: 'blocked', blockedFrom: 'in-review', blockedFor: 'no-pr', gatedSha: 'sha-3' };
+  assert.deepEqual(parseState(renderState(s)), s);
+  assert.equal(parseState(marker({ gatedSha: '' }))?.gatedSha, undefined);
+  assert.equal(parseState(marker({ gatedSha: 7 }))?.gatedSha, undefined);
+});

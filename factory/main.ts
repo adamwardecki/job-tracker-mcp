@@ -75,6 +75,7 @@ async function main(): Promise<void> {
   }
   const risky = parseGlobList(readFileSync(new URL('./risky-paths.txt', import.meta.url), 'utf8'));
   const ctx: Ctx = { now: new Date(), risky };
+  let eventActions: Action[] = [];
   if (parsed !== 'sweep') {
     // A comment on a PR resolves to an issue only when the PR's head is in this repo: a fork can name its branch
     // factory/issue-<n>.
@@ -85,11 +86,15 @@ async function main(): Promise<void> {
     }
     const one = new Map([[issue, await load(gh, issue, bot)]]);
     const loaded = one.get(issue);
-    if (loaded) await apply(gh, dispatcher, one, decideEvent(parsed.build(issue), loaded.snap, ctx), dry);
+    if (loaded) {
+      eventActions = decideEvent(parsed.build(issue), loaded.snap, ctx);
+      await apply(gh, dispatcher, one, eventActions, dry);
+    }
   }
   const all = await loadAll(gh, bot);
   const snaps = [...all.values()].map((l) => l.snap);
-  await apply(gh, dispatcher, all, parsed === 'sweep' ? sweep(snaps, ctx) : next(snaps, ctx), dry);
+  // The event's actions again: a dry run wrote nothing, so the reload still shows the issue as before the event.
+  await apply(gh, dispatcher, all, parsed === 'sweep' ? sweep(snaps, ctx) : next(snaps, ctx, eventActions), dry);
 }
 
 main().catch((err: unknown) => {
