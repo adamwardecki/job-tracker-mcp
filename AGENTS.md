@@ -52,6 +52,8 @@ them on Ubuntu and macOS with Node 22.18 and 24.
 | `docs/tracker-api.md` | public reference for the tracker tools |
 | `site/` | static landing page, deployed by `pages.yml`; not linted |
 | `dev/` | dev tools only (`package.json`, lockfile, `node_modules`, and `session.ts` behind `npm run dev` / `npm run prod`); never shipped as runtime dependencies |
+| `factory/`, `.github/workflows/factory-*.yml` | the agent factory: router, stage context builder, risky-path list and workflows ([docs/factory.md](docs/factory.md)); not shipped |
+| `.claude/skills/factory-*`, `.claude/settings.json` | the factory's stage prompts (also runnable locally, e.g. `/factory-plan 12`) and the pinned `mattpocock-skills` plugin |
 
 ## TypeScript rules (Node type stripping, no build)
 
