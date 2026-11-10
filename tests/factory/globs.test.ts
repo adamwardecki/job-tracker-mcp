@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { globToRegExp, parseGlobList, riskyFiles, riskyTouches } from '../../factory/globs.ts';
+import { coveredBy, globToRegExp, parseGlobList, riskyFiles, riskyTouches } from '../../factory/globs.ts';
 
 const RISKY = ['plugin/hooks/**', 'plugin/servers/tracker/src/db.ts', '.github/**'];
 
@@ -81,4 +81,22 @@ test('riskyTouches leaves paths outside the risky globs alone', () => {
 
 test('riskyFiles normalises changed paths', () => {
   assert.deepEqual(riskyFiles(['./plugin/hooks/gates.ts', 'plugin//hooks/x.ts', 'docs/setup.md'], WIDE), ['./plugin/hooks/gates.ts', 'plugin//hooks/x.ts']);
+});
+
+test('coveredBy reads a plain approved entry as a file or a directory', () => {
+  const files = ['plugin/hooks/gates.ts', 'plugin/hooks/sub/x.ts', 'plugin/hooksx/a.ts', 'AGENTS.md'];
+  assert.deepEqual(coveredBy(files, ['plugin/hooks']), ['plugin/hooks/gates.ts', 'plugin/hooks/sub/x.ts']);
+  assert.deepEqual(coveredBy(files, ['plugin/hooks/']), ['plugin/hooks/gates.ts', 'plugin/hooks/sub/x.ts']);
+  assert.deepEqual(coveredBy(files, ['./AGENTS.md']), ['AGENTS.md']);
+  assert.deepEqual(coveredBy(['./AGENTS.md', 'plugin//hooks/x.ts'], ['AGENTS.md', 'plugin/hooks']), ['./AGENTS.md', 'plugin//hooks/x.ts']);
+});
+
+test('coveredBy reads a wildcard entry as a glob only', () => {
+  assert.deepEqual(coveredBy(['plugin/hooks/gates.ts', 'plugin/hooks/a/b.ts'], ['plugin/hooks/*.ts']), ['plugin/hooks/gates.ts']);
+});
+
+test('coveredBy: entries naming nowhere cover nothing, and paths out of the repo are never covered', () => {
+  assert.deepEqual(coveredBy(['a.ts', 'docs/x.md'], ['', '.', './', '/', '..', '../x']), []);
+  assert.deepEqual(coveredBy(['..', '../x.ts', ''], ['**']), []);
+  assert.deepEqual(coveredBy(['a.ts'], []), []);
 });

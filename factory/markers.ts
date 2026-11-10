@@ -14,6 +14,10 @@ export type BlockReason = (typeof BLOCK_REASONS)[number];
 export const COMMANDS = ['approve', 'stop', 'retry'] as const;
 export type Command = (typeof COMMANDS)[number];
 
+// Where an issue goes once the maintainer approves a risky diff: the stage the diff gate stopped it from entering.
+export const AFTER_APPROVAL = ['review', 'fix', 'ready'] as const;
+export type AfterApproval = (typeof AFTER_APPROVAL)[number];
+
 export type FactoryState = {
   stage: Stage;
   since: string; // ISO time the current stage began
@@ -23,6 +27,11 @@ export type FactoryState = {
   pr?: number;
   brief?: number; // comment id of the brief the later stages work from
   approvalFor?: 'plan' | 'diff';
+  approvedTouches?: string[]; // the Touches of the plan the maintainer approved; diff paths under them need no approval
+  approvalSha?: string; // PR head whose risky files the open diff approval request lists
+  approvedSha?: string; // PR head the maintainer approved; the diff gate is skipped until the head moves
+  afterApproval?: AfterApproval;
+  ciRun?: string; // URL of the latest CI run the router acted on; the fixer reads its log
   blockedFrom?: Stage;
   blockedFor?: BlockReason;
   rebases?: number; // rebases since the PR last reached ready any other way (MAX_REBASES)
@@ -58,6 +67,8 @@ export function renderState(s: FactoryState): string {
 // Counters and ids are whole numbers; a fractional or negative one means the comment was not written by renderState.
 const count = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 const id = (v: unknown): v is number => count(v) && v > 0;
+// An empty head would match a PR snapshot whose head failed to load, and skip the diff gate.
+const sha = (v: unknown): v is string => typeof v === 'string' && v !== '';
 const isTime = (v: unknown): v is string => typeof v === 'string' && !Number.isNaN(Date.parse(v));
 
 export function parseState(body: string): FactoryState | null {
@@ -76,6 +87,11 @@ export function parseState(body: string): FactoryState | null {
   if (id(v.pr)) s.pr = v.pr;
   if (id(v.brief)) s.brief = v.brief;
   if (v.approvalFor === 'plan' || v.approvalFor === 'diff') s.approvalFor = v.approvalFor;
+  if (Array.isArray(v.approvedTouches)) s.approvedTouches = v.approvedTouches.filter((t): t is string => typeof t === 'string');
+  if (sha(v.approvalSha)) s.approvalSha = v.approvalSha;
+  if (sha(v.approvedSha)) s.approvedSha = v.approvedSha;
+  if (oneOf(AFTER_APPROVAL, v.afterApproval)) s.afterApproval = v.afterApproval;
+  if (typeof v.ciRun === 'string') s.ciRun = v.ciRun;
   if (oneOf(STAGES, v.blockedFrom)) s.blockedFrom = v.blockedFrom;
   if (oneOf(BLOCK_REASONS, v.blockedFor)) s.blockedFor = v.blockedFor;
   if (count(v.rebases)) s.rebases = v.rebases;

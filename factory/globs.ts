@@ -65,3 +65,17 @@ export function riskyTouches(touches: readonly string[], globs: readonly string[
     return risky.some((g) => g.prefix.startsWith(prefix) || (g.wild && prefix.startsWith(g.prefix)));
   });
 }
+
+// The changed paths that an approved Touches list covers. Each entry is read as riskyTouches reads it: a glob, and a
+// plain entry also as a directory (`path/**`). An entry naming nowhere covers nothing, and a path out of the repo is
+// never covered, so neither can wave a risky file through.
+export function coveredBy(paths: readonly string[], globs: readonly string[]): string[] {
+  const res = globs
+    .map(norm)
+    .filter((g) => !nowhere(g))
+    .flatMap((g) => (WILD.test(g) ? [globToRegExp(g)] : [globToRegExp(g), globToRegExp(`${g.replace(/\/$/, '')}/**`)]));
+  return paths.filter((p) => {
+    const path = norm(p);
+    return !nowhere(path) && res.some((r) => r.test(path));
+  });
+}

@@ -175,3 +175,21 @@ test('a stray paragraph inside the Touches section voids the list', () => {
 test('two Touches headings void the list', () => {
   assert.equal(parseBriefTouches(brief('- `a.ts`', '### More', '**TOUCHES:**', '- `plugin/hooks/gates.ts`')), null);
 });
+
+test('approval fields round-trip; malformed ones are dropped', () => {
+  const s: FactoryState = {
+    ...STATE,
+    stage: 'awaiting-approval',
+    approvalFor: 'diff',
+    approvedTouches: ['plugin/hooks', 'docs/x.md'],
+    approvalSha: 'sha-2',
+    approvedSha: 'sha-1',
+    afterApproval: 'fix',
+    ciRun: 'https://github.com/o/r/actions/runs/12',
+  };
+  assert.deepEqual(parseState(renderState(s)), s);
+  const odd = parseState(marker({ approvedTouches: 'plugin/hooks', approvedSha: '', approvalSha: 7, afterApproval: 'merge', ciRun: 3 }));
+  assert.ok(odd);
+  for (const k of ['approvedTouches', 'approvedSha', 'approvalSha', 'afterApproval', 'ciRun'] as const) assert.equal(odd[k], undefined, k);
+  assert.deepEqual(parseState(marker({ approvedTouches: ['a.ts', 3, null] }))?.approvedTouches, ['a.ts']);
+});

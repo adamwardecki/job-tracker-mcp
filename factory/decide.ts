@@ -19,10 +19,10 @@ import {
   TRIAGE_READY,
   TRIAGE_STOP,
 } from './config.ts';
-import { riskyFiles, riskyTouches } from './globs.ts';
-import type { BlockReason, Command, FactoryState, FixReason } from './markers.ts';
+import { coveredBy, riskyFiles, riskyTouches } from './globs.ts';
+import type { AfterApproval, BlockReason, Command, FactoryState, FixReason } from './markers.ts';
 
-export type PullSnapshot = { number: number; headSha: string; open: boolean; conflicting: boolean; files: string[] };
+export type PullSnapshot = { number: number; headSha: string; open: boolean; draft: boolean; conflicting: boolean; files: string[] };
 export type RunSnapshot = {
   workflow: StageWorkflow | 'ci';
   conclusion: string | null;
@@ -40,6 +40,7 @@ export type IssueSnapshot = {
   pr: PullSnapshot | null;
   review: { blocking: number; at: string } | null; // latest factory review by the factory bot
   lastCommand: { command: Command; at: string; actor: string } | null; // the maintainer's latest slash command
+  lastChangesRequested: { at: string; actor: string } | null; // the maintainer's latest changes-requested review
   lastRun: RunSnapshot | null; // latest run of the workflow the current stage waits on
 };
 export type Ctx = { now: Date; risky: readonly string[] };
@@ -114,17 +115,48 @@ function fail(issue: number, prev: FactoryState, reason: string, ctx: Ctx): Acti
 }
 
 function toFix(issue: number, prev: FactoryState, snap: IssueSnapshot, reason: FixReason, ctx: Ctx): Action[] {
-  const headSha = snap.pr?.headSha;
   // Rebases have their own cap: a rebase that never clears the conflict would loop through CI and review forever.
   if (reason === 'rebase') {
     const rebases = (prev.rebases ?? 0) + 1;
     if (rebases > MAX_REBASES) return block(issue, prev, `the PR conflicts with main again after ${MAX_REBASES} rebases.`, 'rebases', ctx);
-    return enter(issue, prev, 'fixing', ctx, { rebases, fixReason: reason, headSha });
+    return onward(issue, prev, snap, 'fix', ctx, { rebases, fixReason: reason });
   }
   // Only CI's and the reviewer's rounds count toward the cap; the maintainer's requests do not.
   const round = prev.round + (reason === 'ci' || reason === 'review' ? 1 : 0);
   if (round > MAX_ROUNDS) return block(issue, prev, `still not passing after ${MAX_ROUNDS} fix rounds.`, 'rounds', ctx);
-  return enter(issue, prev, 'fixing', ctx, { round, fixReason: reason, headSha });
+  return onward(issue, prev, snap, 'fix', ctx, { round, fixReason: reason });
+}
+
+// The PR's risky files the maintainer has not approved: none while the head is the one approved, otherwise those
+// outside the approved plan's Touches. A plan approval covers only the paths it named.
+function unapprovedRisky(st: FactoryState, pr: PullSnapshot | null, ctx: Ctx): string[] {
+  if (!pr || (pr.headSha !== '' && pr.headSha === st.approvedSha)) return [];
+  const hits = riskyFiles(pr.files, ctx.risky);
+  const covered = new Set(coveredBy(hits, st.approvedTouches ?? []));
+  return hits.filter((f) => !covered.has(f));
+}
+
+// The diff gate. From review on, agents run on the PR branch and load what it changed (agent instructions, settings,
+// package scripts), so a risky diff waits for /approve before any of them runs, and before the PR is marked ready.
+// null when the diff passes. The patch is what the stage would have been entered with; it is kept for /approve.
+function diffGate(issue: number, st: FactoryState, snap: IssueSnapshot, to: AfterApproval, ctx: Ctx, patch: Partial<FactoryState> = {}): Action[] | null {
+  const hits = unapprovedRisky(st, snap.pr, ctx);
+  if (hits.length === 0) return null;
+  return askApproval(issue, st, 'diff', hits, ctx, { ...patch, afterApproval: to, approvalSha: snap.pr?.headSha });
+}
+
+// Enter the stage the diff gate guards, if the diff passes.
+function onward(issue: number, st: FactoryState, snap: IssueSnapshot, to: AfterApproval, ctx: Ctx, patch: Partial<FactoryState> = {}): Action[] {
+  const gate = diffGate(issue, st, snap, to, ctx, patch);
+  if (gate) return gate;
+  switch (to) {
+    case 'review':
+      return enter(issue, st, 'in-review', ctx, patch);
+    case 'fix':
+      return enter(issue, st, 'fixing', ctx, { ...patch, headSha: snap.pr?.headSha });
+    case 'ready':
+      return toReady(issue, { ...st, ...patch }, snap.pr?.number ?? st.pr, ctx);
+  }
 }
 
 // A PR that reached ready through a rebase keeps its rebase count, so the conflict → rebase → ready loop stays
@@ -137,11 +169,13 @@ function toReady(issue: number, prev: FactoryState, pr: number | undefined, ctx:
 }
 
 function askApproval(issue: number, prev: FactoryState, approvalFor: 'plan' | 'diff', hits: string[], ctx: Ctx, patch: Partial<FactoryState> = {}): Action[] {
-  const what = approvalFor === 'plan' ? 'The brief touches' : 'The PR changes';
+  const what = approvalFor === 'plan' ? 'The brief touches' : `The PR changes, at \`${patch.approvalSha ?? 'unknown'}\`,`;
   const list = hits.map((h) => `- \`${h}\``).join('\n');
+  // A later push is checked again, so the maintainer approves exactly the commit listed.
+  const scope = approvalFor === 'diff' ? ' A push after this commit is checked again.' : '';
   return [
     ...enter(issue, prev, 'awaiting-approval', ctx, { ...patch, approvalFor }),
-    { kind: 'comment', issue, body: `${what} risky paths (\`factory/risky-paths.txt\`):\n\n${list}\n\nComment \`/approve\` to continue or \`/stop\` to stop.` },
+    { kind: 'comment', issue, body: `${what} risky paths (\`factory/risky-paths.txt\`):\n\n${list}\n\nComment \`/approve\` to continue or \`/stop\` to stop.${scope}` },
   ];
 }
 
@@ -153,7 +187,9 @@ function runFinished(issue: number, st: FactoryState, snap: IssueSnapshot, run: 
   if (expected === 'ci') {
     // CI runs per push; only the run for the PR's current head decides.
     if (!snap.pr || run.headSha !== snap.pr.headSha) return [];
-    return run.conclusion === 'success' ? enter(issue, seen, 'in-review', ctx) : toFix(issue, seen, snap, 'ci', ctx);
+    // The fixer reads the failed log from this run: a run picked later by branch name could be anyone's.
+    const ci: FactoryState = { ...seen, ciRun: run.url };
+    return run.conclusion === 'success' ? onward(issue, ci, snap, 'review', ctx) : toFix(issue, ci, snap, 'ci', ctx);
   }
   // A run started before this stage began belongs to an earlier attempt, even if it finished after.
   if (!run.createdAt || !notBefore(run.createdAt, st.since)) return [];
@@ -175,8 +211,10 @@ function planned(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx)
   const brief = snap.brief && notBefore(snap.brief.at, st.since) ? snap.brief : null;
   if (!brief || !snap.labels.includes(TRIAGE_READY)) return fail(issue, st, 'the planner finished without a brief and the ready-for-agent label', ctx);
   const hits = riskyTouches(brief.touches, ctx.risky);
-  if (hits.length > 0) return askApproval(issue, st, 'plan', hits, ctx, { brief: brief.id });
-  return enter(issue, st, 'building', ctx, { brief: brief.id });
+  // A new plan must not inherit what an earlier plan was approved to touch.
+  const patch = { brief: brief.id, approvedTouches: undefined };
+  if (hits.length > 0) return askApproval(issue, st, 'plan', hits, ctx, patch);
+  return enter(issue, st, 'building', ctx, patch);
 }
 
 function built(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx): Action[] {
@@ -189,9 +227,7 @@ function reviewed(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx
   if (!review || !snap.pr) return fail(issue, st, 'the reviewer finished without posting a factory review', ctx);
   if (review.blocking > 0) return toFix(issue, st, snap, 'review', ctx);
   // The diff is checked again here: a plan can drift, or have been steered, after its paths were approved.
-  const hits = riskyFiles(snap.pr.files, ctx.risky);
-  if (hits.length > 0) return askApproval(issue, st, 'diff', hits, ctx);
-  return toReady(issue, st, snap.pr.number, ctx);
+  return onward(issue, st, snap, 'ready', ctx);
 }
 
 function fixed(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx): Action[] {
@@ -205,8 +241,17 @@ function command(issue: number, st: FactoryState, snap: IssueSnapshot, cmd: Comm
     case 'approve':
       if (st.stage !== 'awaiting-approval') return [];
       // A state without approvalFor was not written by askApproval; guessing could skip the diff check.
-      if (st.approvalFor === 'plan') return enter(issue, st, 'building', ctx, { approvalFor: undefined });
-      if (st.approvalFor === 'diff') return toReady(issue, st, st.pr, ctx);
+      if (st.approvalFor === 'plan') {
+        // Only the brief whose Touches the request listed; a newer one was not what the maintainer approved.
+        const approvedTouches = snap.brief && snap.brief.id === st.brief ? snap.brief.touches : [];
+        return enter(issue, st, 'building', ctx, { approvalFor: undefined, approvedTouches });
+      }
+      if (st.approvalFor === 'diff') {
+        // The approval covers the head the request listed. If the PR moved since, the gate checks the new head.
+        const approved: FactoryState = { ...st, approvalFor: undefined, afterApproval: undefined, approvalSha: undefined, approvedSha: st.approvalSha };
+        // Requests written before afterApproval existed came only from a clean review.
+        return onward(issue, approved, snap, st.afterApproval ?? 'ready', ctx);
+      }
       return [];
     case 'stop':
       return st.stage === 'blocked' || st.stage === 'done' ? [] : block(issue, st, 'stopped by the maintainer.', 'stop', ctx);
@@ -224,7 +269,7 @@ function retry(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx): 
   // Re-running the reviewer would only repeat the findings.
   if (st.blockedFor === 'rounds' && (from === 'ci' || from === 'in-review')) {
     if (!snap.pr) return [];
-    return enter(issue, st, 'fixing', ctx, { ...clear, round: 0, fixReason: from === 'ci' ? 'ci' : 'review', headSha: snap.pr.headSha });
+    return onward(issue, st, snap, 'fix', ctx, { ...clear, round: 0, fixReason: from === 'ci' ? 'ci' : 'review' });
   }
   // Back to ready with the count cleared; the next idle sweep rebases again if the PR still conflicts.
   if (st.blockedFor === 'rebases') return enter(issue, st, from, ctx, { ...clear, rebases: undefined });
@@ -233,8 +278,9 @@ function retry(issue: number, st: FactoryState, snap: IssueSnapshot, ctx: Ctx): 
   if (from === 'fixing') {
     // The fixer compares the PR head after its run with this one; without a PR there is nothing to fix.
     if (!snap.pr) return [];
-    return enter(issue, st, 'fixing', ctx, { ...clear, headSha: snap.pr.headSha });
+    return onward(issue, st, snap, 'fix', ctx, clear);
   }
+  if (from === 'in-review') return onward(issue, st, snap, 'review', ctx, clear);
   return enter(issue, st, from, ctx, clear);
 }
 
@@ -284,10 +330,17 @@ function sweepOne(snap: IssueSnapshot, ctx: Ctx): Action[] {
     const acted = command(snap.number, st, snap, snap.lastCommand.command, ctx);
     if (acted.length > 0) return acted;
   }
+  // The event can be dropped by the router's concurrency group; the review itself stays on the PR.
+  const cr = snap.lastChangesRequested;
+  if (st.stage === 'ready' && cr?.actor === MAINTAINER && notBefore(cr.at, st.since)) return toFix(snap.number, st, snap, 'maintainer', ctx);
   if (!ACTIVE_STAGES.includes(st.stage)) return [];
   if (st.failedAt) {
     const due = ctx.now.getTime() - Date.parse(st.failedAt) >= RETRY_AFTER_MS;
-    return due ? enter(snap.number, st, st.stage, ctx, { attempts: st.attempts }) : [];
+    if (!due) return [];
+    // A failed fixer may have pushed before it failed, so its retry is gated like any other run on the branch.
+    const to = st.stage === 'fixing' ? 'fix' : st.stage === 'in-review' ? 'review' : null;
+    const gate = to ? diffGate(snap.number, st, snap, to, ctx) : null;
+    return gate ?? enter(snap.number, st, st.stage, ctx, { attempts: st.attempts });
   }
   if (snap.lastRun) {
     const acted = runFinished(snap.number, st, snap, snap.lastRun, ctx);
