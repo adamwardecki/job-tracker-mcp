@@ -44,3 +44,5 @@ by hand.
 3. **Browser bypass routes Hermes adds:** `browser_cdp` and `browser_press` (Enter in a field) are not checked by the submit rules. Cmd/Ctrl+Enter is blocked on mail.google.com, and on pages the hook cannot identify, on Hermes `browser_press` as on Claude Code. Plain Enter, or Tab then Enter onto Send, is still not gated.
 4. **One skill namespace on Hermes:** the `setup` skill is named `job-tracker:setup-guide` on Hermes.
 5. **No per-agent model on Hermes:** `model: sonnet` in `agents/*.md` is ignored.
+
+The shared submit gate reads the saved `autonomy.auto_apply` preference before each attempt. Setup defaults to review first; explicit opt-in allows verified, scored, queued roles with no unresolved question to submit automatically. Turning it off restores per-application approval. Consent, personal-data and send restrictions remain separate.

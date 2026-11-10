@@ -7,7 +7,7 @@ import { isBoardUrl, runningBoardPort } from './lib/board.ts';
 import * as C from './lib/classify.ts';
 import { activeApprovals, loadSession, saveSession } from './lib/session.ts';
 import { normalizeTarget, sameTarget, targetMatchesRole } from './lib/target.ts';
-import { gateCheck } from './lib/tracker-client.ts';
+import { autoApplyCheck, gateCheck } from './lib/tracker-client.ts';
 import { currentPage, readTranscript, tabIdOf, toolSteps } from './lib/transcript.ts';
 import type { GuardResult, HookOutput, HookPayload, ResultStep, SessionState, ToolInput, ToolStep, UseStep } from './lib/types.ts';
 
@@ -165,9 +165,11 @@ function consentAllowed(session: SessionState, page: { url: string; tab_id?: str
 }
 
 async function submitGate(payload: HookPayload, session: SessionState, what: string, page: { url: string; tab_id?: string } | null): Promise<void> {
+  const automatic = page ? await autoApplyCheck(page.url) : null;
+  if (automatic?.ok) return;
   const approvals = activeApprovals(session.approvals);
   if (!approvals.length) {
-    deny(payload, session, `Submit blocked: ${what} needs the user's approval in this session. Stop here, show the filled form, and ask the user to type /job-tracker:approve <role_id>. Do not work around this.`);
+    deny(payload, session, `Submit blocked: ${what} needs the user's approval in this session. ${automatic?.problems.join(' ') || 'No identifiable browser page.'} Stop here, show the filled form, and ask the user to type /job-tracker:approve <role_id>. Do not work around this.`);
     return;
   }
   if (!page) {

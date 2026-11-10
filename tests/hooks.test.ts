@@ -559,3 +559,71 @@ test('a key combination that sends is blocked when the page cannot be identified
   assert.equal(await key({ text: 'Enter' }), '');
   assert.equal(await key({ text: 'Escape' }), '');
 });
+
+test('auto-apply reads the saved preference on each submit and keeps eligibility and consent checks', async () => {
+  const { verified, unverified } = trackerWithRoles();
+  const t = new Tracker(openDb(join(home, 'tracker.db')));
+  const sid = session();
+  await markSession(sid);
+  const click = async (url: string) => {
+    outputs = [];
+    await preTool({ session_id: sid, transcript_path: applicationPage(url), tool_name: `${CHROME}computer`, tool_input: { action: 'left_click', ref: 'ref_45', tabId: 1 } });
+  };
+  t.saveConfig({ section: 'autonomy', data: { auto_apply: true } });
+  await click(String(unverified.url));
+  assert.ok(denied(), 'unverified role is blocked');
+  await click(String(verified.url));
+  assert.ok(denied(), 'unscored role is blocked');
+  t.transition({ role_id: verified.id, to: 'scored', score: 8, reason: 'fits' });
+  t.transition({ role_id: verified.id, to: 'queued', reason: 'ready' });
+  await click(String(verified.url));
+  assert.equal(denied(), undefined, 'saved opt-in allows an eligible role without a typed approval');
+  await click('https://jobs.ashbyhq.com/beta/10');
+  assert.ok(denied(), 'unknown page is blocked');
+  t.record({ role_id: verified.id, status: 'queued', actor: 'pipeline', reason: 'clarify', question: 'Can you work onsite?' });
+  await click(String(verified.url));
+  assert.ok(denied(), 'unresolved question is blocked');
+  t.record({ role_id: verified.id, status: 'queued', actor: 'pipeline', reason: 'user resolved the question' });
+  outputs = [];
+  await preTool({ session_id: sid, transcript_path: applicationPage(String(verified.url)), tool_name: `${CHROME}form_input`, tool_input: { ref: 'ref_3', value: true, tabId: 1 } });
+  assert.ok(denied(), 'auto-apply does not grant consent');
+  t.setNoColdApply({ company_id: verified.company_id, on: true, reason: 'Recruiter already in touch' });
+  await click(String(verified.url));
+  assert.match(reason(), /no_cold_apply/);
+  t.setNoColdApply({ company_id: verified.company_id, on: false });
+  const duplicate = t.upsertRole({ company: 'Another company', title: 'Another role', url: 'https://jobs.ashbyhq.com/other/99', source: 'user' }).role;
+  // Point it under the first role's URL so one page matches two tracked roles (upsert would dedupe a url like this).
+  t.run('UPDATE roles SET url = ? WHERE id = ?', `${verified.url}/application`, duplicate.id);
+  duplicate.url = `${verified.url}/application`;
+  await click(String(duplicate.url));
+  assert.match(reason(), /exactly one tracked role/, 'ambiguous page matching fails closed');
+  t.saveConfig({ section: 'autonomy', data: { auto_apply: false } });
+  await click(String(verified.url));
+  assert.match(reason(), /needs the user's approval/, 'turning it off takes effect immediately');
+  t.saveConfig({ section: 'autonomy', data: { auto_apply: true } });
+  t.transition({ role_id: verified.id, to: 'applied', reason: 'submitted', evidence: 'Thank you for applying.' });
+  await click(String(verified.url));
+  assert.ok(denied(), 'already applied stays blocked');
+  t.db.close();
+});
+
+
+test('auto-apply fails closed for malformed settings and a missing tracker', async () => {
+  const { verified } = trackerWithRoles();
+  const t = new Tracker(openDb(join(home, 'tracker.db')));
+  t.transition({ role_id: verified.id, to: 'scored', reason: 'fits', score: 8 });
+  t.transition({ role_id: verified.id, to: 'queued', reason: 'ready' });
+  const sid = session();
+  await markSession(sid);
+  for (const value of ['{"auto_apply":"true"}', '{']) {
+    t.run("INSERT OR REPLACE INTO profile(key, value) VALUES('autonomy', ?)", value);
+    outputs = [];
+    await preTool({ session_id: sid, transcript_path: applicationPage(String(verified.url)), tool_name: `${CHROME}computer`, tool_input: { action: 'left_click', ref: 'ref_45', tabId: 1 } });
+    assert.ok(denied(), 'invalid configuration does not grant automatic approval');
+  }
+  t.db.close();
+  process.env.JOB_TRACKER_DB = join(home, 'missing.db');
+  outputs = [];
+  await preTool({ session_id: sid, transcript_path: applicationPage(String(verified.url)), tool_name: `${CHROME}computer`, tool_input: { action: 'left_click', ref: 'ref_45', tabId: 1 } });
+  assert.ok(denied(), 'missing tracker does not grant automatic approval');
+});

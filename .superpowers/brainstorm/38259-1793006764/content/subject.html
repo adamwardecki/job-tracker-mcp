@@ -1,0 +1,31 @@
+<h2>What should the 3D scene be?</h2>
+<p class="subtitle">The current hero (below) is a flat illustration with an HTML layer on the laptop screen. The R3F variant could relate to it in three ways.</p>
+
+<div class="mockup" style="margin-bottom:1.5rem">
+  <div class="mockup-header">Current hero: zen-engawa.webp</div>
+  <div class="mockup-body" style="padding:0"><img src="/files/current.jpg" style="width:100%;display:block" alt="current hero"></div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Repaint the existing illustration, alive</h3>
+      <p>Same composition, same laptop position. The illustration becomes the colour source for thousands of brush strokes that follow the image's contours and drift gently (bamboo sways, sand shimmers), with slight mouse parallax. The laptop screen stays crisp so the HTML overlay keeps working. Lowest risk, recognisably "your" garden.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>A real 3D garden, painted</h3>
+      <p>Model the scene in 3D (engawa, laptop on stand, rocks, stepping stones, bamboo, well, raked sand), with a slow camera drift. A post-process shader turns the render into an oil painting (Kuwahara + brush-stroke texture + canvas grain). True depth, but simple geometry: it will look stylised, not like the woodblock.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Abstract impressionist garden, no laptop</h3>
+      <p>A Monet-like field of strokes: raked sand ripples, bamboo, moss and light, reacting to the cursor. Purely atmospheric behind the headline. Drops the laptop and its screen overlay.</p>
+    </div>
+  </div>
+</div>

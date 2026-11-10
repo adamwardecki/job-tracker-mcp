@@ -526,3 +526,16 @@ test('transition records the pipeline by default and the user when the board pas
   const actors = t.roleDetail({ role_id: role.id }).events.map((e) => [e.status, e.actor]);
   assert.deepEqual(actors.slice(-3), [['verified', 'pipeline'], ['scored', 'pipeline'], ['queued', 'user']]);
 });
+
+
+test('auto_apply is an explicit boolean persisted in autonomy, with review first as the default', () => {
+  const t = fresh();
+  assert.equal(t.getProfile().autonomy?.auto_apply, false);
+  assert.throws(() => t.saveConfig({ section: 'autonomy', data: { auto_apply: 'true' } }), /expected boolean/);
+  t.saveConfig({ section: 'autonomy', data: { auto_apply: true } });
+  assert.equal(new Tracker(t.db).getProfile().autonomy?.auto_apply, true);
+  t.saveConfig({ section: 'autonomy', data: { auto_apply: false } });
+  assert.equal(t.getProfile().autonomy?.auto_apply, false);
+  t.run("UPDATE profile SET value = ? WHERE key = 'autonomy'", JSON.stringify({ unattended: ['search'] }));
+  assert.notEqual(t.getProfile().autonomy?.auto_apply, true, 'old profiles do not opt in');
+});

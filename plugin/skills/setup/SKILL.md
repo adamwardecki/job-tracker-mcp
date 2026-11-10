@@ -112,10 +112,12 @@ Titles, seniority, company stage, stack want and avoid, domains they like, contr
 - Fields: `enabled`, `need_login`, `disabled`, `boards`.
 
 ### 9. Autonomy (`autonomy`)
-Show the defaults and confirm them:
+Ask whether to review each application or apply automatically to matching roles. Default to review first. Echo the choice and save only after the user confirms, using `save_config` with `section: "autonomy"` and `data.auto_apply: false` (review first) or `true` (automatic). Read `get_profile` back to confirm the saved value. Why: a durable, explicit choice must control future runs; silence and older settings must never opt someone in.
 - unattended: search, verify, score, draft note, draft email, record
-- needs the user: submit, send, delete, consent, personal data, account login
-Explain that hooks enforce the second list regardless of this config. `save_config` with `section: "autonomy"`.
+- submission: automatic only when `autonomy.auto_apply` is exactly `true`; otherwise the user approves each submit
+- always needs the user: send, delete, consent, personal data, account login
+Explain that automatic applications still require a verified, scored, queued role, no live application at the company, and no unresolved question. Forms needing consent, personal data, login, or a visible CAPTCHA come back to the user. Hooks enforce those limits in either mode. The legacy `unattended` and `needs_user` lists do not grant submit permission; keep their defaults and use `auto_apply` for this choice.
+Tell the user they can turn automatic applications off by asking to update this setting; save `auto_apply: false` and read it back. Why: the submit hook reads the current preference before every attempt, including in running sessions.
 
 ### 10. Schedule (`schedule`)
 - Ask when the computer is usually on with Claude open. Create a weekday **local** scheduled task inside that window that runs `/job-tracker:sweep`, using the host's local scheduling (a Claude Desktop or Claude Code local scheduled task, or a Hermes cron job created with the `cronjob` tool with skill `job-tracker:sweep` attached and the prompt "Run today's job-hunt sweep.", or on DeepSeek Harness a launchd or cron job that runs `dsh headless "/job-tracker:sweep"`). Do not schedule it in the cloud: it cannot reach the browser or the local tracker. If no scheduling tool is available, give the user the exact steps and the prompt text.

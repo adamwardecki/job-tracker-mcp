@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective 20 October 2026. This policy is also available at
+Effective 29 October 2026. This policy is also available at
 [jobtrackermcp.com/privacy.html](https://jobtrackermcp.com/privacy.html).
 
 This policy covers the Job Tracker plugin and this website. Job Tracker is open-source software
@@ -16,7 +16,7 @@ read during a session. Files you create, such as cover letters, are saved separa
 ## Data shared with other services
 
 Information used in a session is shared with your AI provider. Optional connections to email, calendars,
-job boards and other services handle data under their own privacy policies. Applications you approve
+job boards and other services handle data under their own privacy policies. Applications you approve individually, or authorize through the saved automatic-application preference,
 are shared with the employer and its application platform.
 
 ## Deleting your data

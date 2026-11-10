@@ -12,7 +12,7 @@
 A Claude Code (and Hermes Agent) plugin that runs a disciplined job search for one person.
 Every weekday it finds roles that fit your hard filters, verifies each one on the employer's own posting,
 dedupes against everything you have touched, and prepares tailored applications. It submits only through
-the employer's official apply flow, and only after you approve. It tracks replies and interviews and
+the employer's official apply flow, using your saved auto-apply choice or your approval for each application. It tracks replies and interviews and
 writes one short daily report.
 
 The design follows one principle: **fewer, better applications.**
@@ -27,7 +27,7 @@ Setup and usage docs: [jobtrackermcp.com/docs.html](https://jobtrackermcp.com/do
 ## What it won't do
 
 - Send email or LinkedIn messages. It writes drafts only, and a hook blocks every send tool.
-- Submit an application without your `/job-tracker:approve <role_id>` in the same session.
+- Submit an application unless you enabled `autonomy.auto_apply` during setup or typed `/job-tracker:approve <role_id>` in the same session. Review first is the default.
 - Create accounts, enter passwords, solve visible CAPTCHAs, tick consent boxes, or fill personal-data
   fields (passport, nationality, age, gender, marital status, ID numbers).
 - Auto-apply at volume.
@@ -74,8 +74,8 @@ The tracker is also in the [MCP Registry](https://registry.modelcontextprotocol.
 | Command | What it does |
 |---|---|
 | `/job-tracker:setup` | Guided setup; resumable. |
-| `/job-tracker:sweep [--limit N]` | The daily run. Never submits. |
-| `/job-tracker:apply [role-id]` | Interactive apply: verify, write, fill, read back, then wait for your approval. |
+| `/job-tracker:sweep [--limit N]` | The daily run. Applies only when you enabled `autonomy.auto_apply`; otherwise never submits. |
+| `/job-tracker:apply [role-id]` | Verify, write, fill, read back, then submit automatically if enabled or wait for your approval. |
 | `/job-tracker:approve <role-id>` | You type this on the filled form to allow one submit attempt. |
 | `/job-tracker:triage <source>` | Reconcile and clean a tracker board with the delete guard. |
 | `/job-tracker:prep <company>` | Interview prep from your stories. |
@@ -96,7 +96,7 @@ The directory is owner-only (`0700`), database is `0600`. Nothing is sent to the
 | Gate | Rule |
 |---|---|
 | Send | Email/LinkedIn sends blocked in every session. |
-| Submit | Needs `/job-tracker:approve` and a passing `gate_check`. |
+| Submit | Needs saved `autonomy.auto_apply: true` or `/job-tracker:approve`, and a passing `gate_check`. Automatic submission also needs one matching scored, queued role with no open question. |
 | Board delete | Needs a fresh `JOBHUNT_TRIAGE_GUARD` with `ok: true`. |
 | Personal data and consent | Passport, nationality, age, DOB, gender, marital, ID fields denied; consent boxes stay unticked unless you allow them. |
 | Stop | A sweep session cannot end until every role has an event and the report was rendered. |
