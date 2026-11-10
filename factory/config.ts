@@ -6,10 +6,11 @@ export const MAINTAINER = 'adamwardecki';
 // Events caused that way start no workflow runs, which keeps the router from waking itself.
 export const ROUTER_LOGIN = 'github-actions[bot]';
 
-// The GitHub App the stages act as ("<app-slug>[bot]"). Briefs and reviews count only when it wrote them.
+// The GitHub App the stages act as ("<app-slug>[bot]"). Briefs and reviews count only when it wrote them, so a
+// value that is not an App slug (an empty slug, a user's login) must not slip through.
 export function factoryBotLogin(): string {
-  const login = process.env.FACTORY_BOT_LOGIN;
-  if (!login?.endsWith('[bot]')) throw new Error('FACTORY_BOT_LOGIN must be set to "<app-slug>[bot]"');
+  const login = process.env.FACTORY_BOT_LOGIN ?? '';
+  if (!/^[a-z0-9][a-z0-9-]*\[bot\]$/.test(login)) throw new Error('FACTORY_BOT_LOGIN must be set to "<app-slug>[bot]"');
   return login;
 }
 
