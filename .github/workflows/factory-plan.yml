@@ -31,4 +31,4 @@ jobs:
       issues: write
       scrub_env: ''
       pull_requests: ''
-      allowed_tools: 'Read,Grep,Glob,Write,Skill,Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*)'
+      allowed_tools: 'Read(./**),Grep,Glob,Edit(./.factory/**),Skill,Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*)'

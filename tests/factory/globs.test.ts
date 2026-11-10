@@ -100,3 +100,9 @@ test('coveredBy: entries naming nowhere cover nothing, and paths out of the repo
   assert.deepEqual(coveredBy(['..', '../x.ts', ''], ['**']), []);
   assert.deepEqual(coveredBy(['a.ts'], []), []);
 });
+
+test('a leading **/ also matches at the root', () => {
+  const re = globToRegExp('**/.claude/**');
+  for (const p of ['.claude/settings.json', 'plugin/.claude/settings.json', 'a/b/.claude/skills/x/SKILL.md']) assert.ok(re.test(p), p);
+  for (const p of ['claude/settings.json', 'x.claude/settings.json', '.claude']) assert.ok(!re.test(p), p);
+});

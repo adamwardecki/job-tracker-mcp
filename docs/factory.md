@@ -54,18 +54,20 @@ agent:queued ─► planning ─► (awaiting-approval) ─► building ─► c
 
 | Stage | Skill | Model | Can | App token |
 |---|---|---|---|---|
-| plan | `/factory-plan` → Matt's `triage` (read from `.factory/mp`) | Opus | read the repo and issue, comment and label the issue | contents read, issues write |
+| plan | `/factory-plan` → Matt's `triage` (read from `.factory/mp`) | Opus | read the repo and issue, write drafts under `.factory/`, comment and label the issue | contents read, issues write |
 | build | `/factory-build` → `implement`'s steps, `tdd`, repo `create-pr` | Sonnet | edit, test, push `factory/issue-<n>`, open a draft PR | contents write, PRs write |
-| review | `/factory-review` → `code-review` | Opus | read, post one PR review | contents read, PRs write |
+| review | `/factory-review` → `code-review` | Opus | read the repo, write drafts under `.factory/`, post one PR review | contents read, PRs write |
 | fix | `/factory-fix` → `diagnosing-bugs`, `tdd` | Sonnet | edit, test, push, comment on the PR | contents write, PRs write |
 
-Only the planner reads the issue. Later stages read `.factory/context.md`, which holds the planner's brief, the
-factory review and the maintainer's comments. For a CI fix round it also holds the failed log of the CI run the
-router recorded (never a run looked up by branch name). It is built from main's code before the job switches to the
-PR branch.
+Only the planner reads the issue. Later stages read `.factory/context.md`. For build and review it holds only the
+planner's brief. For fix it adds the reason for the round, the factory review, and the maintainer's reviews and
+comments on the PR (never the issue thread); for a CI round, also the failed log of the CI run the router recorded
+(never a run looked up by branch name). It is built from main's code before the job switches to the PR branch.
 
-The planner runs no code: it verifies a claim by reading the code. Only build and fix run tests. Their dev tools are
-installed from main's lockfile, without install scripts, before the switch to the PR branch.
+Every stage reads only inside the repo (`Read(./**)`). The planner and the reviewer write only under `.factory/`
+(`Edit(./.factory/**)`, which also covers the Write tool). The planner runs no code: it verifies a claim by reading
+the code. Only build and fix run tests. Their dev tools are installed from main's lockfile, without install scripts,
+before the switch to the PR branch, and the agents cannot reinstall them (`npm run setup` is not in their tools).
 
 `triage` and `implement` are marked `disable-model-invocation`, so the Skill tool cannot call them. The workflow
 copies Matt's `skills/engineering` to `.factory/mp` (git ignores it): the planner reads `triage` from there, and the
@@ -144,6 +146,9 @@ Check these on the first runs:
 - The App-dispatched stage runs wake the router through `workflow_run`. If they don't, the sweep still moves the
   issue within 30 minutes.
 - `gh` inside the agent uses the App token.
+- Claude Code accepts the scoped rules in `--allowedTools` (`Read(./**)`, `Edit(./.factory/**)`): the planner and
+  the reviewer can write their drafts under `.factory/` and nothing else, and every stage can still read the whole
+  repo. Builder and fixer read `tdd`'s `tests.md` and `mocking.md` from `.factory/mp/tdd/`.
 - `gh` still works with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. If it doesn't, set that wrapper's `scrub_env` to `'0'`;
   the agent's commands can then read the action's credentials.
 - The build agent cannot run `gh issue view`: its tool allowlist has no `gh issue` command. Its token has no issues
@@ -162,5 +167,6 @@ Check these on the first runs:
 - **Prompts:** edit `.claude/skills/factory-*`.
 - **Router logic:** edit `factory/decide.ts`, with tests in `tests/factory/decide.test.ts`.
 
-Changes to the factory are made by hand. The factory itself refuses issues that touch `.github/`, `.claude/` or
-`factory/`.
+Changes to the factory are made by hand. The planner sends a request that needs changes under `.github/`, `.claude/`
+or `factory/` to a human (`ready-for-human`), and the router asks for `/approve` before a risky path is built or a
+risky diff is reviewed.

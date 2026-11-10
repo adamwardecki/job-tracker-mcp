@@ -23,10 +23,13 @@ You are the fixer in the agent factory (`docs/factory.md`). You are on branch `f
 2. Act on the reason given under "Why this fix round":
    - `ci`: call the Skill tool with `mattpocock-skills:diagnosing-bugs`. The failing CI command is your feedback loop.
    - `review` or `maintainer`: call the Skill tool with `mattpocock-skills:tdd` for each finding that changes
-     behaviour. The seams in the brief are agreed.
+     behaviour. The seams in the brief are agreed. `tdd` links `tests.md` and `mocking.md`: read them from
+     `.factory/mp/tdd/`. Why: your Read tool reaches only the repo, and that is the same skill at the same pin.
    - `rebase`: run `git fetch origin main && git rebase origin/main` and resolve conflicts, keeping the intent of
      both sides.
-3. Run the preflight in Steps 1 and 2 of the `create-pr` skill. Every failure is yours to fix.
+3. Run the preflight in Steps 1 and 2 of the `create-pr` skill, except `npm run setup`. Every failure is yours to
+   fix. Why: the workflow installed the dev tools from main's lockfile before the switch to this branch, and your
+   tools cannot reinstall them.
 4. Commit in the repo's style and run `git push --force-with-lease`.
 5. Post one PR comment with `gh pr comment <pr> --body-file .factory/fix.md`, listing each blocking finding or
    maintainer request and what changed.

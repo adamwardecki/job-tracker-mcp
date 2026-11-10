@@ -31,4 +31,4 @@ jobs:
       issues: ''
       scrub_env: '1'
       pull_requests: write
-      allowed_tools: 'Read,Grep,Glob,Edit,Write,Skill,Agent,Bash(git:*),Bash(gh pr create:*),Bash(npm run setup),Bash(npm test),Bash(npm run test:node),Bash(npm run typecheck),Bash(npm run lint),Bash(npm run lint:fix),Bash(npm --prefix dev exec --no -- biome ci .),Bash(node --no-warnings --test:*),Bash(claude plugin validate:*)'
+      allowed_tools: 'Read(./**),Grep,Glob,Edit,Write,Skill,Agent,Bash(git:*),Bash(gh pr create:*),Bash(npm test),Bash(npm run test:node),Bash(npm run typecheck),Bash(npm run lint),Bash(npm run lint:fix),Bash(npm --prefix dev exec --no -- biome ci .),Bash(node --no-warnings --test:*),Bash(claude plugin validate:*)'

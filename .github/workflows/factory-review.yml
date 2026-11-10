@@ -31,4 +31,4 @@ jobs:
       issues: ''
       scrub_env: '1'
       pull_requests: write
-      allowed_tools: 'Read,Grep,Glob,Write,Skill,Agent,Bash(git diff:*),Bash(git log:*),Bash(git rev-parse:*),Bash(gh pr diff:*),Bash(gh pr review:*)'
+      allowed_tools: 'Read(./**),Grep,Glob,Edit(./.factory/**),Skill,Agent,Bash(git diff:*),Bash(git log:*),Bash(git rev-parse:*),Bash(gh pr diff:*),Bash(gh pr review:*)'

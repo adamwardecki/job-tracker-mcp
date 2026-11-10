@@ -28,11 +28,22 @@ registry/**
 dev/package.json
 dev/package-lock.json
 
-# The factory itself and the agents' own instructions
+# The factory itself and the agents' own instructions. Claude Code loads a .claude/ directory from any level.
 .github/**
-.claude/**
+**/.claude/**
 AGENTS.md
 factory/**
+
+# Files Matt Pocock's skills read as the repo's own docs (domain language, ADRs, agent setup), and the factory's
+# scratch directory, where the stages read his skills and their context from.
+docs/agents/**
+GLOSSARY.md
+GLOSSARY-MAP.md
+CONTEXT.md
+CONTEXT-MAP.md
+docs/adr/**
+**/docs/adr/**
+.factory/**
 
 # Files the agents load or run: Claude Code settings and instructions, git config the checkout applies, and the
 # tool configs the test and lint commands read. From review on, agents run on the PR branch.

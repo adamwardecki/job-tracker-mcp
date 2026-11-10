@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { CI_WORKFLOW_NAME, STAGE_WORKFLOWS } from '../../factory/config.ts';
-import { parseGlobList } from '../../factory/globs.ts';
+import { parseGlobList, riskyFiles } from '../../factory/globs.ts';
 
 const REPO = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const read = (p: string) => readFileSync(join(REPO, p), 'utf8');
@@ -120,13 +120,69 @@ test('the skills pin is a repo and a ref', () => {
 
 test('the factory, its prompts and CI are risky paths', () => {
   const risky = parseGlobList(read('factory/risky-paths.txt'));
-  for (const p of ['.github/**', '.claude/**', 'factory/**', 'AGENTS.md', 'plugin/hooks/**']) assert.ok(risky.includes(p), p);
+  for (const p of ['.github/**', '**/.claude/**', 'factory/**', 'AGENTS.md', 'plugin/hooks/**']) assert.ok(risky.includes(p), p);
+  assert.ok(!risky.includes('.claude/**'), 'the root-only glob would miss a nested .claude/');
 });
 
 test('the files the agents load or run are risky paths', () => {
   const risky = parseGlobList(read('factory/risky-paths.txt'));
   const loaded = ['.mcp.json', '.claude.json', '**/CLAUDE.md', '**/CLAUDE.local.md', 'CONTRIBUTING.md', '.gitignore', '.gitmodules', '.husky/**', '.ripgreprc', 'biome.json', 'tsconfig.json'];
   for (const p of loaded) assert.ok(risky.includes(p), p);
+});
+
+test('the docs Matt Pocock\'s skills read and the factory\'s scratch directory are risky paths', () => {
+  const risky = parseGlobList(read('factory/risky-paths.txt'));
+  const docs = ['docs/agents/**', 'GLOSSARY.md', 'GLOSSARY-MAP.md', 'CONTEXT.md', 'CONTEXT-MAP.md', 'docs/adr/**', '**/docs/adr/**', '.factory/**'];
+  for (const p of docs) assert.ok(risky.includes(p), p);
+});
+
+test('a .claude directory at any level, the root one included, is risky', () => {
+  const risky = parseGlobList(read('factory/risky-paths.txt'));
+  const files = [
+    '.claude/settings.json',
+    '.claude/skills/factory-review/SKILL.md',
+    'plugin/.claude/settings.json',
+    'tests/.claude/skills/x/SKILL.md',
+    'docs/agents/issue-tracker.md',
+    'GLOSSARY.md',
+    'docs/adr/0001-x.md',
+    'plugin/docs/adr/0002-y.md',
+    '.factory/mp/tdd/SKILL.md',
+  ];
+  assert.deepEqual(riskyFiles(files, risky), files);
+  assert.deepEqual(riskyFiles(['docs/setup.md', 'plugin/claude/x.md', 'tests/factory/decide.test.ts'], risky), []);
+});
+
+// The planner and the reviewer read the repo and write their drafts under .factory/; nothing else.
+const READ_AND_DRAFT = ['Read(./**)', 'Grep', 'Glob', 'Edit(./.factory/**)', 'Skill'];
+
+test('the planner\'s and the reviewer\'s tools are exactly these', () => {
+  assert.deepEqual(allowedTools(read('.github/workflows/factory-plan.yml')), [...READ_AND_DRAFT, 'Bash(gh issue view:*)', 'Bash(gh issue comment:*)', 'Bash(gh issue edit:*)']);
+  assert.deepEqual(allowedTools(read('.github/workflows/factory-review.yml')), [
+    ...READ_AND_DRAFT,
+    'Agent',
+    'Bash(git diff:*)',
+    'Bash(git log:*)',
+    'Bash(git rev-parse:*)',
+    'Bash(gh pr diff:*)',
+    'Bash(gh pr review:*)',
+  ]);
+  for (const wf of ['plan', 'review']) {
+    for (const t of allowedTools(read(`.github/workflows/factory-${wf}.yml`))) {
+      assert.ok(!/^Bash\((npm|node)\b/.test(t), `${wf}: ${t}`);
+      assert.notEqual(t, 'Bash(git:*)', wf);
+      assert.ok(!['Read', 'Edit', 'Write'].includes(t), `${wf}: unscoped ${t}`);
+      assert.ok(!t.startsWith('Write'), `${wf}: ${t}`);
+    }
+  }
+});
+
+test('no stage reads outside the repo or reinstalls the dev tools', () => {
+  for (const wf of STAGE_WORKFLOWS) {
+    const tools = allowedTools(read(`.github/workflows/factory-${wf}.yml`));
+    assert.ok(tools.includes('Read(./**)') && !tools.includes('Read'), `${wf}: Read is scoped to the repo`);
+    assert.ok(!tools.some((t) => t.includes('npm run setup')), `${wf}: npm run setup`);
+  }
 });
 
 test('review and fix run only on the PR head the router checked', () => {
