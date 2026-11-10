@@ -68,6 +68,7 @@ export interface AccountsConfig {
 }
 
 export interface AutonomyConfig {
+  auto_apply?: boolean;
   unattended?: string[];
   needs_user?: string[];
 }
@@ -173,7 +174,7 @@ export const CONFIG_SCHEMA: { [K in SectionName]: SectionSchema } = {
     },
   },
   autonomy: {
-    fields: { unattended: strList, needs_user: strList },
+    fields: { auto_apply: bool, unattended: strList, needs_user: strList },
   },
   schedule: {
     fields: {
@@ -195,7 +196,7 @@ export const CONFIG_SCHEMA: { [K in SectionName]: SectionSchema } = {
   },
 };
 
-// Actions that must never run unattended, whatever the user writes into autonomy.unattended.
+// The legacy action lists cannot grant submit permission; only the explicit auto_apply preference can.
 export const ALWAYS_NEEDS_USER = ['submit', 'send', 'delete', 'consent', 'personal_data', 'account_login'];
 
 // Object.keys loses the key type; CONFIG_SCHEMA's type guarantees these are exactly the section names.
@@ -203,7 +204,7 @@ export const SECTION_NAMES = Object.keys(CONFIG_SCHEMA) as SectionName[];
 
 export const DEFAULTS: { [K in SectionName]?: Partial<ConfigSections[K]> } = {
   writing: { humanizer: true, max_words_cover_note: 200, never_volunteer_gaps: true, signature_style: 'name_only', voice_profile: null },
-  autonomy: { unattended: ['search', 'verify', 'score', 'draft_note', 'draft_email', 'record'], needs_user: [...ALWAYS_NEEDS_USER] },
+  autonomy: { auto_apply: false, unattended: ['search', 'verify', 'score', 'draft_note', 'draft_email', 'record'], needs_user: [...ALWAYS_NEEDS_USER] },
   filters: {
     band_rule: 'drop only if the band MAXIMUM is below floor; straddling bands are kept',
     pay_rule_with_equity: "floor unchanged; equity may justify a 'negotiable' answer inside the band",

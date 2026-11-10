@@ -268,3 +268,19 @@ test('dsh-install leaves a patch file it cannot safely extend alone and prints t
   assert.match(stdout, /id: job-tracker-hooks/);
   assert.equal(basename(dirname(tui)), 'tui');
 });
+
+
+test('dsh.ts: saved auto-apply is enforced by the shared submit gate', () => {
+  const role = verifiedRole();
+  const t = new Tracker(openDb(join(home, 'tracker.db')));
+  t.transition({ role_id: role.id, to: 'scored', reason: 'fits', score: 8 });
+  t.transition({ role_id: role.id, to: 'queued', reason: 'ready' });
+  t.saveConfig({ section: 'autonomy', data: { auto_apply: true } });
+  const sid = 'auto';
+  dsh('pre-tool', { session_id: sid, tool_name: `${TRACKER}open_items`, tool_input: {} });
+  openApplication(sid);
+  assert.equal(dsh('pre-tool', click(sid)).out, null);
+  t.saveConfig({ section: 'autonomy', data: { auto_apply: false } });
+  assert.match(deniedBy(dsh('pre-tool', click(sid)).out) || '', /needs the user's approval/);
+  t.db.close();
+});

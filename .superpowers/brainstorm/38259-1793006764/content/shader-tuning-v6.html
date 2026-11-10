@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Painterly shader tuning</title>
+<style>
+  html, body { margin: 0; background: #f3ecdc; color: #1f2a22; font-family: system-ui, sans-serif; }
+  header { padding: 14px 20px 8px; max-width: 70ch; }
+  header h2 { margin: 0 0 4px; font-size: 18px; } header p { margin: 0; color: #5b5a4e; font-size: 13px; }
+  canvas { width: 100%; aspect-ratio: 2 / 1; display: block; }
+  .lil-gui.root { position: fixed; top: 10px; left: 10px; z-index: 10; --width: 300px; max-height: calc(100vh - 20px); overflow: auto; }
+</style>
+<script type="importmap">{"imports":{
+  "three":"https://unpkg.com/three@0.170.0/build/three.module.js",
+  "lil-gui":"https://unpkg.com/lil-gui@0.20.0/dist/lil-gui.esm.js"}}</script>
+</head>
+<body>
+<header>
+  <h2>Painterly shader: tuning</h2>
+  <p>Anisotropic Kuwahara (paint patches that follow the image's structure) → brush streaks traced along the flow field → impasto lighting → grading and canvas grain. Hold <b>Space</b> to see the original. When you like it, press <b>Send settings to Claude</b>.</p>
+</header>
+<canvas id="c"></canvas>
+
+<script type="module">
+import * as THREE from 'three';
+import GUI from 'lil-gui';
+
+const DEFAULTS = {"radius": 7, "alpha": 1.3, "hardness": 1, "sharpness": 14.5, "zeroCrossing": 0.5, "tensorSigma": 0, "passes": 1, "resolution": 1, "stroke": 0.07, "strokeContrast": 1.6, "strokeWidth": 1.5, "strokeLength": 6, "strokeStep": 1.55, "coherentOnly": 0.65, "impasto": 0, "bumpScale": 5.1, "lightAngle": 141, "specular": 0, "warp": 0.004, "warpScale": 6, "warpSpeed": 0.3, "flow": 0.15, "parallax": 0.01, "saturation": 1.12, "contrast": 1.04, "brightness": 0, "warmth": 0.015, "grain": 0.05, "weave": 0.025, "crispScreen": true, "animate": true, "swayTop": 0.8, "swayHorizontal": 0.85, "maskX0": 1180, "maskX1": 1705, "maskY0": 0, "maskY1": 245, "maskFeather": 40, "showMask": false, "waterMode": "stream", "streamWidth": 4.5, "streamArc": 0.8, "streamBend": 5, "waterSpeed": 0.51, "waterOpacity": 0.54, "dropRate": 0.8, "rippleStrength": 0.375, "rippleFreq": 1.64, "rippleSpeed": 5.4, "spoutX": 1597, "spoutY": 278, "surfaceY": 321, "basinX": 1598, "basinRX": 44, "basinRY": 7};
+const KEY = 'painted-hero-tuning-v3';
+const params = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') };
+
+const img = await new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.src = '/files/full.jpg'; });
+const IW = img.naturalWidth, IH = img.naturalHeight;
+// Laptop screen corners in image pixels (from docs/site-design.md), converted to GL uv (y up).
+const SCREEN = [[1204,374],[1517,390],[1494,597],[1181,563]].map(([x,y]) => new THREE.Vector2(x/IW, 1 - y/IH));
+
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const fit = () => renderer.setSize(canvas.clientWidth, canvas.clientWidth / 2, false);
+fit(); addEventListener('resize', fit);
+
+const src = new THREE.Texture(img); src.needsUpdate = true; src.minFilter = THREE.LinearFilter; src.generateMipmaps = false;
+src.wrapS = src.wrapT = THREE.ClampToEdgeWrapping;
+
+const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+const scene = new THREE.Scene(); scene.add(quad);
+const VS = `out vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+const pass = (fs, uniforms) => new THREE.ShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: VS, fragmentShader: fs, uniforms, depthTest: false, depthWrite: false });
+const run = (mat, target) => { quad.material = mat; renderer.setRenderTarget(target); renderer.render(scene, cam); };
+
+let RW, RH, rtA, rtB, tfmA, tfmB, kuwOut;
+const mkRT = () => new THREE.WebGLRenderTarget(RW, RH, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+function allocate() {
+  [rtA, rtB, tfmA, tfmB].forEach((r) => r && r.dispose());
+  RW = Math.round(IW * params.resolution); RH = Math.round(IH * params.resolution);
+  rtA = mkRT(); rtB = mkRT(); tfmA = mkRT(); tfmB = mkRT();
+}
+
+// 1. Structure tensor (Sobel).
+const tensorMat = pass(`
+  precision highp float; in vec2 vUv; out vec4 o; uniform sampler2D uSrc; uniform vec2 uPx;
+  vec3 T(float x, float y){ return texture(uSrc, vUv + vec2(x, y) * uPx).rgb; }
+  void main(){
+    vec3 u = (-T(-1.,-1.) - 2.*T(-1.,0.) - T(-1.,1.) + T(1.,-1.) + 2.*T(1.,0.) + T(1.,1.)) / 4.;
+    vec3 v = (-T(-1.,-1.) - 2.*T(0.,-1.) - T(1.,-1.) + T(-1.,1.) + 2.*T(0.,1.) + T(1.,1.)) / 4.;
+    o = vec4(dot(u,u), dot(v,v), dot(u,v), 1.);
+  }`, { uSrc: { value: src }, uPx: { value: new THREE.Vector2() } });
+
+// 2. Separable Gaussian on the tensor.
+const blurMat = pass(`
+  precision highp float; in vec2 vUv; out vec4 o; uniform sampler2D uTex; uniform vec2 uDir; uniform float uSigma;
+  void main(){
+    if (uSigma < 0.05) { o = texture(uTex, vUv); return; }
+    int r = int(ceil(2.5 * uSigma)); vec4 s = vec4(0.); float ws = 0.;
+    r = min(r, 12); for (int i = -r; i <= r; i++) {
+      float w = exp(-float(i*i) / (2. * uSigma * uSigma)); s += texture(uTex, vUv + float(i) * uDir) * w; ws += w; }
+    o = s / ws;
+  }`, { uTex: { value: null }, uDir: { value: new THREE.Vector2() }, uSigma: { value: 2 } });
+
+// 3. Anisotropic Kuwahara with polynomial sector weights (Kyprianidis et al.).
+const kuwMat = pass(`
+  precision highp float; in vec2 vUv; out vec4 o;
+  uniform sampler2D uTex; uniform sampler2D uTfm; uniform vec2 uPx;
+  uniform float uRadius, uAlpha, uHardness, uSharpness, uZero;
+  void main(){
+    vec3 g = texture(uTfm, vUv).xyz;
+    float d = sqrt(max(0., (g.x - g.y) * (g.x - g.y) + 4. * g.z * g.z));
+    float l1 = 0.5 * (g.x + g.y + d), l2 = 0.5 * (g.x + g.y - d);
+    vec2 v = vec2(l1 - g.x, -g.z);
+    vec2 t = dot(v, v) > 1e-12 ? normalize(v) : vec2(0., 1.);
+    float phi = -atan(t.y, t.x);
+    float A = (l1 + l2 > 1e-8) ? (l1 - l2) / (l1 + l2) : 0.;
+    float a = uRadius * clamp((uAlpha + A) / uAlpha, 0.1, 2.);
+    float b = uRadius * clamp(uAlpha / (uAlpha + A), 0.1, 2.);
+    float cp = cos(phi), sp = sin(phi);
+    mat2 SR = mat2(0.5 / a, 0., 0., 0.5 / b) * mat2(cp, -sp, sp, cp);
+    int mx = min(32, int(sqrt(a*a*cp*cp + b*b*sp*sp))), my = min(32, int(sqrt(a*a*sp*sp + b*b*cp*cp)));
+    float zeta = 2. / uRadius;
+    float eta = (zeta + cos(uZero)) / (sin(uZero) * sin(uZero));
+    vec4 m[8]; vec3 s[8];
+    for (int k = 0; k < 8; k++) { m[k] = vec4(0.); s[k] = vec3(0.); }
+    for (int y = -my; y <= my; y++) {
+      for (int x = -mx; x <= mx; x++) {
+        vec2 p = SR * vec2(x, y);
+        if (dot(p, p) > 0.25) continue;
+        vec3 c = texture(uTex, vUv + vec2(x, y) * uPx).rgb;
+        float w[8]; float sum = 0., z, vxx, vyy;
+        vxx = zeta - eta * p.x * p.x; vyy = zeta - eta * p.y * p.y;
+        z = max(0.,  p.y + vxx); w[0] = z*z; sum += w[0];
+        z = max(0., -p.x + vyy); w[2] = z*z; sum += w[2];
+        z = max(0., -p.y + vxx); w[4] = z*z; sum += w[4];
+        z = max(0.,  p.x + vyy); w[6] = z*z; sum += w[6];
+        p = 0.70710678 * vec2(p.x - p.y, p.x + p.y);
+        vxx = zeta - eta * p.x * p.x; vyy = zeta - eta * p.y * p.y;
+        z = max(0.,  p.y + vxx); w[1] = z*z; sum += w[1];
+        z = max(0., -p.x + vyy); w[3] = z*z; sum += w[3];
+        z = max(0., -p.y + vxx); w[5] = z*z; sum += w[5];
+        z = max(0.,  p.x + vyy); w[7] = z*z; sum += w[7];
+        float gw = exp(-3.125 * dot(p, p)) / max(sum, 1e-6);
+        for (int k = 0; k < 8; k++) { float wk = w[k] * gw; m[k] += vec4(c * wk, wk); s[k] += c * c * wk; }
+      }
+    }
+    vec4 acc = vec4(0.);
+    for (int k = 0; k < 8; k++) {
+      if (m[k].w < 1e-6) continue;
+      vec3 mu = m[k].rgb / m[k].w;
+      vec3 var = abs(s[k] / m[k].w - mu * mu);
+      float sig = var.r + var.g + var.b;
+      float w = 1. / (1. + pow(uHardness * 1000. * sig, 0.5 * uSharpness));
+      acc += vec4(mu * w, w);
+    }
+    o = vec4(acc.w > 0. ? acc.rgb / acc.w : texture(uTex, vUv).rgb, 1.);
+  }`, { uTex: { value: null }, uTfm: { value: null }, uPx: { value: new THREE.Vector2() },
+        uRadius: { value: 7 }, uAlpha: { value: 1 }, uHardness: { value: 8 }, uSharpness: { value: 8 }, uZero: { value: 0.58 } });
+
+// 4. Final: warp, brush streaks (line integral along the flow), impasto, grading, grain.
+const finalMat = pass(`
+  precision highp float; in vec2 vUv; out vec4 o;
+  uniform sampler2D uSrc, uKuw, uTfm; uniform vec2 uSize; uniform float uTime; uniform vec2 uMouse;
+  uniform float uStroke, uStrokeContrast, uStrokeWidth, uStrokeStep, uCoherent; uniform int uStrokeLen;
+  uniform float uImpasto, uBump, uLight, uSpec;
+  uniform float uWarp, uWarpScale, uWarpSpeed, uFlow, uParallax;
+  uniform float uSat, uContrast, uBright, uWarm, uGrain, uWeave;
+  uniform bool uCrisp, uOriginal; uniform vec2 uS[4];
+  uniform vec4 uMask; uniform float uFeather, uSwayTop, uSwayH; uniform bool uShowMask;
+  uniform int uWaterMode; uniform vec2 uSpout; uniform float uSurfaceY, uStreamW, uArc, uBend, uWaterSpeed, uWaterAlpha, uDropRate;
+  uniform vec3 uBasin; uniform float uBasinRatio; uniform float uRipple, uRippleFreq, uRippleSpeed;
+  float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+  float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
+    return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
+  vec3 tensor(vec2 uv){ return texture(uTfm, uv).xyz; }
+  vec2 tang(vec2 uv){ vec3 g = tensor(uv);
+    float l1 = 0.5 * (g.x + g.y + sqrt(max(0., (g.x-g.y)*(g.x-g.y) + 4.*g.z*g.z)));
+    vec2 v = vec2(l1 - g.x, -g.z); return dot(v, v) > 1e-12 ? normalize(v) : vec2(0., 1.); }
+  float coherence(vec2 uv){ vec3 g = tensor(uv); float d = sqrt(max(0., (g.x-g.y)*(g.x-g.y) + 4.*g.z*g.z));
+    return g.x + g.y > 1e-6 ? d / (g.x + g.y) : 0.; }
+  float sn(vec2 px){ return vnoise(px / uStrokeWidth + uTime * uFlow * vec2(1.3, 0.7)); }
+  float lic(vec2 uv){
+    vec2 p0 = uv * uSize; float s = sn(p0), ws = 1.; vec2 t0 = tang(uv);
+    for (int dir = 0; dir < 2; dir++) {
+      vec2 q = p0, tp = dir == 0 ? t0 : -t0;
+      for (int i = 0; i < uStrokeLen; i++) {
+        vec2 t = tang(q / uSize); if (dot(t, tp) < 0.) t = -t;
+        q += t * uStrokeStep; tp = t;
+        float w = 1. - float(i) / float(uStrokeLen + 1);
+        s += sn(q) * w; ws += w; }
+    }
+    return s / ws;
+  }
+  float cross2(vec2 a, vec2 b){ return a.x*b.y - a.y*b.x; }
+  float pathX(float d){ return uArc * (1. - exp(-max(d, 0.) / max(uBend, 0.1))); } // d = px below the spout
+  bool inScreen(vec2 p){ float s0 = 0.; for (int i = 0; i < 4; i++) { float c = cross2(uS[(i+1)%4] - uS[i], p - uS[i]);
+    if (i == 0) s0 = sign(c); else if (sign(c) != s0) return false; } return true; }
+  void main(){
+    if (uOriginal) { o = vec4(texture(uSrc, vUv).rgb, 1.); return; }
+    vec2 uv = vUv + uMouse * uParallax;
+    vec2 ip = vec2(uv.x * uSize.x, (1. - uv.y) * uSize.y); // image pixels, y down; follows the parallax
+    float mask = smoothstep(uMask.x - uFeather, uMask.x + uFeather, ip.x) * (1. - smoothstep(uMask.y - uFeather, uMask.y + uFeather, ip.x))
+               * smoothstep(uMask.z - uFeather, uMask.z + uFeather, ip.y) * (1. - smoothstep(uMask.w - uFeather, uMask.w + uFeather, ip.y));
+    float height = 1. - clamp((ip.y - uMask.z) / max(1., uMask.w - uMask.z), 0., 1.); // 1 at the tops
+    mask *= mix(1., height, uSwayTop);
+    vec2 w = vec2(vnoise(uv * uWarpScale + uTime * uWarpSpeed), vnoise(uv * uWarpScale + vec2(9.3, 4.1) - uTime * uWarpSpeed)) - 0.5;
+    w.y *= 1. - uSwayH;
+    vec2 suv = uv + w * uWarp * mask;
+    vec3 col = texture(uKuw, suv).rgb;
+    float h = lic(suv);
+    float coh = mix(1., smoothstep(0.05, 0.6, coherence(suv)), uCoherent);
+    float st = clamp((h - 0.5) * uStrokeContrast, -1., 1.) * coh;
+    col *= 1. + st * uStroke;
+    // impasto: treat the streak field as paint height and light it
+    float hh = st * uBump;
+    vec3 n = normalize(vec3(-dFdx(hh), -dFdy(hh), 1.));
+    float la = radians(uLight); vec3 L = normalize(vec3(cos(la), sin(la), 1.4));
+    float diff = dot(n, L) / L.z;
+    col *= mix(1., diff, uImpasto);
+    col += uSpec * pow(max(dot(reflect(-L, n), vec3(0,0,1)), 0.), 20.);
+    // grading
+    col += uBright;
+    col = (col - 0.5) * uContrast + 0.5;
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    col = mix(vec3(lum), col, uSat);
+    col += vec3(uWarm, uWarm * 0.3, -uWarm);
+    // canvas
+    vec2 fp = vUv * uSize;
+    float weave = sin(fp.x * 1.9) * sin(fp.y * 1.9);
+    col += (hash(fp) - 0.5) * uGrain + weave * uWeave * (0.5 + 0.5 * st);
+    // water: falling stream or drops from the spout, ripples in the basin
+    vec3 wc = vec3(0.88, 0.92, 0.9);
+    float len = uSurfaceY - uSpout.y;
+    vec2 basinRel = (ip - uBasin.xy) / vec2(uBasin.z, uBasin.z * uBasinRatio);
+    float inBasin = 1. - smoothstep(0.85, 1.0, length(basinRel));
+    vec2 hit = vec2(uSpout.x + pathX(len), uSurfaceY);
+    float r = length((ip - hit) * vec2(1., uBasin.z / max(1., uBasin.z * uBasinRatio)));
+    float ring = 0.;
+    if (uWaterMode == 0) {
+      float k = clamp((ip.y - uSpout.y) / len, 0., 1.);
+      float cx = uSpout.x + pathX(ip.y - uSpout.y) + sin(ip.y * 0.5 - uTime * 9.) * 0.35 * k;
+      float m = (1. - smoothstep(uStreamW * 0.5, uStreamW * 0.5 + 1., abs(ip.x - cx))) * step(uSpout.y, ip.y) * step(ip.y, uSurfaceY);
+      float fl = vnoise(vec2(ip.x * 0.6, ip.y * 0.22 - uTime * uWaterSpeed * 12.));
+      col = mix(col, wc * (0.78 + 0.4 * fl), m * uWaterAlpha);
+      ring = sin(r * uRippleFreq - uTime * uRippleSpeed) * exp(-r * 0.07);
+    } else {
+      for (int i = 0; i < 3; i++) {
+        float ph = fract(uTime * uDropRate + float(i) / 3.);
+        float fall = 0.3; // share of the cycle spent falling
+        if (ph < fall) {
+          float f = ph / fall; vec2 dp = vec2(uSpout.x + pathX(len * f * f), uSpout.y + len * f * f);
+          vec2 dd = (ip - dp) / vec2(uStreamW * 0.6, uStreamW * 0.6 + 2.5 * f);
+          col = mix(col, wc * 1.05, (1. - smoothstep(0.6, 1., length(dd))) * uWaterAlpha);
+        } else {
+          float age = (ph - fall) / uDropRate;
+          ring += exp(-pow((r - age * uRippleSpeed * 6.) / 1.6, 2.)) * exp(-age * 2.5);
+        }
+      }
+    }
+    col += ring * uRipple * inBasin;
+    if (uShowMask) col = mix(col, vec3(1., 0., 0.), mask * 0.45);
+    if (uCrisp && inScreen(uv)) col = texture(uSrc, uv).rgb;
+    o = vec4(clamp(col, 0., 1.), 1.);
+  }`, {
+    uSrc: { value: src }, uKuw: { value: null }, uTfm: { value: null }, uSize: { value: new THREE.Vector2() }, uTime: { value: 0 },
+    uMouse: { value: new THREE.Vector2() }, uS: { value: SCREEN },
+    uStroke: { value: 0 }, uStrokeContrast: { value: 0 }, uStrokeWidth: { value: 0 }, uStrokeStep: { value: 0 }, uCoherent: { value: 0 }, uStrokeLen: { value: 0 },
+    uImpasto: { value: 0 }, uBump: { value: 0 }, uLight: { value: 0 }, uSpec: { value: 0 },
+    uWarp: { value: 0 }, uWarpScale: { value: 0 }, uWarpSpeed: { value: 0 }, uFlow: { value: 0 }, uParallax: { value: 0 },
+    uSat: { value: 1 }, uContrast: { value: 1 }, uBright: { value: 0 }, uWarm: { value: 0 }, uGrain: { value: 0 }, uWeave: { value: 0 },
+    uCrisp: { value: true }, uOriginal: { value: false },
+    uMask: { value: new THREE.Vector4() }, uFeather: { value: 0 }, uSwayTop: { value: 0 }, uSwayH: { value: 0 }, uShowMask: { value: false },
+    uWaterMode: { value: 0 }, uSpout: { value: new THREE.Vector2() }, uSurfaceY: { value: 0 }, uStreamW: { value: 0 }, uArc: { value: 0 }, uBend: { value: 0 },
+    uWaterSpeed: { value: 0 }, uWaterAlpha: { value: 0 }, uDropRate: { value: 0 }, uBasin: { value: new THREE.Vector3() }, uBasinRatio: { value: 0 },
+    uRipple: { value: 0 }, uRippleFreq: { value: 0 }, uRippleSpeed: { value: 0 },
+  });
+
+// Static passes: rerun only when a paint-patch setting changes.
+function bake() {
+  if (!rtA || RW !== Math.round(IW * params.resolution)) allocate();
+  const px = new THREE.Vector2(1 / RW, 1 / RH);
+  tensorMat.uniforms.uPx.value.set(1 / IW, 1 / IH);
+  run(tensorMat, tfmA);
+  blurMat.uniforms.uSigma.value = params.tensorSigma;
+  blurMat.uniforms.uTex.value = tfmA.texture; blurMat.uniforms.uDir.value.set(px.x, 0); run(blurMat, tfmB);
+  blurMat.uniforms.uTex.value = tfmB.texture; blurMat.uniforms.uDir.value.set(0, px.y); run(blurMat, tfmA);
+  const u = kuwMat.uniforms;
+  u.uTfm.value = tfmA.texture; u.uPx.value.copy(px);
+  u.uRadius.value = params.radius; u.uAlpha.value = params.alpha; u.uHardness.value = params.hardness; u.uSharpness.value = params.sharpness; u.uZero.value = params.zeroCrossing;
+  let input = src, out = rtA;
+  for (let i = 0; i < params.passes; i++) { u.uTex.value = input; run(kuwMat, out); input = out.texture; out = out === rtA ? rtB : rtA; }
+  kuwOut = input;
+  renderer.setRenderTarget(null);
+}
+
+let dirty = true, original = false, t = 0, last = performance.now();
+const mouse = new THREE.Vector2(), mouseTarget = new THREE.Vector2();
+canvas.addEventListener('pointermove', (e) => { const r = canvas.getBoundingClientRect(); mouseTarget.set((e.clientX - r.left) / r.width - 0.5, 0.5 - (e.clientY - r.top) / r.height); });
+canvas.addEventListener('pointerleave', () => mouseTarget.set(0, 0));
+addEventListener('keydown', (e) => { if (e.code === 'Space' && e.target === document.body) { original = true; e.preventDefault(); } });
+addEventListener('keyup', (e) => { if (e.code === 'Space') original = false; });
+
+const stats = { fps: 0, bakeMs: 0 };
+let frames = 0, fpsT = performance.now();
+renderer.setAnimationLoop((now) => {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (params.animate) t += dt;
+  if (dirty) { const b = performance.now(); bake(); renderer.getContext().finish(); stats.bakeMs = Math.round(performance.now() - b); dirty = false; }
+  mouse.lerp(mouseTarget, 1 - Math.exp(-dt * 3));
+  const u = finalMat.uniforms;
+  u.uKuw.value = kuwOut; u.uTfm.value = tfmA.texture; u.uTime.value = t; u.uMouse.value.copy(mouse);
+  u.uSize.value.set(IW, IH);
+  u.uStroke.value = params.stroke; u.uStrokeContrast.value = params.strokeContrast; u.uStrokeWidth.value = params.strokeWidth;
+  u.uStrokeStep.value = params.strokeStep; u.uStrokeLen.value = params.strokeLength; u.uCoherent.value = params.coherentOnly;
+  u.uImpasto.value = params.impasto; u.uBump.value = params.bumpScale; u.uLight.value = params.lightAngle; u.uSpec.value = params.specular;
+  u.uWarp.value = params.warp; u.uWarpScale.value = params.warpScale; u.uWarpSpeed.value = params.warpSpeed; u.uFlow.value = params.flow; u.uParallax.value = params.parallax;
+  u.uSat.value = params.saturation; u.uContrast.value = params.contrast; u.uBright.value = params.brightness; u.uWarm.value = params.warmth;
+  u.uGrain.value = params.grain; u.uWeave.value = params.weave; u.uCrisp.value = params.crispScreen; u.uOriginal.value = original;
+  u.uMask.value.set(params.maskX0, params.maskX1, params.maskY0, params.maskY1); u.uFeather.value = params.maskFeather;
+  u.uSwayTop.value = params.swayTop; u.uSwayH.value = params.swayHorizontal; u.uShowMask.value = params.showMask;
+  u.uWaterMode.value = params.waterMode === 'drops' ? 1 : 0; u.uSpout.value.set(params.spoutX, params.spoutY); u.uSurfaceY.value = params.surfaceY;
+  u.uStreamW.value = params.streamWidth; u.uArc.value = params.streamArc; u.uBend.value = params.streamBend; u.uWaterSpeed.value = params.waterSpeed; u.uWaterAlpha.value = params.waterOpacity;
+  u.uDropRate.value = params.dropRate; u.uBasin.value.set(params.basinX, params.surfaceY, params.basinRX); u.uBasinRatio.value = params.basinRY / params.basinRX;
+  u.uRipple.value = params.rippleStrength; u.uRippleFreq.value = params.rippleFreq; u.uRippleSpeed.value = params.rippleSpeed;
+  run(finalMat, null);
+  frames++; if (now - fpsT > 500) { stats.fps = Math.round(frames * 1000 / (now - fpsT)); frames = 0; fpsT = now; }
+});
+
+// ---------- GUI ----------
+const gui = new GUI({ title: 'Painted hero' });
+const save = () => localStorage.setItem(KEY, JSON.stringify(params));
+const rebake = () => { dirty = true; save(); };
+const f0 = gui.addFolder('Performance');
+f0.add(stats, 'fps').listen().disable(); f0.add(stats, 'bakeMs').name('bake ms').listen().disable();
+f0.add(params, 'resolution', 0.25, 1, 0.05).name('patch resolution').onFinishChange(rebake);
+const f1 = gui.addFolder('Paint patches (Kuwahara)');
+f1.add(params, 'radius', 2, 16, 0.5).name('brush size').onFinishChange(rebake);
+f1.add(params, 'alpha', 0.1, 5, 0.05).name('elongation (low = longer)').onFinishChange(rebake);
+f1.add(params, 'hardness', 1, 100, 1).onFinishChange(rebake);
+f1.add(params, 'sharpness', 1, 18, 0.5).onFinishChange(rebake);
+f1.add(params, 'zeroCrossing', 0.5, 2, 0.01).name('sector overlap').onFinishChange(rebake);
+f1.add(params, 'tensorSigma', 0, 5, 0.1).name('flow smoothing').onFinishChange(rebake);
+f1.add(params, 'passes', 1, 3, 1).onFinishChange(rebake);
+const f2 = gui.addFolder('Brush streaks');
+f2.add(params, 'stroke', 0, 1, 0.01).name('strength').onChange(save);
+f2.add(params, 'strokeContrast', 0.5, 5, 0.1).name('contrast').onChange(save);
+f2.add(params, 'strokeWidth', 0.5, 10, 0.1).name('width px').onChange(save);
+f2.add(params, 'strokeLength', 0, 32, 1).name('length (steps)').onChange(save);
+f2.add(params, 'strokeStep', 0.25, 4, 0.05).name('step px').onChange(save);
+f2.add(params, 'coherentOnly', 0, 1, 0.01).name('only along edges').onChange(save);
+const f3 = gui.addFolder('Impasto');
+f3.add(params, 'impasto', 0, 2, 0.01).name('lighting').onChange(save);
+f3.add(params, 'bumpScale', 0, 10, 0.1).name('paint thickness').onChange(save);
+f3.add(params, 'lightAngle', 0, 360, 1).name('light angle').onChange(save);
+f3.add(params, 'specular', 0, 1, 0.01).onChange(save);
+const f4 = gui.addFolder('Motion');
+f4.add(params, 'animate').onChange(save);
+f4.add(params, 'warp', 0, 0.02, 0.0005).name('bamboo shimmer amount').onChange(save);
+f4.add(params, 'warpScale', 0.5, 20, 0.1).name('shimmer scale').onChange(save);
+f4.add(params, 'warpSpeed', 0, 1, 0.01).name('shimmer speed').onChange(save);
+f4.add(params, 'flow', 0, 2, 0.01).name('stroke flow speed').onChange(save);
+f4.add(params, 'parallax', 0, 0.03, 0.0005).name('mouse parallax').onChange(save);
+const fb = gui.addFolder('Bamboo shimmer region (image px)');
+fb.add(params, 'showMask').name('show region').onChange(save);
+fb.add(params, 'maskX0', 0, 1774, 1).name('left').onChange(save);
+fb.add(params, 'maskX1', 0, 1774, 1).name('right').onChange(save);
+fb.add(params, 'maskY0', 0, 887, 1).name('top').onChange(save);
+fb.add(params, 'maskY1', 0, 887, 1).name('bottom').onChange(save);
+fb.add(params, 'maskFeather', 0, 150, 1).name('feather').onChange(save);
+fb.add(params, 'swayTop', 0, 1, 0.01).name('tops sway more').onChange(save);
+fb.add(params, 'swayHorizontal', 0, 1, 0.01).name('sideways only').onChange(save);
+const fw = gui.addFolder('Water');
+fw.add(params, 'waterMode', ['stream', 'drops']).name('mode').onChange(save);
+fw.add(params, 'waterOpacity', 0, 1, 0.01).name('opacity').onChange(save);
+fw.add(params, 'streamWidth', 0.5, 8, 0.1).name('width px').onChange(save);
+fw.add(params, 'streamArc', -12, 12, 0.1).name('exit push px (− = left)').onChange(save);
+fw.add(params, 'streamBend', 0.5, 30, 0.1).name('bend length px').onChange(save);
+fw.add(params, 'waterSpeed', 0, 4, 0.01).name('stream speed').onChange(save);
+fw.add(params, 'dropRate', 0.1, 3, 0.01).name('drops per second').onChange(save);
+fw.add(params, 'rippleStrength', 0, 0.5, 0.005).name('ripple strength').onChange(save);
+fw.add(params, 'rippleFreq', 0.1, 3, 0.01).name('ripple spacing').onChange(save);
+fw.add(params, 'rippleSpeed', 0, 12, 0.1).name('ripple speed').onChange(save);
+const fwp = fw.addFolder('Position (image px)'); fwp.close();
+fwp.add(params, 'spoutX', 1550, 1650, 0.5).name('spout x').onChange(save);
+fwp.add(params, 'spoutY', 250, 310, 0.5).name('spout y').onChange(save);
+fwp.add(params, 'surfaceY', 300, 340, 0.5).name('water surface y').onChange(save);
+fwp.add(params, 'basinX', 1560, 1640, 0.5).name('basin centre x').onChange(save);
+fwp.add(params, 'basinRX', 10, 80, 0.5).name('basin radius x').onChange(save);
+fwp.add(params, 'basinRY', 2, 20, 0.5).name('basin radius y').onChange(save);
+const f5 = gui.addFolder('Colour & canvas');
+f5.add(params, 'saturation', 0, 2, 0.01).onChange(save);
+f5.add(params, 'contrast', 0.5, 1.5, 0.01).onChange(save);
+f5.add(params, 'brightness', -0.2, 0.2, 0.005).onChange(save);
+f5.add(params, 'warmth', -0.1, 0.1, 0.002).onChange(save);
+f5.add(params, 'grain', 0, 0.2, 0.002).onChange(save);
+f5.add(params, 'weave', 0, 0.1, 0.002).name('canvas weave').onChange(save);
+gui.add(params, 'crispScreen').name('crisp laptop screen').onChange(save);
+const actions = {
+  send() { window.brainstorm?.send({ type: 'settings', choice: 'settings', text: JSON.stringify(params) }); navigator.clipboard?.writeText(JSON.stringify(params, null, 2)).catch(() => {}); this._b.name('Sent ✓'); setTimeout(() => this._b.name('Send settings to Claude'), 1500); },
+  reset() { Object.assign(params, DEFAULTS); localStorage.removeItem(KEY); gui.controllersRecursive().forEach((c) => c.updateDisplay()); dirty = true; },
+};
+actions._b = gui.add(actions, 'send').name('Send settings to Claude');
+gui.add(actions, 'reset').name('Reset to defaults');
+</script>
+</body>
+</html>

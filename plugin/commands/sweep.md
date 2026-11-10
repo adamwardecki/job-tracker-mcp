@@ -1,5 +1,5 @@
 ---
-description: The daily job-hunt run (what the scheduled task runs). Inbox, sourcing, verify, score, prepare, report, audit. Never submits.
+description: The daily job-hunt run (what the scheduled task runs). Inbox, sourcing, verify, score, prepare, optionally apply using the saved preference, report, audit.
 argument-hint: "[--limit N] [--calibration]"
 ---
 
@@ -11,7 +11,7 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
 
 ## Hard rules
 
-- **Never submit an application, never send anything.** Drafts only. Applying happens later in `/job-tracker:apply` with the user present. Why: the unattended run has no approval from the user, and submissions are irreversible.
+- **Read the saved application preference.** Submit only when `get_profile` returns `autonomy.auto_apply === true`; missing or false means prepare and queue for review. Never send email or messages. Why: unattended submission requires an explicit saved choice; other permissions are separate.
 - Never report work you could not do. If a capability is missing, say so in the report and queue the work.
 - Every role you touch gets a tracker event (`upsert_role`, `transition` or `record`) with a reason; pass the `run_id` on events. A stop hook refuses to end this session until that is true and `render_report` was called (Claude Code and DeepSeek Harness: `Stop`; Hermes: a post-turn check that sends you back with a `[job-hunt]` note).
 - Hooks block send tools, unlinted drafts, submit clicks and similar. If a hook denies an action, report the denial in the run summary. Do not retry it another way.
@@ -42,13 +42,14 @@ This is the command the weekday scheduled task runs. It runs as a local schedule
 
 5. **Verify and score.** For each `found` role from this run, launch a `scorer` agent (one role per agent, several in parallel), telling each the rule types to load: `scoring`. Each scorer follows `verify-employer` then `score-role` and writes `transition` events with evidence. Respect `--limit`.
 
-6. **Prepare.** Take the top scored roles (default 3, at most 8, in score order) that cleared every hard filter. For each:
+6. **Prepare and, when enabled, apply.** Take the top scored roles (default 3, at most 8, in score order) that cleared every hard filter. For each:
    - Call `gate_check` first. If it fails, do not prepare the role; put its problems in the report. Why: a posting applied to before (`previous_application`), or one with a live application or `no_cold_apply` at the company, can never be submitted, so a note for it is wasted.
    - Follow the `write-note` skill to write the cover note. `lint_prose` must pass.
    - Save it with `add_artifact` (`kind: "cover_note"`).
-   - `transition` the role to `queued` with a reason naming the note, the `run_id`, and `blocked_by: "browser"` if no browser was available this run, else `blocked_by: "user"`.
+   - For a newly scored role, `transition` to `queued` with a reason naming the note, the `run_id`, and `blocked_by: "browser"` if no browser was available this run, else `blocked_by: "user"` for review-first or omitted for automatic mode. For an already queued role, attach a note with `record` without changing its status or question. Why: preparing a note must not erase the question that is holding an application back.
    - Roles with a single blocking question (scorers already queued them with `question` and `blocked_by: "user"`) get their note too, so the user can decide and apply in one go.
-   - Do not open apply forms in this run, even if a browser is available. Submitting needs the user.
+   - If `autonomy.auto_apply === true`, a browser is available, and the role has no unresolved question, follow the `/job-tracker:apply` procedure for that role, using this sweep's `run_id` rather than starting or finishing a separate run. Re-read the preference before every submission. Follow `fill-form`, read back all values, record the automatic-choice reason, and capture confirmation. Never change the preference yourself.
+   - Otherwise leave the application queued for review. Forms needing the user (consent, personal data, account login, visible CAPTCHA, or missing answers) stay queued with the question. Do not clear an existing question just to apply. Why: automatic mode does not answer questions or grant other permissions.
 
 **Asking the user** anywhere in this plugin means: `transition` (or `record`, if already queued) to `queued` with `question` = the single blocking question and the quotes in `evidence`. `render_report` lists these under **Needs you**.
 

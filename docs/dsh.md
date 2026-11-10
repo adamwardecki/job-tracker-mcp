@@ -69,3 +69,5 @@ Check the result with `dsh --profile web --dump-config`.
    absolute path the installer found.
 6. **No per-agent model.** `model: sonnet` in `agents/*.md` is ignored.
 7. **No built-in scheduler.** Schedule the sweep with launchd or cron: `dsh headless "/job-tracker-sweep"`.
+
+The shared submit gate reads the saved `autonomy.auto_apply` preference before each attempt. Setup defaults to review first; explicit opt-in allows verified, scored, queued roles with no unresolved question to submit automatically. Turning it off restores per-application approval. Consent, personal-data and send restrictions remain separate.

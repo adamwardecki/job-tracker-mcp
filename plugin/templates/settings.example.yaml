@@ -47,7 +47,8 @@ accounts:
   connected_calendar: null       # which calendar account is connected to Claude; setup warns if it differs
   chrome_autofill_risk: null     # e.g. "browser autofills a work email; always read back"
 
-autonomy:                        # hooks enforce needs_user regardless of this config
+autonomy:                        # auto_apply is the only setting that allows unattended submit
+  auto_apply: false              # true only after the user explicitly chooses automatic applications
   unattended: [search, verify, score, draft_note, draft_email, record]
   needs_user: [submit, send, delete, consent, personal_data, account_login]
 

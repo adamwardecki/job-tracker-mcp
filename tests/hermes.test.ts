@@ -319,3 +319,20 @@ test('hermes.ts: in Gmail, Ctrl+Enter is blocked as a send', () => {
   assert.match(out.message, /sends the email in Gmail/);
   assert.equal(hermes('pre_tool_call', { session_id: sid, tool_name: 'browser_press', args: { key: 'Enter' } }), null);
 });
+
+test('hermes.ts: saved auto-apply allows eligible submissions and disabling it restores review', () => {
+  const role = verifiedRole();
+  const t = new Tracker(openDb(join(home, 'tracker.db')));
+  t.transition({ role_id: role.id, to: 'scored', reason: 'fits', score: 8 });
+  t.transition({ role_id: role.id, to: 'queued', reason: 'ready' });
+  t.saveConfig({ section: 'autonomy', data: { auto_apply: true } });
+  const sid = 'auto';
+  hermes('pre_tool_call', { session_id: sid, tool_name: `${TRACKER}open_items`, args: {} });
+  hermes('post_tool_call', { session_id: sid, tool_call_id: 'n1', tool_name: 'browser_navigate', args: { url: role.url }, result: JSON.stringify({ url: role.url }) });
+  hermes('post_tool_call', { session_id: sid, tool_call_id: 'n2', tool_name: 'browser_snapshot', args: {}, result: JSON.stringify({ snapshot: '- button "Submit application" [ref=e7]' }) });
+  const click = { session_id: sid, tool_name: 'browser_click', args: { ref: '@e7' } };
+  assert.equal(hermes('pre_tool_call', click), null);
+  t.saveConfig({ section: 'autonomy', data: { auto_apply: false } });
+  assert.match(hermes('pre_tool_call', click).message, /needs the user's approval/);
+  t.db.close();
+});

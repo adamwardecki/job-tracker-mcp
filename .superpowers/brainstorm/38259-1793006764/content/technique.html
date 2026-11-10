@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Particles vs shader</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f3ecdc; color: #1f2a22; margin: 0; padding: 24px 32px 80px; }
+  h2 { margin: 0 0 4px; } p.sub { margin: 0 0 20px; color: #5b5a4e; max-width: 70ch; }
+  .panel { margin-bottom: 28px; border: 2px solid transparent; border-radius: 10px; padding: 10px; cursor: pointer; background: #fbf6ea; }
+  .panel.selected { border-color: #356347; }
+  .panel h3 { margin: 4px 0 8px; } .panel p { margin: 8px 0 0; color: #5b5a4e; max-width: 80ch; }
+  canvas { width: 100%; aspect-ratio: 2 / 1; display: block; border-radius: 6px; }
+</style>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.170.0/build/three.module.js"}}</script>
+</head>
+<body>
+<h2>Particles or shader? Both running on your illustration</h2>
+<p class="sub">Quick prototypes in plain three.js (the real one will be R3F). Laptop screen is kept crisp in both. Watch for 10 seconds, then click the one you prefer, or tell me in the terminal.</p>
+
+<div class="panel" data-choice="particles" onclick="pick(this)">
+  <h3>A · Brush-stroke particles</h3>
+  <canvas id="p"></canvas>
+  <p>Instanced strokes in three passes (broad underpainting → medium → fine detail where the image is busy). Each stroke takes its colour from the illustration with slight broken-colour jitter and follows the contours. Strokes breathe in the wind, more in the bamboo.</p>
+</div>
+
+<div class="panel" data-choice="shader" onclick="pick(this)">
+  <h3>B · Painterly shader</h3>
+  <canvas id="s"></canvas>
+  <p>One full-screen fragment shader: Kuwahara filter (flattens areas into paint patches), stroke texture aligned to the image gradient, canvas grain, and a slow noise warp so it shimmers.</p>
+</div>
+
+<script>
+function pick(el){ document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('selected', p===el)); window.brainstorm && window.brainstorm.send({type:'click',choice:el.dataset.choice,text:el.querySelector('h3').textContent}); }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const W = 1200, H = 600;
+// Laptop screen corners in the 1774x887 original, scaled to 1200x600.
+const k = W / 1774;
+const SCREEN = [[1204,374],[1517,390],[1494,597],[1181,563]].map(([x,y])=>[x*k,y*k]);
+
+const img = await new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.src = '/files/current.jpg'; });
+const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(img, 0, 0, W, H);
+const px = cx.getImageData(0, 0, W, H).data;
+const bl = document.createElement('canvas'); bl.width = W; bl.height = H;
+const bx = bl.getContext('2d', { willReadFrequently: true }); bx.filter = 'blur(3px)'; bx.drawImage(img, 0, 0, W, H);
+const bpx = bx.getImageData(0, 0, W, H).data;
+const lum = (d, x, y) => { x = Math.max(0, Math.min(W-1, x|0)); y = Math.max(0, Math.min(H-1, y|0)); const i = (y*W+x)*4; return (d[i]*.3 + d[i+1]*.59 + d[i+2]*.11) / 255; };
+const col = (x, y) => { const i = ((y|0)*W + (x|0))*4; return [px[i]/255, px[i+1]/255, px[i+2]/255]; };
+function grad(x, y, r) { const gx = lum(bpx,x+r,y) - lum(bpx,x-r,y); const gy = lum(bpx,x,y+r) - lum(bpx,x,y-r); return [gx, gy]; }
+
+function makeRenderer(canvas) {
+  const r = new THREE.WebGLRenderer({ canvas, antialias: true });
+  r.setPixelRatio(Math.min(devicePixelRatio, 2)); r.outputColorSpace = THREE.LinearSRGBColorSpace;
+  const fit = () => { const w = canvas.clientWidth; r.setSize(w, w/2, false); };
+  fit(); addEventListener('resize', fit);
+  return r;
+}
+const cam = new THREE.OrthographicCamera(0, W, 0, H, -1, 1); // y down, like image space
+const screenShape = new THREE.Shape(SCREEN.map(([x,y]) => new THREE.Vector2(x, y)));
+const sc = col((SCREEN[0][0]+SCREEN[2][0])/2, (SCREEN[0][1]+SCREEN[2][1])/2);
+
+// ---------- A: particles ----------
+{
+  const r = makeRenderer(document.getElementById('p'));
+  const scene = new THREE.Scene();
+  const bgTex = new THREE.CanvasTexture((() => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d'); g.filter = 'blur(10px)'; g.drawImage(img, 0, 0, W, H); return c; })());
+  const bg = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: bgTex, side: THREE.DoubleSide }));
+  bg.position.set(W/2, H/2, 0); bg.scale.y = -1; scene.add(bg);
+
+  const off = [], colr = [], ang = [], size = [], seed = [];
+  const add = (x, y, len, wid) => {
+    const [gx, gy] = grad(x, y, 3);
+    const a = Math.atan2(gy, gx) + Math.PI/2 + (Math.random()-.5)*.35;
+    const c = col(x, y); const j = (Math.random()-.5)*.10;
+    off.push(x, y); colr.push(c[0]+j+.02*(Math.random()-.5), c[1]+j, c[2]+j+.03*(Math.random()-.5)); ang.push(a); size.push(len, wid); seed.push(Math.random());
+  };
+  const pass = (step, len, wid, thresh) => {
+    for (let y = 0; y < H; y += step) for (let x = 0; x < W; x += step) {
+      const sx = Math.min(W-1, x + Math.random()*step), sy = Math.min(H-1, y + Math.random()*step);
+      const [gx, gy] = grad(sx, sy, 2); const m = Math.hypot(gx, gy);
+      if (m >= thresh) add(sx, sy, len*(.7+Math.random()*.6), wid*(.7+Math.random()*.5));
+    }
+  };
+  pass(9, 26, 9, 0);
+  pass(5, 14, 5, .025);
+  pass(2.6, 7, 2.6, .07);
+  const n = seed.length;
+
+  const base = new THREE.PlaneGeometry(1, 1);
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.index = base.index; geo.attributes.position = base.attributes.position; geo.attributes.uv = base.attributes.uv;
+  geo.setAttribute('aOff', new THREE.InstancedBufferAttribute(new Float32Array(off), 2));
+  geo.setAttribute('aCol', new THREE.InstancedBufferAttribute(new Float32Array(colr), 3));
+  geo.setAttribute('aAng', new THREE.InstancedBufferAttribute(new Float32Array(ang), 1));
+  geo.setAttribute('aSize', new THREE.InstancedBufferAttribute(new Float32Array(size), 2));
+  geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(new Float32Array(seed), 1));
+  geo.instanceCount = n;
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide,
+    uniforms: { uTime: { value: 0 } },
+    vertexShader: `
+      attribute vec2 aOff; attribute vec3 aCol; attribute float aAng; attribute vec2 aSize; attribute float aSeed;
+      uniform float uTime; varying vec2 vUv; varying vec3 vCol; varying float vSeed;
+      void main(){
+        // more wind in the upper right (bamboo), almost none on the engawa / laptop
+        float wind = smoothstep(0.55, 0.15, aOff.y/600.0) * smoothstep(0.35, 0.65, aOff.x/1200.0);
+        float sway = sin(uTime*1.1 + aOff.x*0.012 + aSeed*6.28) * (0.04 + 0.22*wind);
+        float a = aAng + sway;
+        vec2 p = position.xy * aSize;
+        p = mat2(cos(a), sin(a), -sin(a), cos(a)) * p;
+        vec2 drift = vec2(sin(uTime*0.7 + aSeed*20.0), cos(uTime*0.6 + aSeed*13.0)) * (0.4 + 3.0*wind);
+        gl_Position = projectionMatrix * vec4(aOff + p + drift, 0.0, 1.0);
+        vUv = uv; vCol = aCol; vSeed = aSeed;
+      }`,
+    fragmentShader: `
+      varying vec2 vUv; varying vec3 vCol; varying float vSeed;
+      float h(float x){ return fract(sin(x)*43758.5453); }
+      void main(){
+        vec2 q = vUv*2.0-1.0;
+        float taper = 1.0 - smoothstep(0.55, 1.0, abs(q.x));
+        float body = 1.0 - smoothstep(0.6 - 0.25*abs(q.x), 1.0, abs(q.y));
+        float bristle = 0.75 + 0.25*sin(q.y*18.0 + vSeed*60.0) * (0.6+0.4*sin(q.x*3.0+vSeed*9.0));
+        float a = taper*body*bristle;
+        if (a < 0.02) discard;
+        vec3 c = vCol * (0.92 + 0.12*bristle);
+        gl_FragColor = vec4(c, a*0.92);
+      }`,
+  });
+  const strokes = new THREE.Mesh(geo, mat); strokes.frustumCulled = false; scene.add(strokes);
+  const screen = new THREE.Mesh(new THREE.ShapeGeometry(screenShape), new THREE.MeshBasicMaterial({ color: new THREE.Color(...sc), side: THREE.DoubleSide, transparent: true, depthTest: false }));
+  screen.renderOrder = 2; scene.add(screen);
+  const t0 = performance.now();
+  r.setAnimationLoop(() => { mat.uniforms.uTime.value = (performance.now()-t0)/1000; r.render(scene, cam); });
+  document.querySelector('[data-choice=particles] p').textContent += ` (${n.toLocaleString()} strokes)`;
+}
+
+// ---------- B: shader ----------
+{
+  const r = makeRenderer(document.getElementById('s'));
+  const scene = new THREE.Scene();
+  const tex = new THREE.Texture(img); tex.flipY = false; tex.needsUpdate = true;
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    uniforms: { uTex: { value: tex }, uTime: { value: 0 }, uRes: { value: new THREE.Vector2(W, H) },
+      uS: { value: SCREEN.map(([x,y]) => new THREE.Vector2(x/W, y/H)) } },
+    vertexShader: `varying vec2 vUv; void main(){ vUv = vec2(uv.x, 1.0-uv.y); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `
+      uniform sampler2D uTex; uniform float uTime; uniform vec2 uRes; uniform vec2 uS[4]; varying vec2 vUv;
+      float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+      float noise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+        return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
+      float cross2(vec2 a, vec2 b){ return a.x*b.y-a.y*b.x; }
+      bool inScreen(vec2 p){ float s=0.0; bool ok=true;
+        for(int i=0;i<4;i++){ vec2 a=uS[i], b=uS[(i+1)%4]; float c=cross2(b-a,p-a); if(i==0) s=sign(c); else if(sign(c)!=s) ok=false; } return ok; }
+      vec3 tx(vec2 uv){ return texture2D(uTex, uv).rgb; }
+      void main(){
+        vec2 uv = vUv;
+        if (inScreen(uv)) { gl_FragColor = vec4(tx(uv),1.0);
+        return; }
+        vec2 px = 1.0/uRes;
+        vec2 w = vec2(noise(uv*5.0 + uTime*0.12), noise(uv*5.0 + 9.3 - uTime*0.1)) - 0.5;
+        uv += w * 0.006;
+        const int R = 5;
+        vec3 m[4]; vec3 s[4];
+        for (int k=0;k<4;k++){ m[k]=vec3(0); s[k]=vec3(0); }
+        for (int j=-R;j<=0;j++) for (int i=-R;i<=0;i++){
+          vec3 c;
+          c=tx(uv+vec2(i,j)*px*1.4); m[0]+=c; s[0]+=c*c;
+          c=tx(uv+vec2(-i,j)*px*1.4); m[1]+=c; s[1]+=c*c;
+          c=tx(uv+vec2(i,-j)*px*1.4); m[2]+=c; s[2]+=c*c;
+          c=tx(uv+vec2(-i,-j)*px*1.4); m[3]+=c; s[3]+=c*c;
+        }
+        float n = float((R+1)*(R+1)); float best = 1e9; vec3 col = vec3(0);
+        for (int k=0;k<4;k++){ vec3 mm = m[k]/n; vec3 v = abs(s[k]/n - mm*mm); float sv = v.r+v.g+v.b; if (sv<best){ best=sv; col=mm; } }
+        // stroke texture along contours
+        float l0 = dot(tx(uv), vec3(.3,.59,.11));
+        vec2 g = vec2(dot(tx(uv+vec2(3,0)*px)-tx(uv-vec2(3,0)*px), vec3(.3,.59,.11)), dot(tx(uv+vec2(0,3)*px)-tx(uv-vec2(0,3)*px), vec3(.3,.59,.11)));
+        float a = atan(g.y, g.x) + 1.5708;
+        vec2 ruv = mat2(cos(a), -sin(a), sin(a), cos(a)) * (uv*uRes);
+        float st = noise(ruv*vec2(0.08, 0.6));
+        col *= 0.93 + 0.14*st;
+        col *= 0.96 + 0.06*noise(vUv*uRes*0.7); // canvas grain
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  });
+  const q = new THREE.Mesh(new THREE.PlaneGeometry(W, H), mat); q.position.set(W/2, H/2, 0); q.scale.y = -1; scene.add(q);
+  const t0 = performance.now();
+  r.setAnimationLoop(() => { mat.uniforms.uTime.value = (performance.now()-t0)/1000; r.render(scene, cam); });
+}
+</script>
+</body>
+</html>

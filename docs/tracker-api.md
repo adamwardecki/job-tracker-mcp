@@ -308,9 +308,22 @@ reuses the board named in `board.json` next to the database while that process i
 | `POST /api/move` | `{role_id, to, reason?, evidence?, outcome?}` | `{role, from, to}`, or 400 with the status machine's message. Without a reason the event says "Moved on the board" |
 | `POST /api/note` | `{role_id, reason}` | `{role}`: the user's own reason for a move, recorded as a note (no status change) |
 
+## Application preference
+
+`save_config` with `section: "autonomy"` accepts `auto_apply` (boolean, default `false`). It is stored
+in the existing SQLite profile section and returned by `get_profile`; no database migration is needed.
+Setup saves it only after the user's explicit choice. Existing profiles without the field remain in
+review-first mode. Legacy `unattended` lists cannot enable submission.
+
+The shared Claude Code, Hermes and DeepSeek submit hook reads this preference before each attempt.
+With `true`, the current application URL must identify exactly one tracked role, which must pass
+`gate_check`, have a score, be queued, and have no question on its latest queued event. Missing,
+malformed or unreachable tracker data cannot enable automatic submission. Consent, personal-data,
+send and delete gates still apply separately. Disabling the preference takes effect in running sessions.
+
 ## Session approvals (hooks, not tools)
 
-Approvals come only from a standalone command in the user's own prompt, never from a command mention
+With auto-apply off, approvals come only from a standalone command in the user's own prompt, never from a command mention
 or tool call. The `UserPromptSubmit` hook recognises `/job-tracker:approve <role_id>` (or `/approve
 <role_id>`) and stores a one-use approval for that role, browser page and tab in the session state at
 `$JOB_TRACKER_HOME/sessions/<session_id>.json`. The submit-click hook requires an exact target match and
