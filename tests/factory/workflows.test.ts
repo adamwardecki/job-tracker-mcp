@@ -245,3 +245,13 @@ test('the CI log goes in a tilde fence that backticks in the log cannot close', 
   assert.ok(stage.includes(`{ echo '~~~~~~'; gh run view "$run_id" --log-failed | tail -n 300; echo '~~~~~~'; } >> .factory/context.md`));
   assert.ok(!stage.includes('```'));
 });
+
+test('a failed stage prints Claude\'s error only when the run never reached the model', () => {
+  const stage = read('.github/workflows/factory-stage.yml');
+  const step = stage.slice(stage.indexOf('- name: Show why Claude stopped before starting'));
+  assert.match(step, /if: failure\(\)/);
+  // A run that made a model call can quote issue text or code; the log is public.
+  assert.match(step, /\(\.total_cost_usd \/\/ 0\) == 0/);
+  assert.match(step, /\(\.modelUsage \/\/ \{\} \| length\) == 0/);
+  assert.doesNotMatch(stage, /show_full_output/);
+});
