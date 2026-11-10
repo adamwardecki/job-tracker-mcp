@@ -1,0 +1,61 @@
+name: factory-router
+
+# Moves labelled issues through the agent factory. See docs/factory.md.
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  pull_request_target:
+    types: [closed]
+  workflow_run:
+    workflows: [CI, factory-plan, factory-build, factory-review, factory-fix]
+    types: [completed]
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  route:
+    # The maintainer's own actions, finished runs and the sweep wake the router. Comments and labels from the
+    # factory's agents would otherwise queue runs that push real events out of the concurrency group.
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_run' || github.actor == 'adamwardecki'
+    concurrency:
+      group: factory-router
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # main's router, also for pull request events.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+      # Dispatches use the App token, so the stage runs report back through workflow_run. Labels and comments use
+      # GITHUB_TOKEN, so they do not wake the router again.
+      - id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.FACTORY_APP_ID }}
+          private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
+          permission-actions: write
+      - run: node --no-warnings factory/main.ts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FACTORY_DISPATCH_TOKEN: ${{ steps.app.outputs.token }}
+          FACTORY_BOT_LOGIN: ${{ vars.FACTORY_APP_SLUG }}[bot]
+          FACTORY_DRY_RUN: ${{ vars.FACTORY_DRY_RUN }}

@@ -1,0 +1,31 @@
+name: factory-review
+run-name: 'factory-review #${{ inputs.issue }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  stage:
+    uses: ./.github/workflows/factory-stage.yml
+    secrets: inherit
+    with:
+      stage: review
+      issue: ${{ inputs.issue }}
+      model: claude-opus-5-5
+      max_turns: '60'
+      timeout: 20
+      contents: read
+      issues: ''
+      pull_requests: write
+      allowed_tools: 'Read,Grep,Glob,Write,Skill,Agent,Bash(git diff:*),Bash(git log:*),Bash(git rev-parse:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*)'

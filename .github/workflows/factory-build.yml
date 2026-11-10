@@ -1,0 +1,31 @@
+name: factory-build
+run-name: 'factory-build #${{ inputs.issue }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  stage:
+    uses: ./.github/workflows/factory-stage.yml
+    secrets: inherit
+    with:
+      stage: build
+      issue: ${{ inputs.issue }}
+      model: claude-sonnet-5-5
+      max_turns: '150'
+      timeout: 45
+      contents: write
+      issues: ''
+      pull_requests: write
+      allowed_tools: 'Read,Grep,Glob,Edit,Write,Skill,Agent,Bash(git:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(npm run setup),Bash(npm test),Bash(npm run test:node),Bash(npm run typecheck),Bash(npm run lint),Bash(npm run lint:fix),Bash(npm --prefix dev exec --no -- biome ci .),Bash(node --no-warnings --test:*),Bash(claude plugin validate:*)'
