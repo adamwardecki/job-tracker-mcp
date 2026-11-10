@@ -98,8 +98,12 @@ For build, review and fix, also write `.factory/context.md` (and, for a CI round
 - The App has no `workflows` permission, so agents cannot push changes under `.github/workflows/`.
 - `main` requires an approving review, so the bot cannot merge its own PR.
 - Each stage gets only `FACTORY_APP_PRIVATE_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Build, review and fix run with
-  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` (each wrapper's `scrub_env`), so the commands the agent runs don't see the
-  action's credentials.
+  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` (each wrapper's `scrub_env`), which hides the OAuth token and similar secrets
+  in the action's environment from the commands the agent runs. It does not hide the git credentials build and fix
+  push with: the checkout keeps those in git's config, and the branch ruleset (Setup step 5) limits where they reach.
+  Plan and review never push, so their checkout keeps no git credentials.
+- The App's contents permission covers every branch and tag. The rulesets in Setup step 5 limit its pushes to
+  `factory/issue-*` branches and keep it from creating tags.
 
 ## Setup (once)
 
@@ -115,9 +119,16 @@ For build, review and fix, also write `.factory/context.md` (and, for a CI round
    - dismiss stale approvals when new commits are pushed;
    - require approval of the most recent push;
    - restrict who can push to `main`.
-
-   Better still, add a ruleset that lets the App push only to `factory/*` branches.
-5. **Labels:**
+5. **Rulesets (required).** Without them the App, and so any build or fix agent, can push to any branch and create
+   tags. In Settings → Rules → Rulesets:
+   - **New branch ruleset**, named `factory: App pushes only factory branches`. Enforcement status: Active. Bypass
+     list: Repository admin (you), set to Always allow. Target branches: Include all branches, then Exclude by
+     pattern `factory/issue-*`. Rules: Restrict creations, Restrict updates and Restrict deletions. Create.
+   - **New tag ruleset**, named `factory: no tags from the App`. Enforcement status: Active. Bypass list: Repository
+     admin, and the GitHub Actions app (`release.yml` creates the release tag with `GITHUB_TOKEN`). Target tags:
+     Include all tags. Rules: Restrict creations, Restrict updates and Restrict deletions. Create.
+   - Check that both are active: `gh api repos/adamwardecki/job-tracker-mcp/rulesets --jq '.[] | .name + ": " + .enforcement'`.
+6. **Labels:**
 
    ```bash
    for s in queued planning awaiting-approval building ci in-review fixing ready blocked; do
@@ -126,10 +137,10 @@ For build, review and fix, also write `.factory/context.md` (and, for a CI round
    for l in needs-triage needs-info ready-for-agent ready-for-human; do gh label create "$l" --force; done
    ```
 
-6. **Matt Pocock's skills:** open Claude Code in the repo and accept the `mattpocock` marketplace from
+7. **Matt Pocock's skills:** open Claude Code in the repo and accept the `mattpocock` marketplace from
    `.claude/settings.json`, then run `/mattpocock-skills:setup-matt-pocock-skills` (issue tracker: GitHub; the
    triage labels above; domain docs as it suggests). Commit what it writes.
-7. **Key rotation:** if a run looks compromised, rotate both secrets. Generate a new private key in the App's
+8. **Key rotation:** if a run looks compromised, rotate both secrets. Generate a new private key in the App's
    settings, update `FACTORY_APP_PRIVATE_KEY` and delete the old key there. Run `claude setup-token` for a new
    `CLAUDE_CODE_OAUTH_TOKEN` and update the secret.
 
@@ -146,6 +157,10 @@ Check these on the first runs:
 - The App-dispatched stage runs wake the router through `workflow_run`. If they don't, the sweep still moves the
   issue within 30 minutes.
 - `gh` inside the agent uses the App token.
+- The branch ruleset rejects a push by the App to any branch but `factory/issue-*`, and the tag ruleset rejects a tag
+  from it but lets `release.yml` create the release tag.
+- Plan and review run without git credentials (`persist-credentials` is off for them), and the review job still
+  switches to the PR branch, from the refs the checkout fetched.
 - Claude Code accepts the scoped rules in `--allowedTools` (`Read(./**)`, `Edit(./.factory/**)`): the planner and
   the reviewer can write their drafts under `.factory/` and nothing else, and every stage can still read the whole
   repo. Builder and fixer read `tdd`'s `tests.md` and `mocking.md` from `.factory/mp/tdd/`.
@@ -154,7 +169,8 @@ Check these on the first runs:
 - The build agent cannot run `gh issue view`: its tool allowlist has no `gh issue` command. Its token has no issues
   permission, but an installation token can likely still read a public repo's issues, so the allowlist is the guard.
 - `markPullRequestReadyForReview` works with `GITHUB_TOKEN`.
-- Installing `mattpocock-skills` from `.claude/settings.json` accepts a commit SHA as `ref` (if not, pin a tag).
+- Installing `mattpocock-skills` from `.claude/settings.json` accepts a commit SHA as `ref`. If not, pin a tag, and
+  relax the pin test in `tests/factory/workflows.test.ts`, which accepts only a commit SHA.
 - The prompt `/factory-plan 12` invokes the project skill with `12` as `$ARGUMENTS`.
 - The project marketplace `mattpocock` in `.claude/settings.json` and the action's local marketplace of the same name
   don't conflict.

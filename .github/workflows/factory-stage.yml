@@ -47,7 +47,7 @@ jobs:
           [[ "$APP_SLUG" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo '::error::FACTORY_APP_SLUG must be the App slug'; exit 1; }
 
       - id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ vars.FACTORY_APP_ID }}
           private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
@@ -56,18 +56,21 @@ jobs:
           permission-pull-requests: ${{ inputs.pull_requests }}
 
       # main's checkout: the context builder, the skills pin and the dev tools come from here, never from the PR branch.
-      - uses: actions/checkout@v7
+      # Plan and review never push, so git keeps no credentials for them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
           token: ${{ steps.app.outputs.token }}
+          persist-credentials: ${{ inputs.stage == 'build' || inputs.stage == 'fix' }}
 
       # No npm cache: a cache saved here would be in main's scope, which release.yml restores.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.x
 
-      # The CI log comes only from the run the router recorded. A run looked up by branch name could be a fork's.
+      # The CI log comes only from the run the router recorded. A run looked up by branch name could be a fork's. The
+      # fence is six tildes, so a log line of backticks cannot close it.
       - name: Build the stage context
         if: inputs.stage != 'plan'
         env:
@@ -82,7 +85,7 @@ jobs:
           if [[ -f .factory/ci-run-id ]]; then
             run_id=$(cat .factory/ci-run-id)
             [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::bad ci-run-id: $run_id"; exit 1; }
-            { echo '```'; gh run view "$run_id" --log-failed | tail -n 300; echo '```'; } >> .factory/context.md
+            { echo '~~~~~~'; gh run view "$run_id" --log-failed | tail -n 300; echo '~~~~~~'; } >> .factory/context.md
           fi
 
       - name: Read the skills pin
@@ -122,7 +125,7 @@ jobs:
           head=$(git rev-parse HEAD)
           [[ "$head" == "$gated" ]] || { echo "::error::the PR head $head is not the head the router checked ($gated)"; exit 1; }
 
-      - uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1
+      - uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1.0.271
         env:
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: ${{ inputs.scrub_env }}
         with:

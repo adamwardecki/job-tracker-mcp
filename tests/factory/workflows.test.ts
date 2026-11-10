@@ -83,15 +83,17 @@ test('the stages that run code scrub its environment', () => {
   assert.ok(read('.github/workflows/factory-stage.yml').includes(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: \${{ inputs.scrub_env }}`));
 });
 
-test('the third-party actions are pinned to a commit', () => {
+test('every action is pinned to a commit, with its exact version alongside', () => {
   let seen = 0;
   for (const f of WORKFLOWS) {
-    for (const m of read(f).matchAll(/uses: ((?:anthropics\/claude-code-action|actions\/create-github-app-token)@\S+)/g)) {
+    for (const m of read(f).matchAll(/uses: (\S+)(.*)$/gm)) {
+      if (m[1] === './.github/workflows/factory-stage.yml') continue;
       seen++;
-      assert.match(m[1] ?? '', /@[0-9a-f]{40}$/, `${f}: ${m[1]}`);
+      assert.match(m[1] ?? '', /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${f}: ${m[1]}`);
+      assert.match(m[2] ?? '', /^ # v\d+\.\d+\.\d+$/, `${f}: ${m[1]} names its version`);
     }
   }
-  assert.equal(seen, 3, 'the stage\'s two actions and the router\'s token');
+  assert.equal(seen, 7, 'the router\'s checkout, setup-node and token; the stage\'s token, checkout, setup-node and claude-code-action');
 });
 
 test('the stage checks the factory variables before using them', () => {
@@ -114,7 +116,8 @@ test('the skills pin is a repo and a ref', () => {
   const settings = JSON.parse(read('.claude/settings.json'));
   const source = settings.extraKnownMarketplaces.mattpocock.source;
   assert.equal(source.repo, 'mattpocock/skills');
-  assert.match(source.ref, /^([0-9a-f]{40}|v?\d+\.\d+\.\d+)$/);
+  // A tag can be moved; a commit cannot.
+  assert.match(source.ref, /^[0-9a-f]{40}$/);
   assert.equal(settings.enabledPlugins['mattpocock-skills@mattpocock'], true);
 });
 
@@ -193,4 +196,52 @@ test('review and fix run only on the PR head the router checked', () => {
   assert.ok(stage.includes('gated=$(cat .factory/head-sha)'));
   assert.ok(stage.includes('head=$(git rev-parse HEAD)'));
   assert.ok(stage.indexOf('factory/stage-context.ts') < sw, 'head-sha is written from main before the switch');
+});
+
+// The router's job condition, as one line.
+const routerIf = () => (/^ {4}if: >-\n((?: {6}.*\n)+)/m.exec(read('.github/workflows/factory-router.yml'))?.[1] ?? '').replace(/\s+/g, ' ').trim();
+
+test('the router wakes only for events it can act on', () => {
+  const cond = routerIf();
+  const clauses = [
+    "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'",
+    "(github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository && (github.event.workflow_run.name != 'CI' || startsWith(github.event.workflow_run.head_branch, 'factory/issue-')))",
+    "(github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/') && github.actor == 'adamwardecki')",
+    "(github.event_name == 'issues' && github.event.label.name == 'agent:queued' && github.actor == 'adamwardecki')",
+    "(github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested' && github.actor == 'adamwardecki' && github.event.pull_request.head.repo.full_name == github.repository)",
+    "(github.event_name == 'pull_request_target' && startsWith(github.event.pull_request.head.ref, 'factory/issue-') && github.event.pull_request.head.repo.full_name == github.repository)",
+  ];
+  assert.equal(cond, clauses.join(' || '));
+});
+
+test('only build and fix keep git credentials; the router keeps none', () => {
+  assert.match(read('.github/workflows/factory-router.yml'), /ref: main\n {10}persist-credentials: false\n/);
+  const stage = read('.github/workflows/factory-stage.yml');
+  assert.ok(stage.includes(`token: \${{ steps.app.outputs.token }}\n          persist-credentials: \${{ inputs.stage == 'build' || inputs.stage == 'fix' }}\n`));
+});
+
+test('the skills pin and the stage context are read from main, before the switch to the PR branch', () => {
+  const stage = read('.github/workflows/factory-stage.yml');
+  const sw = stage.indexOf('git checkout "factory/issue-$ISSUE"');
+  for (const step of ['Read the skills pin', 'Fetch Matt Pocock\'s skills at the pin', 'Build the stage context']) {
+    const at = stage.indexOf(`- name: ${step}`);
+    assert.ok(at > stage.indexOf('ref: main') && at < sw, step);
+  }
+});
+
+test('the stage job\'s GITHUB_TOKEN only reads', () => {
+  const stage = read('.github/workflows/factory-stage.yml');
+  const block = /^ {4}permissions:\n((?: {6}.*\n)+)/m.exec(stage)?.[1] ?? '';
+  const perms = block.trim().split('\n').map((l) => l.trim());
+  assert.deepEqual(perms, ['contents: read', 'issues: read', 'pull-requests: read', 'actions: read']);
+  for (const wf of STAGE_WORKFLOWS) {
+    const top = /^permissions:\n((?: {2}.*\n)+)/m.exec(read(`.github/workflows/factory-${wf}.yml`))?.[1] ?? '';
+    for (const l of top.trim().split('\n')) assert.match(l.trim(), /^[a-z-]+: read$/, `${wf}: ${l}`);
+  }
+});
+
+test('the CI log goes in a tilde fence that backticks in the log cannot close', () => {
+  const stage = read('.github/workflows/factory-stage.yml');
+  assert.ok(stage.includes(`{ echo '~~~~~~'; gh run view "$run_id" --log-failed | tail -n 300; echo '~~~~~~'; } >> .factory/context.md`));
+  assert.ok(!stage.includes('```'));
 });

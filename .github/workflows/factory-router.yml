@@ -26,13 +26,20 @@ permissions:
 
 jobs:
   route:
-    # The maintainer's own actions, finished runs and the sweep wake the router. Comments and labels from the
-    # factory's agents would otherwise queue runs that push real events out of the concurrency group. Runs from
-    # forks never count (main.ts checks again), so they must not take a place in the group either.
+    # Only events the router can act on wake it: anything else queues a run that pushes a real event out of the
+    # concurrency group. So: stage runs, and CI on factory branches, from this repo; the maintainer's slash commands,
+    # agent:queued labels and change requests; closes of factory PRs from this repo. main.ts checks each again, and
+    # the sweep picks up what this misses (a command after leading whitespace, say).
     if: >-
       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository) ||
-      (github.event_name != 'workflow_run' && github.actor == 'adamwardecki')
+      (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository &&
+      (github.event.workflow_run.name != 'CI' || startsWith(github.event.workflow_run.head_branch, 'factory/issue-'))) ||
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/') && github.actor == 'adamwardecki') ||
+      (github.event_name == 'issues' && github.event.label.name == 'agent:queued' && github.actor == 'adamwardecki') ||
+      (github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested' &&
+      github.actor == 'adamwardecki' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'pull_request_target' && startsWith(github.event.pull_request.head.ref, 'factory/issue-') &&
+      github.event.pull_request.head.repo.full_name == github.repository)
     concurrency:
       group: factory-router
       cancel-in-progress: false
@@ -40,17 +47,17 @@ jobs:
     timeout-minutes: 10
     steps:
       # main's router, also for pull request events.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.x
       # Dispatches use the App token, so the stage runs report back through workflow_run. Labels and comments use
       # GITHUB_TOKEN, so they do not wake the router again.
       - id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ vars.FACTORY_APP_ID }}
           private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
