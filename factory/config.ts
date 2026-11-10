@@ -50,6 +50,8 @@ export function issueForBranch(branch: string): number | null {
 }
 
 export const MAX_ROUNDS = 3;
+// Rebases in a row (ready → fixer → ready) before the factory stops; a rebase that never clears the conflict loops.
+export const MAX_REBASES = 2;
 export const MAX_ATTEMPTS = 2;
 export const RETRY_AFTER_MS = 60 * 60 * 1000;
 export const STUCK_AFTER_MS = 90 * 60 * 1000;

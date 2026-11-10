@@ -24,6 +24,7 @@ export function runFrom(r: unknown, workflow: StageWorkflow | 'ci'): RunSnapshot
     conclusion: str(dig(r, 'conclusion')) || null,
     headSha: str(dig(r, 'head_sha')),
     url: str(dig(r, 'html_url')),
+    createdAt: str(dig(r, 'created_at')) || null,
     completedAt: dig(r, 'status') === 'completed' ? str(dig(r, 'updated_at')) || null : null,
   };
 }

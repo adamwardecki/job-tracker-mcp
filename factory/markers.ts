@@ -7,6 +7,10 @@ import { STAGES, type Stage } from './config.ts';
 export const FIX_REASONS = ['ci', 'review', 'maintainer', 'rebase'] as const;
 export type FixReason = (typeof FIX_REASONS)[number];
 
+// Why an issue is blocked; /retry picks its way back in from this. 'human' is a planner that asked for one.
+export const BLOCK_REASONS = ['rounds', 'rebases', 'attempts', 'stuck', 'stop', 'human'] as const;
+export type BlockReason = (typeof BLOCK_REASONS)[number];
+
 export const COMMANDS = ['approve', 'stop', 'retry'] as const;
 export type Command = (typeof COMMANDS)[number];
 
@@ -20,6 +24,8 @@ export type FactoryState = {
   brief?: number; // comment id of the brief the later stages work from
   approvalFor?: 'plan' | 'diff';
   blockedFrom?: Stage;
+  blockedFor?: BlockReason;
+  rebases?: number; // rebases since the PR last reached ready any other way (MAX_REBASES)
   headSha?: string; // PR head when the fixer was dispatched; unchanged after it means it pushed nothing
   fixReason?: FixReason;
   runs: string[];
@@ -52,10 +58,12 @@ export function renderState(s: FactoryState): string {
 // Counters and ids are whole numbers; a fractional or negative one means the comment was not written by renderState.
 const count = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 const id = (v: unknown): v is number => count(v) && v > 0;
+const isTime = (v: unknown): v is string => typeof v === 'string' && !Number.isNaN(Date.parse(v));
 
 export function parseState(body: string): FactoryState | null {
   const v = json(STATE_RE, body);
-  if (!isRecord(v) || !oneOf(STAGES, v.stage) || typeof v.since !== 'string') return null;
+  // Every age check reads since; one that does not parse would leave the issue never retried and never stuck.
+  if (!isRecord(v) || !oneOf(STAGES, v.stage) || !isTime(v.since)) return null;
   if (!count(v.round) || !count(v.attempts) || !Array.isArray(v.runs)) return null;
   const s: FactoryState = {
     stage: v.stage,
@@ -64,11 +72,13 @@ export function parseState(body: string): FactoryState | null {
     attempts: v.attempts,
     runs: v.runs.filter((r): r is string => typeof r === 'string'),
   };
-  if (typeof v.failedAt === 'string') s.failedAt = v.failedAt;
+  if (isTime(v.failedAt)) s.failedAt = v.failedAt;
   if (id(v.pr)) s.pr = v.pr;
   if (id(v.brief)) s.brief = v.brief;
   if (v.approvalFor === 'plan' || v.approvalFor === 'diff') s.approvalFor = v.approvalFor;
   if (oneOf(STAGES, v.blockedFrom)) s.blockedFrom = v.blockedFrom;
+  if (oneOf(BLOCK_REASONS, v.blockedFor)) s.blockedFor = v.blockedFor;
+  if (count(v.rebases)) s.rebases = v.rebases;
   if (typeof v.headSha === 'string') s.headSha = v.headSha;
   if (oneOf(FIX_REASONS, v.fixReason)) s.fixReason = v.fixReason;
   return s;

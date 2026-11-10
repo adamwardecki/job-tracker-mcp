@@ -42,20 +42,21 @@ test('a changes-requested review on a factory branch', () => {
 });
 
 test('a closed factory PR', () => {
-  const { event } = build('pull_request_target', { action: 'closed', pull_request: { head: { ref: 'factory/issue-7' } } });
-  assert.deepEqual(event, { kind: 'pr-closed', issue: 7 });
+  const { event } = build('pull_request_target', { action: 'closed', pull_request: { number: 51, head: { ref: 'factory/issue-7' } } });
+  assert.deepEqual(event, { kind: 'pr-closed', issue: 7, pr: 51 });
+  assert.equal(parseEvent('pull_request_target', { action: 'closed', pull_request: { head: { ref: 'factory/issue-7' } } }), null);
 });
 
 test('a finished CI run on a factory branch', () => {
   const { target, event } = build('workflow_run', {
     action: 'completed',
-    workflow_run: { name: 'CI', head_branch: 'factory/issue-7', head_sha: 'sha-1', html_url: 'https://example.test/r/1', conclusion: 'failure', status: 'completed', updated_at: '2026-11-09T11:30:00Z' },
+    workflow_run: { name: 'CI', head_branch: 'factory/issue-7', head_sha: 'sha-1', html_url: 'https://example.test/r/1', conclusion: 'failure', status: 'completed', created_at: '2026-11-09T11:20:00Z', updated_at: '2026-11-09T11:30:00Z' },
   });
   assert.deepEqual(target, { issue: 7 });
   assert.deepEqual(event, {
     kind: 'run-finished',
     issue: 7,
-    run: { workflow: 'ci', conclusion: 'failure', headSha: 'sha-1', url: 'https://example.test/r/1', completedAt: '2026-11-09T11:30:00Z' },
+    run: { workflow: 'ci', conclusion: 'failure', headSha: 'sha-1', url: 'https://example.test/r/1', createdAt: '2026-11-09T11:20:00Z', completedAt: '2026-11-09T11:30:00Z' },
   });
 });
 

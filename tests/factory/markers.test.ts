@@ -22,6 +22,23 @@ const STATE: FactoryState = {
   runs: ['https://example.test/runs/1'],
 };
 
+const marker = (v: Record<string, unknown>) => `<!-- factory:state ${JSON.stringify({ stage: 'ci', since: '2026-11-09T11:00:00.000Z', round: 0, attempts: 0, runs: [], ...v })} -->`;
+
+test('blocked states round-trip with their reason and rebase count', () => {
+  const blocked: FactoryState = { ...STATE, stage: 'blocked', blockedFrom: 'ready', blockedFor: 'rebases', rebases: 2 };
+  assert.deepEqual(parseState(renderState(blocked)), blocked);
+  const odd = parseState(marker({ blockedFor: 'boredom', rebases: -1 }));
+  assert.equal(odd?.blockedFor, undefined);
+  assert.equal(odd?.rebases, undefined);
+});
+
+test('a state whose since is not a time is rejected; an unreadable failedAt is dropped', () => {
+  // A since that does not parse would make every age check NaN, and the issue would never retry or count as stuck.
+  assert.equal(parseState(marker({ since: 'yesterday' })), null);
+  assert.equal(parseState(marker({ failedAt: 'soon' }))?.failedAt, undefined);
+  assert.equal(parseState(marker({ failedAt: '2026-11-09T11:30:00Z' }))?.failedAt, '2026-11-09T11:30:00Z');
+});
+
 test('state comments round-trip', () => {
   const body = renderState(STATE);
   assert.match(body, /Factory: \*\*fixing\*\* · PR #51 · fix round 2/);
@@ -96,14 +113,14 @@ test('a full state round-trips', () => {
 });
 
 test('state JSON cannot close its own comment', () => {
-  const s = { ...STATE, since: 'x} -->' };
+  const s = { ...STATE, headSha: 'x} -->' };
   const body = renderState(s);
   assert.equal(body.indexOf('-->'), body.lastIndexOf('-->'));
   assert.deepEqual(parseState(body), s);
 });
 
 test('state counters must be integers in range', () => {
-  const base = { stage: 'ci', since: 'x', round: 0, attempts: 0, runs: [] };
+  const base = { stage: 'ci', since: '2026-11-09T11:00:00Z', round: 0, attempts: 0, runs: [] };
   const body = (v: object) => `<!-- factory:state ${JSON.stringify({ ...base, ...v })} -->`;
   assert.notEqual(parseState(body({})), null);
   for (const bad of [{ round: -1 }, { round: 1.5 }, { attempts: -1 }, { attempts: 1.5 }]) assert.equal(parseState(body(bad)), null, JSON.stringify(bad));

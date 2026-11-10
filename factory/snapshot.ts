@@ -8,6 +8,7 @@ import {
   type Gh,
   issueLabels,
   latestCiRun,
+  latestLabeler,
   latestStageRun,
   listComments,
   listReviews,
@@ -33,6 +34,9 @@ export async function load(gh: Gh, issue: number, bot: string): Promise<Loaded> 
   const [comments, labels] = await Promise.all([listComments(gh, issue), issueLabels(gh, issue)]);
   const found = stateFrom(comments);
   const state = found?.state ?? null;
+  // The timeline costs a call per page, and who queued an issue only matters while the label is on it.
+  const queued = stageLabel('queued');
+  const queuedBy = labels.includes(queued) ? await latestLabeler(gh, issue, queued) : null;
 
   // Briefs and reviews count only from the factory bot: anyone can comment on a public repo.
   const briefComment = comments.findLast((c) => c.author === bot && c.body.includes(BRIEF_MARKER));
@@ -50,7 +54,7 @@ export async function load(gh: Gh, issue: number, bot: string): Promise<Loaded> 
     .filter((c) => c.author === MAINTAINER)
     .flatMap((c) => {
       const command = parseCommand(c.body);
-      return command ? [{ command, at: c.at }] : [];
+      return command ? [{ command, at: c.at, actor: c.author }] : [];
     })
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
@@ -65,6 +69,7 @@ export async function load(gh: Gh, issue: number, bot: string): Promise<Loaded> 
       number: issue,
       state,
       labels,
+      queuedBy,
       brief,
       pr,
       review: reviewRow && verdict ? { blocking: verdict.blocking, at: reviewRow.at } : null,

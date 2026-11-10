@@ -64,6 +64,12 @@ export async function listReviews(gh: Gh, pr: number): Promise<Review[]> {
   }));
 }
 
+// Who last added the label, and when, from the issue timeline (oldest first). null if it was never added.
+export async function latestLabeler(gh: Gh, issue: number, label: string): Promise<{ login: string; at: string } | null> {
+  const row = (await paged(gh, `/repos/${gh.repo}/issues/${issue}/timeline`)).findLast((e) => dig(e, 'event') === 'labeled' && dig(e, 'label', 'name') === label);
+  return row ? { login: str(dig(row, 'actor', 'login')), at: str(dig(row, 'created_at')) } : null;
+}
+
 export async function issueLabels(gh: Gh, issue: number): Promise<string[]> {
   return rows(dig(await gh.call('GET', `/repos/${gh.repo}/issues/${issue}`), 'labels')).map((l) => str(dig(l, 'name')));
 }

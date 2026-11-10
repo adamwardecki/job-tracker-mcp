@@ -37,8 +37,9 @@ export function parseEvent(name: string, p: unknown): Parsed {
     }
     case 'pull_request_target': {
       const issue = issueForBranch(str(dig(p, 'pull_request', 'head', 'ref')));
-      if (action !== 'closed' || issue === null) return null;
-      return { target: { issue }, build: (n) => ({ kind: 'pr-closed', issue: n }) };
+      const pr = num(dig(p, 'pull_request', 'number'));
+      if (action !== 'closed' || issue === null || pr === null) return null;
+      return { target: { issue }, build: (n) => ({ kind: 'pr-closed', issue: n, pr }) };
     }
     case 'workflow_run': {
       if (action !== 'completed') return null;
