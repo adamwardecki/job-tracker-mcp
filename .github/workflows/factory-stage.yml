@@ -1,0 +1,143 @@
+name: factory-stage
+
+# One factory stage: an App token scoped to the stage, main's context and skills pin, then Claude Code running the
+# stage skill. Called by factory-plan/build/review/fix.yml. See docs/factory.md.
+
+on:
+  workflow_call:
+    inputs:
+      stage: { type: string, required: true }
+      issue: { type: string, required: true }
+      model: { type: string, required: true }
+      max_turns: { type: string, required: true }
+      timeout: { type: number, required: true }
+      allowed_tools: { type: string, required: true }
+      contents: { type: string, required: true }
+      issues: { type: string, required: true }
+      pull_requests: { type: string, required: true }
+      # '1' strips the action's credentials from the agent's subprocesses (tests, git, gh).
+      scrub_env: { type: string, required: false, default: '' }
+    secrets:
+      FACTORY_APP_PRIVATE_KEY: { required: true }
+      CLAUDE_CODE_OAUTH_TOKEN: { required: true }
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout }}
+    # GITHUB_TOKEN only reads: the context builder uses it. The agent gets the App token below.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+    steps:
+      - name: Check the issue number
+        env:
+          ISSUE: ${{ inputs.issue }}
+        run: '[[ "$ISSUE" =~ ^[0-9]+$ ]]'
+
+      # These name the bot to the action and to the context builder; a malformed value stops the run here.
+      - name: Check the factory variables
+        env:
+          BOT_ID: ${{ vars.FACTORY_BOT_ID }}
+          APP_SLUG: ${{ vars.FACTORY_APP_SLUG }}
+        run: |
+          [[ "$BOT_ID" =~ ^[0-9]+$ ]] || { echo '::error::FACTORY_BOT_ID must be the bot user id (digits only)'; exit 1; }
+          [[ "$APP_SLUG" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo '::error::FACTORY_APP_SLUG must be the App slug'; exit 1; }
+
+      - id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.FACTORY_APP_ID }}
+          private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
+          permission-contents: ${{ inputs.contents }}
+          permission-issues: ${{ inputs.issues }}
+          permission-pull-requests: ${{ inputs.pull_requests }}
+
+      # main's checkout: the context builder, the skills pin and the dev tools come from here, never from the PR branch.
+      # Plan and review never push, so git keeps no credentials for them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: ${{ inputs.stage == 'build' || inputs.stage == 'fix' }}
+
+      # No npm cache: a cache saved here would be in main's scope, which release.yml restores.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.x
+
+      # The CI log comes only from the run the router recorded. A run looked up by branch name could be a fork's. The
+      # fence is six tildes, so a log line of backticks cannot close it.
+      - name: Build the stage context
+        if: inputs.stage != 'plan'
+        env:
+          STAGE: ${{ inputs.stage }}
+          ISSUE: ${{ inputs.issue }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FACTORY_BOT_LOGIN: ${{ vars.FACTORY_APP_SLUG }}[bot]
+        run: |
+          node --no-warnings factory/stage-context.ts "$STAGE" "$ISSUE" .factory
+          if [[ -f .factory/ci-run-id ]]; then
+            run_id=$(cat .factory/ci-run-id)
+            [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::bad ci-run-id: $run_id"; exit 1; }
+            { echo '~~~~~~'; gh run view "$run_id" --log-failed | tail -n 300; echo '~~~~~~'; } >> .factory/context.md
+          fi
+
+      - name: Read the skills pin
+        id: pin
+        run: |
+          echo "repo=$(jq -r '.extraKnownMarketplaces.mattpocock.source.repo' .claude/settings.json)" >> "$GITHUB_OUTPUT"
+          echo "ref=$(jq -r '.extraKnownMarketplaces.mattpocock.source.ref' .claude/settings.json)" >> "$GITHUB_OUTPUT"
+
+      # The clone is outside the workspace. triage and implement cannot be called through the Skill tool
+      # (disable-model-invocation), so the stage skills read them from .factory/mp, which git ignores.
+      - name: Fetch Matt Pocock's skills at the pin
+        env:
+          REPO: ${{ steps.pin.outputs.repo }}
+          REF: ${{ steps.pin.outputs.ref }}
+        run: |
+          git clone --quiet "https://github.com/$REPO" "$RUNNER_TEMP/mp-skills"
+          git -C "$RUNNER_TEMP/mp-skills" checkout --quiet "$REF"
+          mkdir -p .factory
+          rm -rf .factory/mp
+          cp -R "$RUNNER_TEMP/mp-skills/skills/engineering" .factory/mp
+
+      # Before the switch, so the PR branch's lockfile and package scripts are never installed. Only the stages that
+      # run tests need the tools.
+      - name: Install dev tools
+        if: inputs.stage == 'build' || inputs.stage == 'fix'
+        run: npm ci --prefix dev --ignore-scripts
+
+      # The router checked this head's diff before dispatching the stage. A push since then (a stale fixer's) was not
+      # checked, so the job stops; the sweep's retry checks the new head.
+      - name: Switch to the PR branch
+        if: inputs.stage == 'review' || inputs.stage == 'fix'
+        env:
+          ISSUE: ${{ inputs.issue }}
+        run: |
+          git checkout "factory/issue-$ISSUE"
+          gated=$(cat .factory/head-sha)
+          head=$(git rev-parse HEAD)
+          [[ "$head" == "$gated" ]] || { echo "::error::the PR head $head is not the head the router checked ($gated)"; exit 1; }
+
+      - uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1.0.271
+        env:
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: ${{ inputs.scrub_env }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: ${{ vars.FACTORY_APP_SLUG }}
+          bot_id: ${{ vars.FACTORY_BOT_ID }}
+          bot_name: ${{ vars.FACTORY_APP_SLUG }}[bot]
+          prompt: /factory-${{ inputs.stage }} ${{ inputs.issue }}
+          claude_args: >-
+            --model ${{ inputs.model }}
+            --max-turns ${{ inputs.max_turns }}
+            --allowedTools "${{ inputs.allowed_tools }}"
+          plugin_marketplaces: ${{ runner.temp }}/mp-skills
+          plugins: mattpocock-skills@mattpocock

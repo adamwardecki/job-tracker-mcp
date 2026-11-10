@@ -1,0 +1,34 @@
+name: factory-plan
+run-name: 'factory-plan #${{ inputs.issue }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  stage:
+    uses: ./.github/workflows/factory-stage.yml
+    secrets:
+      FACTORY_APP_PRIVATE_KEY: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    with:
+      stage: plan
+      issue: ${{ inputs.issue }}
+      model: claude-opus-5-5
+      max_turns: '60'
+      timeout: 20
+      contents: read
+      issues: write
+      scrub_env: ''
+      pull_requests: ''
+      allowed_tools: 'Read(./**),Grep,Glob,Edit(./.factory/**),Skill,Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*)'
