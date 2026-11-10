@@ -1,13 +1,15 @@
 // Router entry, run by .github/workflows/factory-router.yml. Reads the event, snapshots the issue, asks decide.ts
 // what to do and applies it; then starts the next queued issue if the factory is idle. FACTORY_DRY_RUN=1 logs the
 // actions without writing anything.
+// Env: GITHUB_REPOSITORY, GITHUB_TOKEN, FACTORY_DISPATCH_TOKEN, FACTORY_BOT_LOGIN, GITHUB_EVENT_NAME,
+// GITHUB_EVENT_PATH, FACTORY_DRY_RUN (optional).
 
 import { readFileSync } from 'node:fs';
 import { errorText } from '../plugin/servers/tracker/src/util.ts';
-import { factoryBotLogin, issueForBranch, LABEL_PREFIX, MAINTAINER, stageLabel } from './config.ts';
+import { factoryBotLogin, issueForBranch, MAINTAINER, stageLabel } from './config.ts';
 import { type Action, type Ctx, decideEvent, next, sweep } from './decide.ts';
 import { parseEvent } from './events.ts';
-import { addLabel, client, createComment, dispatch, type Gh, markReady, pullBranch, removeLabel, requestReview, updateComment } from './github.ts';
+import { client, createComment, dispatch, type Gh, markReady, pullBranch, removeLabel, requestReview, setStageLabel, updateComment } from './github.ts';
 import { parseGlobList } from './globs.ts';
 import { renderState } from './markers.ts';
 import { type Loaded, load, loadAll } from './snapshot.ts';
@@ -31,11 +33,8 @@ async function apply(gh: Gh, dispatcher: Gh, loaded: Map<number, Loaded>, action
           const id = await createComment(gh, a.issue, body);
           if (l) l.stateCommentId = id;
         }
-        const want = a.state.stage === 'done' ? null : stageLabel(a.state.stage);
-        const have = l?.snap.labels ?? [];
-        for (const label of have) if (label.startsWith(LABEL_PREFIX) && label !== want) await removeLabel(gh, a.issue, label);
-        if (want && !have.includes(want)) await addLabel(gh, a.issue, want);
-        if (l) l.snap.labels = [...have.filter((x) => !x.startsWith(LABEL_PREFIX)), ...(want ? [want] : [])];
+        const labels = await setStageLabel(gh, a.issue, l?.snap.labels ?? [], a.state.stage === 'done' ? null : stageLabel(a.state.stage));
+        if (l) l.snap.labels = labels;
         break;
       }
       case 'unlabel': {
@@ -51,9 +50,10 @@ async function apply(gh: Gh, dispatcher: Gh, loaded: Map<number, Loaded>, action
         await dispatch(dispatcher, a.workflow, a.issue);
         break;
       case 'pr-ready': {
-        const nodeId = [...loaded.values()].find((x) => x.snap.pr?.number === a.pr)?.prNodeId;
-        if (!nodeId) throw new Error(`PR #${a.pr} is not in the loaded snapshots`);
-        await markReady(gh, nodeId);
+        const found = [...loaded.values()].find((x) => x.snap.pr?.number === a.pr);
+        if (!found?.prNodeId) throw new Error(`PR #${a.pr} is not in the loaded snapshots`);
+        // A PR back from a fix round on an already-ready PR is not a draft; GitHub refuses to mark it ready again.
+        if (found.snap.pr?.draft) await markReady(gh, found.prNodeId);
         await requestReview(gh, a.pr, MAINTAINER);
         break;
       }
@@ -68,7 +68,7 @@ async function main(): Promise<void> {
   const bot = factoryBotLogin();
   const dry = process.env.FACTORY_DRY_RUN === '1';
 
-  const parsed = parseEvent(env('GITHUB_EVENT_NAME'), JSON.parse(readFileSync(env('GITHUB_EVENT_PATH'), 'utf8')));
+  const parsed = parseEvent(env('GITHUB_EVENT_NAME'), JSON.parse(readFileSync(env('GITHUB_EVENT_PATH'), 'utf8')), repo);
   if (parsed === null) {
     console.log('Event ignored.');
     return;
@@ -76,7 +76,9 @@ async function main(): Promise<void> {
   const risky = parseGlobList(readFileSync(new URL('./risky-paths.txt', import.meta.url), 'utf8'));
   const ctx: Ctx = { now: new Date(), risky };
   if (parsed !== 'sweep') {
-    const issue = 'issue' in parsed.target ? parsed.target.issue : issueForBranch(await pullBranch(gh, parsed.target.pr));
+    // A comment on a PR resolves to an issue only when the PR's head is in this repo: a fork can name its branch
+    // factory/issue-<n>.
+    const issue = 'issue' in parsed.target ? parsed.target.issue : issueForBranch((await pullBranch(gh, parsed.target.pr)) ?? '');
     if (issue === null) {
       console.log('Not a factory PR.');
       return;
