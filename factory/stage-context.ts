@@ -1,28 +1,49 @@
-// CLI for the stage workflow: writes the stage's context to stdout. Runs from main's checkout, before the job
-// switches to the PR branch, so a branch cannot change what its own agents are told.
-// Usage: node --no-warnings factory/stage-context.ts <build|review|fix> <issue>
+// CLI for the stage workflow: writes the stage's context to <outDir>/context.md and, for a CI fix round, the id of
+// the failed CI run to <outDir>/ci-run-id. Runs from main's checkout, before the job switches to the PR branch, so a
+// branch cannot change what its own agents are told.
+// Usage: node --no-warnings factory/stage-context.ts <build|review|fix> <issue> <outDir>
+// Env: GITHUB_TOKEN, GITHUB_REPOSITORY, FACTORY_BOT_LOGIN.
 
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { errorText, oneOf } from '../plugin/servers/tracker/src/util.ts';
 import { factoryBotLogin } from './config.ts';
-import { buildContext } from './context.ts';
-import { client, listComments, listReviewComments, listReviews } from './github.ts';
-import { stateFrom } from './snapshot.ts';
+import { buildContext, ciRunId, contextLookups } from './context.ts';
+import { client, commentEditors, listComments, listReviewComments, listReviews } from './github.ts';
+import { stateCandidate, stateFrom } from './snapshot.ts';
 
 async function main(): Promise<void> {
-  const [stage, issueArg] = process.argv.slice(2);
-  if (!oneOf(['build', 'review', 'fix'] as const, stage)) throw new Error('usage: stage-context.ts <build|review|fix> <issue>');
+  const [stage, issueArg, outDir] = process.argv.slice(2);
+  if (!oneOf(['build', 'review', 'fix'] as const, stage) || !outDir) throw new Error('usage: stage-context.ts <build|review|fix> <issue> <outDir>');
   const issue = Number(issueArg);
   if (!Number.isInteger(issue) || issue <= 0) throw new Error(`not an issue number: ${issueArg}`);
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPOSITORY;
   if (!token || !repo) throw new Error('GITHUB_TOKEN and GITHUB_REPOSITORY must be set');
+  const bot = factoryBotLogin();
   const gh = client(token, repo);
+
   const comments = await listComments(gh, issue);
-  const found = stateFrom(comments);
-  if (!found) throw new Error(`Issue #${issue} has no factory state`);
-  const pr = found.state.pr;
-  const [reviews, prComments] = pr ? await Promise.all([listReviews(gh, pr), listReviewComments(gh, pr)]) : [[], []];
-  process.stdout.write(buildContext({ stage, issue, bot: factoryBotLogin(), state: found.state, comments, reviews, prComments }));
+  // The PR comes from the state comment before its edits are checked, so one lookup covers both threads.
+  const candidate = stateCandidate(comments);
+  if (!candidate) throw new Error(`Issue #${issue} has no factory state`);
+  const pr = candidate.state.pr;
+  const [reviews, prComments, prConversation] = pr ? await Promise.all([listReviews(gh, pr), listReviewComments(gh, pr), listComments(gh, pr)]) : [[], [], []];
+  const threads = { bot, state: candidate.state, comments, reviews, prComments, prConversation };
+  const edits = await commentEditors(gh, [candidate.comment.nodeId, ...contextLookups(threads)]);
+  const found = stateFrom(comments, edits);
+  if (!found) throw new Error(`Issue #${issue}: the factory state comment was edited by someone other than the router`);
+
+  mkdirSync(outDir, { recursive: true });
+  // A ci-run-id left from an earlier run (a local one) must not stand in for this round's.
+  rmSync(join(outDir, 'ci-run-id'), { force: true });
+  writeFileSync(join(outDir, 'context.md'), buildContext({ ...threads, state: found.state, stage, issue, edits }));
+  if (stage === 'fix' && found.state.fixReason === 'ci') {
+    const id = ciRunId(found.state, repo);
+    // Without a recorded run the fixer works without the log; picking a run by branch name could pick a fork's.
+    if (id === null) process.stderr.write(`Issue #${issue}: no CI run recorded for this fix round; ci-run-id not written\n`);
+    else writeFileSync(join(outDir, 'ci-run-id'), `${id}\n`);
+  }
 }
 
 main().catch((err: unknown) => {
