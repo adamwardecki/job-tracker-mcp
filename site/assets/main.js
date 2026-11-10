@@ -41,34 +41,22 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
     setTimeout(() => (button.textContent = label), 2000);
   });
 });
-const examples = {
-  find: {
-    prompt: "Find marketing roles that fit my experience. Remote is a must.",
-    reply:
-      '<p>I found three roles worth a closer look. Halyard’s Marketing Manager role matches your experience and salary range.</p><div class="result-note"><strong>One less thing to check.</strong><p>I checked the employer’s posting: it’s fully remote in Europe. Two other listings said “remote” but required office days, so I left those out.</p></div><p>Would you like to see the shortlist?</p>',
-    command: "/job-tracker:sweep --limit 5",
-  },
-  apply: {
-    prompt: "Help me apply for the Marketing Manager role at Halyard.",
-    reply:
-      '<p>I’ve drafted a cover note using the campaign experience from your CV and filled in the application form.</p><div class="result-note"><strong>Ready for your review.</strong><p>I’ll show you the completed form and the exact approval shortcut before anything is submitted. Consent boxes still need your attention.</p></div><p>Let’s read it through together.</p>',
-    command: "/job-tracker:apply 42",
-  },
-  prep: {
-    prompt: "Help me prepare for my interview with Halyard.",
-    reply:
-      '<p>Let’s start with your experience leading the spring campaign. It’s a useful example for the role’s focus on planning and working across teams.</p><div class="result-note"><strong>A little structure for the conversation.</strong><p>I’ve prepared likely questions, examples from your own experience, and questions you can ask the team.</p></div><p>Which part would you like to practise first?</p>',
-    command: "/job-tracker:prep halyard",
-  },
-};
-document.querySelectorAll("[data-example]").forEach((button) =>
-  button.addEventListener("click", () => {
-    document
-      .querySelectorAll("[data-example]")
-      .forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
-    const data = examples[button.dataset.example];
-    document.getElementById("example-prompt").textContent = data.prompt;
-    document.getElementById("example-reply").innerHTML = data.reply;
-    document.getElementById("example-command").textContent = data.command;
-  }),
-);
+// The screen's four corners in the 1774 x 887 artwork are (1204, 374),
+// (1517, 390), (1494, 597), (1181, 563). A projective transform keeps future
+// HTML content on that plane, including when the mobile scene is cropped.
+const gardenScene = document.querySelector(".garden-scene");
+const laptopScreen = document.querySelector(".laptop-screen");
+if (gardenScene && laptopScreen) {
+  const screenProjection = [0.5708128250194434, -0.054714402269226615, 0, -0.0002684984673569914, -0.14503014815185986, 0.8830736082577542, 0, -3.0064638973793665e-05, 0, 0, 1, 0, 1204.0, 374.0, 0, 1];
+  const fitLaptopScreen = () => {
+    const scale = gardenScene.getBoundingClientRect().width / 1774;
+    const matrix = screenProjection.map((value, index) =>
+      [0, 1, 4, 5, 12, 13].includes(index) ? value * scale : value,
+    );
+    const transform = `matrix3d(${matrix.join(",")})`;
+    laptopScreen.style.transform = transform;
+    laptopScreen.style.visibility = "visible";
+  };
+  fitLaptopScreen();
+  new ResizeObserver(fitLaptopScreen).observe(gardenScene);
+}

@@ -26,7 +26,7 @@
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="canonical" href="https://jobtrackermcp.com/" />
-    <meta name="theme-color" content="#f6f3eb" />
+    <meta name="theme-color" content="#f6eee0" />
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
     <link
       rel="preload"
@@ -35,16 +35,40 @@
       type="font/woff2"
       crossorigin
     />
+    <link
+      rel="preload"
+      href="assets/fonts/petrona-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <link rel="stylesheet" href="assets/style.css" />
     <script src="assets/main.js" defer></script>
+    <script src="assets/laptop-chat.js" defer></script>
   </head>
   <body>
+    <svg class="filters" width="0" height="0" aria-hidden="true" focusable="false">
+      <!-- Deepen midtones, then map logo luminance to green ink (#304d39) and paper, retaining details. -->
+      <filter id="connector-ink" color-interpolation-filters="sRGB">
+        <feColorMatrix type="saturate" values="0" />
+        <feComponentTransfer>
+          <feFuncR type="gamma" amplitude="1" exponent="1.8" offset="0" />
+          <feFuncG type="gamma" amplitude="1" exponent="1.8" offset="0" />
+          <feFuncB type="gamma" amplitude="1" exponent="1.8" offset="0" />
+        </feComponentTransfer>
+        <feComponentTransfer>
+          <feFuncR type="linear" slope="0.777" intercept="0.188" />
+          <feFuncG type="linear" slope="0.631" intercept="0.302" />
+          <feFuncB type="linear" slope="0.654" intercept="0.224" />
+        </feComponentTransfer>
+      </filter>
+    </svg>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
       <div class="container header-inner">
         <a href="#top" class="brand" aria-label="Job Tracker home"
-          ><span class="brand-mark" aria-hidden="true">j<span>t</span></span
-          >Job Tracker</a
+          ><span class="brand-mark" aria-hidden="true"><span class="brand-ink">j<span>t</span></span></span
+          ><span class="brand-ink">Job Tracker</span></a
         >
         <nav class="header-center" aria-label="Main navigation">
           <a href="#how">The idea</a><a href="#commands">Take a look</a
@@ -56,127 +80,212 @@
           >
         </nav>
         <a class="button button-small" href="#install"
-          >Get Job Tracker <span aria-hidden="true">↗</span></a
+          >Get Job Tracker </a
         >
       </div>
     </header>
     <main id="main">
-      <section class="hero container" id="top">
+      <section class="hero" id="top">
         <div class="hero-copy">
           <h1>Good work<br />is out there.<br /><em>Let’s find yours.</em></h1>
           <p class="hero-description">
-            A little help finding work that fits your life. Get a thoughtful
-            shortlist, help with applications, and a clearer plan for what comes
-            next.
+            Job Tracker is a privacy-first, local mcp server that will help you
+            automate the process of finding new roles that fit your criteria,
+            preparing applications and tracking your interview progress.
           </p>
-          <ul class="hero-bullets">
-            <li>Roles that fit your experience and priorities</li>
-            <li>Applications that sound like you</li>
-            <li>Choose how much Job Tracker handles for you</li>
-          </ul>
           <div class="hero-actions">
             <a class="button" href="#install"
-              >Set up in Claude Desktop <span aria-hidden="true">↗</span></a
-            ><a class="text-link" href="#how"
-              >How it works <span aria-hidden="true">↓</span></a
+              >Get Job Tracker </a
             >
           </div>
-          <div class="works-with">
-            <span>Works with</span
-            ><a href="#install">✳ Claude Desktop · Code tab</a
-            ><span class="works-divider">/</span
-            ><a href="#install">Hermes Agent ↗</a>
-          </div>
         </div>
-        <div class="hero-art">
-          <div class="orbit-label" aria-hidden="true">
-            <svg viewBox="0 0 80 80">
-              <g fill="none" stroke="currentColor" stroke-width="1.5">
-                <circle cx="40" cy="40" r="17" />
-                <path
-                  d="M40 0v17m0 46v17M0 40h17m46 0h17M12 12l12 12m32 32 12 12M12 68l12-12m32-32 12-12M24 3l7 16m18 42 7 16M3 24l16 7m42 18 16 7M3 56l16-7m42-18 16-7M24 77l7-16M49 19l7-16"
-                />
-              </g></svg
-            ><span>Less scrolling.<br />More living.</span>
+        <figure class="garden-art">
+          <div class="garden-scene">
+            <img
+              src="assets/zen-engawa.webp"
+              alt="Edo-inspired woodblock illustration of a laptop and wooden stand turned slightly right on an engawa veranda, overlooking raked sand, stacked rocks, stepping stones, and a bamboo well deeper in the garden."
+              width="1774"
+              height="887"
+              fetchpriority="high"
+            />
+            <svg class="garden-water" viewBox="0 0 1774 887" aria-hidden="true" focusable="false">
+              <defs>
+                <clipPath id="garden-basin"><ellipse cx="1598" cy="321" rx="44" ry="7" /></clipPath>
+              </defs>
+              <path class="water-stream" d="M1597 278 C1597 283 1593.6 284 1593.6 290 L1593.6 321" />
+              <path class="water-flow" d="M1597 278 C1597 283 1593.6 284 1593.6 290 L1593.6 321" />
+              <g clip-path="url(#garden-basin)">
+                <ellipse class="water-ripple" cx="1593.6" cy="321" rx="40" ry="6.4" />
+                <ellipse class="water-ripple" cx="1593.6" cy="321" rx="40" ry="6.4" />
+                <ellipse class="water-ripple" cx="1593.6" cy="321" rx="40" ry="6.4" />
+              </g>
+            </svg>
+            <div class="laptop-screen" aria-hidden="true">
+              <div class="laptop-chat">
+                <div class="laptop-chat-header">
+                  <strong><span>✳</span></strong>
+                  <span>Daily sweep · demo</span>
+                </div>
+                <div class="laptop-chat-body">
+                  <div class="laptop-chat-user" data-chat-at="0">Anything new today?</div>
+                  <div class="laptop-chat-thinking" data-chat-at="450" data-chat-until="2200">
+                    <span>●</span><span>●</span><span>●</span>
+                  </div>
+                  <div class="laptop-chat-agent" data-chat-at="2200">
+                    <p>I finished your daily sweep.<br />I found <strong>3 new roles</strong> for you:</p>
+                    <ol class="laptop-chat-roles">
+                      <li data-chat-at="3300"><span>01</span><div><strong>Marketing Manager</strong><small>Halyard · Remote</small></div></li>
+                      <li data-chat-at="4400"><span>02</span><div><strong>Content Strategist</strong><small>Linden Studio · Remote</small></div></li>
+                      <li data-chat-at="5500"><span>03</span><div><strong>Growth Marketing Lead</strong><small>Fieldwork · Remote</small></div></li>
+                    </ol>
+                    <div class="laptop-chat-done" data-chat-at="6600">✓ Ready for your review</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-          <article
-            class="morning-note"
-            aria-label="Illustrative morning shortlist"
-          >
-            <div class="note-top">
-              <span class="eyebrow">An example shortlist</span
-              ><span class="note-date">FRI / 07:33</span>
-            </div>
-            <h2>Morning.<br />A few good possibilities.</h2>
-            <p class="note-intro">
-              For a search across marketing, customer success &amp; operations.
-            </p>
-            <div class="role">
-              <span class="role-number">01</span>
-              <div>
-                <h3>Marketing Manager</h3>
-                <p>Halyard · Remote, EU · €55–70k</p>
-                <span class="role-detail"
-                  >Matches your remote + salary preferences</span
-                >
-              </div>
-              <span class="match-mark" aria-label="Match">↗</span>
-            </div>
-            <div class="role">
-              <span class="role-number">02</span>
-              <div>
-                <h3>Customer Success Manager</h3>
-                <p>Ostra · Hybrid, Lisbon · €50–65k</p>
-                <span class="role-detail"
-                  >Cover note drafted. Sounds like you.</span
-                >
-              </div>
-              <span class="match-mark" aria-label="Match">↗</span>
-            </div>
-            <div class="role">
-              <span class="role-number">03</span>
-              <div>
-                <h3>Operations Lead</h3>
-                <p>Pinecrest Health · Remote, Europe</p>
-                <span class="role-detail role-question"
-                  >One catch: 2 days a month in Berlin.</span
-                >
-              </div>
-              <span class="match-mark question-mark" aria-label="Needs review"
-                >?</span
-              >
-            </div>
-            <div class="note-bottom">
-              <span><span class="status-dot"></span> Ready when you are</span
-              ><span>0 applications sent</span>
-            </div>
-          </article>
-          <div class="handwritten" aria-hidden="true">
-            <svg viewBox="0 0 66 50" fill="none">
-              <path
-                d="M60 43C30 46 8 34 12 4m-9 9L12 3l10 10"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              /></svg
-            >you get the final say.
-          </div>
-        </div>
+        </figure>
       </section>
       <div class="belief-strip">
         <div class="container">
           <span>Your search. <em>Your pace.</em></span
-          ><span
-            >Fewer, better applications.
-            <span aria-hidden="true">✳</span></span
-          >
+          ><span>Fewer, better applications.</span>
         </div>
       </div>
 
+      <section class="section container shortlist-section" id="commands" aria-labelledby="shortlist-heading">
+        <div class="section-heading shortlist-heading">
+          <h2 id="shortlist-heading">A few roles worth your time.</h2>
+          <p>A daily report that keeps your search moving.
+            Here’s what came back, and how to read it.</p>
+        </div>
+        <div class="report-layout">
+          <article class="sample-report" aria-labelledby="sample-report-title">
+            <header class="report-header">
+              <p class="eyebrow">Job Tracker / Daily report</p>
+              <h3 id="sample-report-title">Applications waiting for submission</h3>
+              <p>Found 5 new roles, 2 failed your filters. Your Linden Labs live session is today.</p>
+            </header>
+            <div class="report-body">
+              <section class="report-entry">
+                <h4>New roles <span>3 awaiting submission</span></h4>
+                <ul>
+                  <li><strong>Alderpath / Senior Frontend Engineer:</strong> LinkedIn.</li>
+                  <li><strong>Bramble Studio / Design Engineer:</strong> Indeed.</li>
+                  <li><strong>Willowbyte / Product Engineer:</strong> We Work Remotely.</li>
+                </ul>
+              </section>
+              <section class="report-entry">
+                <h4>Needs you</h4>
+                <ul>
+                  <li><strong>Fernlight:</strong> complete the pending assessment.</li>
+                </ul>
+              </section>
+              <section class="report-entry">
+                <h4>Interviews</h4>
+                <table class="report-table" aria-label="Upcoming interviews in this sample report">
+                  <thead><tr><th scope="col">When</th><th scope="col">Company</th><th scope="col">Stage</th></tr></thead>
+                  <tbody>
+                    <tr><td>Today</td><td>Linden Labs</td><td>Live session</td></tr>
+                    <tr><td>Monday</td><td>Mossbridge</td><td>Shortlist call</td></tr>
+                    <tr><td>Thursday</td><td>Canopy Works</td><td>Technical deep dive</td></tr>
+                  </tbody>
+                </table>
+              </section>
+              <section class="report-entry">
+                <h4>Replies</h4>
+                <p><strong>Fernlight &amp; Mossbridge:</strong> application acknowledgements only. No reply drafted.</p>
+              </section>
+              <section class="report-entry">
+                <h4>Dropped <span>2 roles</span></h4>
+                <p><strong>Birchline / Senior Engineer:</strong> backend only.<br /><strong>Meadow Systems / Fullstack Engineer:</strong> hybrid, outside your location filter.</p>
+              </section>
+              <section class="report-entry">
+                <h4>Sources</h4>
+                <p>LinkedIn · 2 leads &nbsp; / &nbsp; Indeed · 2 leads<br />We Work Remotely · 1 lead</p>
+              </section>
+            </div>
+            <footer class="report-footer">Queued: 3 &nbsp; · &nbsp; Drafts: 3 &nbsp; · &nbsp; Submitted: 0 &nbsp; · &nbsp; Sent: 0</footer>
+          </article>
+          <aside class="report-explainer" aria-labelledby="report-explainer-title">
+            <p class="eyebrow">Behind the report</p>
+            <h3 id="report-explainer-title">Your search,<br /> <em>with the context.</em></h3>
+            <ol class="report-explanations">
+              <li>
+                <h4>Fewer roles. Better matches.</h4>
+                <p>Five new roles, three matches. Your filters keep unsuitable roles out of the queue, with a reason for every drop.</p>
+              </li>
+              <li>
+                <h4>Know what needs you next.</h4>
+                <p>Assessments and interviews come together here. Application acknowledgements are marked so you know which updates need your attention.</p>
+              </li>
+              <li>
+                <h4>Three applications, your call.</h4>
+                <p>Three drafts are waiting for your review. Check each application before deciding what to submit.</p>
+              </li>
+              <li>
+                <h4>Know where it looked.</h4>
+                <p>LinkedIn, Indeed and We Work Remotely brought back five leads between them. Source counts show what each board returned.</p>
+              </li>
+            </ol>
+            <p class="report-explainer-note">You choose the sources and filters.<br />You decide what gets sent.</p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section control-section safety-section" id="gate">
+        <div class="container">
+          <div class="control-heading">
+            <div>
+              <h2>Your search is personal.</h2>
+            </div>
+          </div>
+          <div class="control-grid">
+            <article>
+<h3>Saved on your computer</h3>
+              <p>
+                Your profile, preferences, and application history live in a
+                local file. No Job Tracker account to create or cloud database
+                to hand them over to.
+              </p>
+            </article>
+            <article>
+<h3>Free to use</h3>
+              <p>
+                From your first shortlist to your next offer, Job Tracker is
+                free. No subscription, paid tier, or unlock fee.*
+              </p>
+            </article>
+            <article>
+<h3>Open for a closer look</h3>
+              <p>
+                The code is open source. See how your information is stored and
+                how applications are handled, or ask someone you trust to take
+                a look.
+              </p>
+            </article>
+          </div>
+          <div class="safety-footer">
+            <p>*AI provider charges still apply.</p>
+            <div class="safety-links">
+              <a
+                class="control-link"
+                href="https://github.com/adamwardecki/job-tracker-mcp"
+                target="_blank"
+                rel="noopener"
+                >Read the code <span aria-hidden="true">↗</span></a
+              ><a
+                class="control-link"
+                href="privacy.html"
+                >Where your data goes <span aria-hidden="true">→</span></a
+              >
+            </div>
+          </div>
+        </div>
+      </section>
       <section class="section container workflow-section" id="how">
         <div class="section-heading workflow-heading">
-          <h2>You set the direction.<br /><em>Job Tracker keeps it moving.</em></h2>
+          <h2>You set the direction.</h2>
           <p>
             Choose where to look, what makes a good match, and how you want to
             apply. Once set up, Job Tracker follows that plan on a schedule and
@@ -302,179 +411,9 @@
         </div>
       </section>
 
-      <section class="section control-section safety-section" id="gate">
-        <div class="container">
-          <div class="control-heading">
-            <div>
-              <h2>
-                Your search is personal.<br /><em
-                  >Know where your data goes.</em
-                >
-              </h2>
-            </div>
-          </div>
-          <div class="control-grid">
-            <article>
-              <span class="control-icon" aria-hidden="true"
-                ><svg
-                  viewBox="0 0 32 32"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                >
-                  <rect x="5" y="5" width="22" height="16" rx="2" />
-                  <path d="M2 26h28M12 21v5m8-5v5" /></svg
-              ></span>
-              <h3>Stored on your computer.</h3>
-              <p>
-                Your data is yours. Profile, preferences, and application
-                history are saved in a local file on your machine.
-              </p>
-            </article>
-            <article>
-              <span class="control-icon" aria-hidden="true"
-                ><svg
-                  viewBox="0 0 32 32"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                >
-                  <path d="M4 10h23m-5-5 5 5-5 5M28 23H5m5-5-5 5 5 5" /></svg
-              ></span>
-              <h3>Free to use</h3>
-              <p>
-                Job Tracker is free. There’s no Job Tracker subscription or fee to find
-                roles, prepare applications, or track your progress.*
-              </p>
-            </article>
-            <article>
-              <span class="control-icon" aria-hidden="true"
-                ><svg
-                  viewBox="0 0 32 32"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                >
-                  <path d="m10 8-7 8 7 8m12-16 7 8-7 8M19 4l-6 24" /></svg
-              ></span>
-              <h3>Open for anyone to inspect.</h3>
-              <p>
-                Job Tracker is open source. Anyone can read the code to see how it
-                stores information, connects to services, and handles
-                applications. Review it yourself, or ask someone you trust to
-                take a look.
-              </p>
-            </article>
-          </div>
-          <div class="safety-footer">
-            <p>* AI provider charges still apply.</p>
-            <div class="safety-links">
-              <a
-                class="control-link"
-                href="https://github.com/adamwardecki/job-tracker-mcp"
-                target="_blank"
-                rel="noopener"
-                >Explore the source code <span aria-hidden="true">↗</span></a
-              ><a
-                class="control-link"
-                href="https://github.com/adamwardecki/job-tracker-mcp#your-data"
-                target="_blank"
-                rel="noopener"
-                >Read about your data <span aria-hidden="true">↗</span></a
-              >
-            </div>
-          </div>
-        </div>
-      </section>
-      <section class="section container" id="commands">
-        <div class="section-heading">
-          <h2>Your next step.<br /><em>A little easier.</em></h2>
-        </div>
-        <div class="routine-grid">
-          <div class="routine-options" aria-label="Explore example tasks">
-            <button
-              type="button"
-              class="routine"
-              data-example="find"
-              aria-pressed="true"
-            >
-              <span>01</span>
-              <div>
-                <strong>Find roles worth a look</strong>
-                <p>A shortlist built around what matters to you.</p>
-              </div>
-              <span>↗</span>
-            </button>
-            <button
-              type="button"
-              class="routine"
-              data-example="apply"
-              aria-pressed="false"
-            >
-              <span>02</span>
-              <div>
-                <strong>Prepare an application</strong>
-                <p>Your experience, in your own voice.</p>
-              </div>
-              <span>↗</span>
-            </button>
-            <button
-              type="button"
-              class="routine"
-              data-example="prep"
-              aria-pressed="false"
-            >
-              <span>03</span>
-              <div>
-                <strong>Feel ready for the interview</strong>
-                <p>Relevant stories and thoughtful questions.</p>
-              </div>
-              <span>↗</span>
-            </button>
-          </div>
-          <article
-            class="conversation"
-            aria-label="Illustrative Job Tracker conversation"
-          >
-            <div class="conversation-top">
-              <span>✳ &nbsp; A moment with Job Tracker</span><span>Example</span>
-            </div>
-            <div class="conversation-content" aria-live="polite">
-              <p class="user-message" id="example-prompt">
-                Find marketing roles that fit my experience. Remote is a must.
-              </p>
-              <p class="assistant-name">✳ &nbsp; Job Tracker</p>
-              <div id="example-reply">
-                <p>
-                  I found three roles worth a closer look. Halyard’s Marketing
-                  Manager role matches your experience and salary range.
-                </p>
-                <div class="result-note">
-                  <strong>One less thing to check.</strong>
-                  <p>
-                    I checked the employer’s posting: it’s fully remote in
-                    Europe. Two other listings said “remote” but required office
-                    days, so I left those out.
-                  </p>
-                </div>
-                <p>Would you like to see the shortlist?</p>
-              </div>
-            </div>
-            <details class="shortcut">
-              <summary>Prefer a shortcut?</summary>
-              <code id="example-command">/job-tracker:sweep --limit 5</code>
-              <p>Type this in Claude to start the same routine.</p>
-            </details>
-            <p class="example-caption">
-              Illustrative conversation with “Review first” selected during
-              setup.
-            </p>
-          </article>
-        </div>
-      </section>
       <section class="section container connectors-section" id="connectors">
         <div class="section-heading">
-          <h2>Works best with<br /><em>the tools you already use.</em></h2>
+          <h2>The tools you already use.</h2>
           <p>
             Connect your calendar, email, and browser, and let Job Tracker do more
             of the legwork. With your connectors set up, it can follow replies,
@@ -523,7 +462,11 @@
         <div class="container">
           <div class="setup-heading">
             <div>
-              <h2>A few steps now.<br /><em>A calmer search ahead.</em></h2>
+              <h2>A calmer search ahead.</h2>
+              <p class="setup-compatibility">
+                Works with Claude Desktop’s Code tab, Claude Code, and Hermes Agent.
+                Choose your setup below.
+              </p>
             </div>
           </div>
           <div class="setup-layout">

@@ -20,6 +20,7 @@ npm run lint           # biome check (lint + import order); CI runs `biome ci`
 npm run lint:fix       # apply safe fixes
 npm run tracker -- --db /tmp/t.db   # run the MCP server on stdio against a scratch DB
 npm run build:mcpb     # build the MCPB bundle into dist/ and record its hash in server.json
+npm run dev:site       # serve site at http://127.0.0.1:8000 (the debug panel is an ES module, so file:// does not work)
 npm run dev            # Claude Code with this worktree's plugin/ on a fresh copy of the real DB (~/.job-tracker-dev)
 npm run prod           # back up the real DB, update the released plugin, start Claude Code on it
 ```
@@ -50,7 +51,7 @@ them on Ubuntu and macOS with Node 22.18 and 24.
 | `server.json`, `registry/` | the MCP Registry entry, and the MCPB bundle manifest and packer (`npm run build:mcpb`, which compiles the tracker to JS for the bundle only); `release.yml` publishes both when the version changes on `main` |
 | `tests/` | repo-level tests (hooks, Hermes, installers, docs); `tests/tracker/` for the server |
 | `docs/tracker-api.md` | public reference for the tracker tools |
-| `site/` | static landing page, deployed by `pages.yml`; not linted |
+| `site/` | static landing page, deployed as is by `pages.yml`; no build step; not linted |
 | `dev/` | dev tools only (`package.json`, lockfile, `node_modules`, and `session.ts` behind `npm run dev` / `npm run prod`); never shipped as runtime dependencies |
 | `factory/`, `.github/workflows/factory-*.yml` | the agent factory: router, stage context builder, risky-path list and workflows ([docs/factory.md](docs/factory.md)); not shipped |
 | `.claude/skills/factory-*`, `.claude/settings.json` | the factory's stage prompts (also runnable locally, e.g. `/factory-plan 12`) and the pinned `mattpocock-skills` plugin |
