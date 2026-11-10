@@ -53,16 +53,28 @@ export function riskyFiles(paths: readonly string[], globs: readonly string[]): 
 export function riskyTouches(touches: readonly string[], globs: readonly string[]): string[] {
   if (touches.length === 0) return ['(no Touches listed)'];
   const res = globs.map(globToRegExp);
-  const risky = globs.map((g) => ({ prefix: literalPrefix(g), wild: WILD.test(g) }));
+  const risky = globs.map((g, i) => ({ prefix: literalPrefix(g), wild: WILD.test(g), anywhere: g.startsWith('**/'), re: res[i]!, tail: g.slice(3).replace(/[*?]+/g, 'x') })); // res has one regex per glob
   return touches.filter((t) => {
     const path = norm(t);
     if (nowhere(path) || res.some((r) => r.test(path))) return true;
-    // A plain entry may be a directory, so read it as `path/**` too.
-    const prefix = WILD.test(path) ? literalPrefix(path) : `${path.replace(/\/$/, '')}/`;
-    // Two globs can match a common path only if one literal prefix extends the other, so this test never misses
-    // an overlap. It can over-flag (`plugin/*.md` against `plugin/hooks/**`), which only costs an approval. A
-    // risky glob with no wildcard matches just itself, so a longer entry prefix cannot reach it.
-    return risky.some((g) => g.prefix.startsWith(prefix) || (g.wild && prefix.startsWith(g.prefix)));
+    const wild = WILD.test(path);
+    // A last segment with a dot inside it (`setup.md`, `x.test.ts`, not `.github`) names a file. The regexes above
+    // already decided it, and reading it as a directory would let any `**/X` glob flag every file.
+    if (!wild && !path.endsWith('/') && path.slice(path.lastIndexOf('/') + 1).indexOf('.') > 0) return false;
+    const prefix = wild ? literalPrefix(path) : `${path.replace(/\/$/, '')}/`;
+    const entry = wild ? globToRegExp(path) : null;
+    const sample = path.replace(/[*?]+/g, 'x');
+    return risky.some((g) => {
+      // A `**/tail` glob has no literal prefix, so the prefix test below would match any entry. It can only match
+      // under an entry if that entry reaches a path ending in the tail: any directory could hold one, and a
+      // wildcard entry must match the tail placed at its literal prefix (`tests/**` vs `**/CLAUDE.md`: tests/CLAUDE.md
+      // matches; `tests/*.test.ts` does not), or its own sample path must match the glob (`docs/*/CLAUDE.md`).
+      if (g.anywhere) return entry ? entry.test(prefix + g.tail) || g.re.test(sample) : true;
+      // Two globs can match a common path only if one literal prefix extends the other, so this test never misses
+      // an overlap. It can over-flag (`plugin/*.md` against `plugin/hooks/**`), which only costs an approval. A
+      // risky glob with no wildcard matches just itself, so a longer entry prefix cannot reach it.
+      return g.prefix.startsWith(prefix) || (g.wild && prefix.startsWith(g.prefix));
+    });
   });
 }
 

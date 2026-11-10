@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { coveredBy, globToRegExp, parseGlobList, riskyFiles, riskyTouches } from '../../factory/globs.ts';
 
@@ -105,4 +106,23 @@ test('a leading **/ also matches at the root', () => {
   const re = globToRegExp('**/.claude/**');
   for (const p of ['.claude/settings.json', 'plugin/.claude/settings.json', 'a/b/.claude/skills/x/SKILL.md']) assert.ok(re.test(p), p);
   for (const p of ['claude/settings.json', 'x.claude/settings.json', '.claude']) assert.ok(!re.test(p), p);
+});
+
+// The real list has `**/X` globs with no literal prefix; they must not make every entry look risky.
+test('riskyTouches against the real list: files are checked by regex, directories and wildcards conservatively', () => {
+  const real = parseGlobList(readFileSync('factory/risky-paths.txt', 'utf8'));
+  const safe = ['docs/setup.md', 'tests/factory/x.test.ts', 'README.md', 'tests/factory/*.test.ts', 'plugin/servers/tracker/src/report.ts'];
+  for (const t of safe) assert.deepEqual(riskyTouches([t], real), [], t);
+  const risky = ['plugin/hooks/gates.ts', 'factory', '.github', 'plugin/hooks', 'docs/CLAUDE.md', 'tests/**', 'plugin/**', 'AGENTS.md', 'plugin/.claude/settings.json', 'docs/adr/0001-x.md', 'Makefile', 'docs/'];
+  for (const t of risky) assert.deepEqual(riskyTouches([t], real), [t], t);
+  assert.deepEqual(riskyTouches([], real), ['(no Touches listed)']);
+});
+
+test('riskyTouches: a dotted last segment is a file, a leading dot or no dot is a directory', () => {
+  assert.deepEqual(riskyTouches(['docs/setup.md', '.github', 'docs/x.d'], ['**/CLAUDE.md']), ['.github']);
+  assert.deepEqual(riskyTouches(['docs/CLAUDE.md', 'CLAUDE.md'], ['**/CLAUDE.md']), ['docs/CLAUDE.md', 'CLAUDE.md']);
+});
+
+test('riskyTouches: a **/tail glob flags a wildcard entry only if the entry could match a path ending in the tail', () => {
+  assert.deepEqual(riskyTouches(['tests/**', 'tests/*.test.ts', 'docs/*/CLAUDE.md'], ['**/CLAUDE.md']), ['tests/**', 'docs/*/CLAUDE.md']);
 });
