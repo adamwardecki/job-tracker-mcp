@@ -125,6 +125,18 @@ jobs:
           head=$(git rev-parse HEAD)
           [[ "$head" == "$gated" ]] || { echo "::error::the PR head $head is not the head the router checked ($gated)"; exit 1; }
 
+      # The env scrub runs agent subprocesses in a bubblewrap sandbox. The action installs it only when
+      # allowed_non_write_users is set, which the factory never sets, and the runner image doesn't ship it. Without
+      # it every Bash call fails, so the build stage stopped after a few turns with no branch. Do the same setup here.
+      - name: Install subprocess isolation dependencies
+        if: inputs.scrub_env == '1'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap socat
+          # Ubuntu 24.04+ blocks unprivileged user namespaces through AppArmor; bubblewrap needs them.
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1.0.271
         env:
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: ${{ inputs.scrub_env }}

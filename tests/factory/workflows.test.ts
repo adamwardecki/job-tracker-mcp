@@ -255,3 +255,13 @@ test('a failed stage prints Claude\'s error only when the run never reached the 
   assert.match(step, /\(\.modelUsage \/\/ \{\} \| length\) == 0/);
   assert.doesNotMatch(stage, /show_full_output/);
 });
+
+test('scrubbed stages get the sandbox the scrub needs', () => {
+  const stage = read('.github/workflows/factory-stage.yml');
+  // Without bubblewrap every Bash call fails under the scrub, and the agent stops after a few turns.
+  const step = stage.slice(stage.indexOf('- name: Install subprocess isolation dependencies'));
+  assert.match(step, /if: inputs\.scrub_env == '1'/);
+  assert.match(step, /apt-get install -y --no-install-recommends bubblewrap socat/);
+  assert.match(step, /kernel\.apparmor_restrict_unprivileged_userns=0/);
+  assert.ok(stage.indexOf('Install subprocess isolation dependencies') < stage.indexOf('uses: anthropics/claude-code-action@'));
+});
