@@ -147,7 +147,7 @@
   },
   {
     "name": "save_cv",
-    "description": "Record the user's CV file. Link it where it lives, or copy: true to keep a copy next to the tracker database (always copy a file the user dropped into the chat).",
+    "description": "Record the user's CV file. Copies it into cv/ next to the tracker database and returns the copy's path; copy: false links the file where it lives instead.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -157,7 +157,7 @@
         },
         "copy": {
           "type": "boolean",
-          "description": "true to keep a copy next to the tracker database instead of linking the file where it lives"
+          "description": "Default true: copy the file into cv/ next to the tracker database. false links the file where it lives, only when the user asks"
         }
       },
       "required": [
