@@ -312,3 +312,14 @@ test('drafts that need the CV attach the saved file, and the claim is checked', 
   assert.match(read('skills/write-note/SKILL.md'), /only when the CV will be attached/);
   assert.match(read('agents/auditor.md'), /reported "with CV"/);
 });
+
+test('setup copies the CV and looks for a dropped file before asking for its path', () => {
+  const skill = read('skills/setup/SKILL.md');
+  const s = skill.slice(skill.indexOf('### 1. CV import'), skill.indexOf('### 2.'));
+  // A user who dropped their CV into the chat was asked for a path, and a path they gave was only linked.
+  assert.match(s, /look for it by name before asking: on macOS `mdfind -name "<file name>"`/);
+  assert.match(s, /Ask for the path \(option 2\) only when the search finds nothing or there is no shell\./);
+  assert.match(s, /For options 1 and 2, `save_cv` copies the file into `cv\/` in the tracker's folder/);
+  assert.match(s, /Pass `copy: false` only if the user asks/);
+  assert.doesNotMatch(s, /`copy: true`/);
+});

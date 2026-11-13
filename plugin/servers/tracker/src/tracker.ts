@@ -420,7 +420,8 @@ export class Tracker {
 
   // ---------- CV file ----------
 
-  saveCv({ path, copy }: ArgsFor<'save_cv'>) {
+  // Copies unless told not to: the path the user gives is often a download or an upload the app clears later.
+  saveCv({ path, copy = true }: ArgsFor<'save_cv'>) {
     const bytes = checkCvFile(path);
     const stored = copy ? copyCv(path, this.dbPath) : resolve(path);
     const cv: CvRecord = { path: stored, mode: copy ? 'copied' : 'linked', sha256: hashCvFile(stored), bytes, saved_at: now() };

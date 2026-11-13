@@ -156,7 +156,7 @@ test('save_cv on an unreadable file is a tool error, not a crash', { skip: skipC
   const p = file('cv.pdf', 'v1');
   chmodSync(p, 0);
   try {
-    assert.throws(() => t.saveCv({ path: p }), (e: unknown) => e instanceof ToolError && /Cannot read cv\.pdf \(EACCES\)/.test(e.message));
+    assert.throws(() => t.saveCv({ path: p, copy: false }), (e: unknown) => e instanceof ToolError && /Cannot read cv\.pdf \(EACCES\)/.test(e.message));
   } finally {
     chmodSync(p, 0o600);
   }
@@ -173,11 +173,11 @@ const savedCv = (t: Tracker) => {
   return cv;
 };
 
-test('save_cv links a file where it lives; get_cv returns it', () => {
+test('save_cv with copy: false links a file where it lives; get_cv returns it', () => {
   const t = onDisk();
   const p = file('cv.pdf', 'v1');
   assert.deepEqual(t.getCv(), { missing: true });
-  assert.deepEqual(t.saveCv({ path: p }), { path: p, mode: 'linked', bytes: 2 });
+  assert.deepEqual(t.saveCv({ path: p, copy: false }), { path: p, mode: 'linked', bytes: 2 });
   const cv = savedCv(t);
   assert.equal(cv.path, p);
   assert.equal(cv.mode, 'linked');
@@ -185,6 +185,19 @@ test('save_cv links a file where it lives; get_cv returns it', () => {
   assert.equal(cv.readable, true);
   assert.equal(cv.changed_since_saved, false);
   assert.match(cv.saved_at, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+// A path the user gives can be a download or an upload the app later clears, so copying is the default.
+test('save_cv copies by default, so the CV survives the original being moved or deleted', () => {
+  const t = onDisk();
+  const p = file('cv.pdf', 'v1');
+  const saved = t.saveCv({ path: p });
+  assert.deepEqual(saved, { path: join(dir, 'cv', 'cv.pdf'), mode: 'copied', bytes: 2 });
+  rmSync(p);
+  const cv = savedCv(t);
+  assert.equal(cv.path, saved.path);
+  assert.equal(cv.exists, true);
+  assert.equal(cv.changed_since_saved, false);
 });
 
 test('save_cv with copy keeps a copy next to the database', () => {
@@ -208,10 +221,10 @@ test('save_cv with copy on the copy itself keeps the file', { skip: process.plat
 test('get_cv flags a moved or edited CV; saving again clears it', () => {
   const t = onDisk();
   const p = file('cv.pdf', 'v1');
-  t.saveCv({ path: p });
+  t.saveCv({ path: p, copy: false });
   writeFileSync(p, 'v2');
   assert.equal(savedCv(t).changed_since_saved, true);
-  t.saveCv({ path: p });
+  t.saveCv({ path: p, copy: false });
   assert.equal(savedCv(t).changed_since_saved, false);
   rmSync(p);
   assert.equal(savedCv(t).exists, false);
@@ -220,7 +233,7 @@ test('get_cv flags a moved or edited CV; saving again clears it', () => {
 test('get_cv and setup_status report an unreadable CV instead of throwing', { skip: skipChmod }, () => {
   const t = onDisk();
   const p = file('cv.pdf', 'v1');
-  t.saveCv({ path: p });
+  t.saveCv({ path: p, copy: false });
   chmodSync(p, 0);
   try {
     const cv = savedCv(t);
@@ -262,7 +275,7 @@ test('setup_status cv_file: red until saved, red when gone, amber when changed, 
   assert.equal(item()?.state, 'red');
   assert.match(item()?.detail || '', /drop it into the chat/);
   const p = file('cv.pdf', 'v1');
-  t.saveCv({ path: p });
+  t.saveCv({ path: p, copy: false });
   assert.equal(item()?.state, 'green');
   assert.equal(item()?.detail, 'CV file: cv.pdf (linked)');
   writeFileSync(p, 'v2');
