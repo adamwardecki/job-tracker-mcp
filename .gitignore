@@ -5,9 +5,6 @@ node_modules/
 .DS_Store
 __pycache__/
 
-# MCPB bundles built by registry/pack.ts for GitHub releases.
-/dist/
-
 # Local working notes (design specs and implementation plans)
 docs/superpowers/
 

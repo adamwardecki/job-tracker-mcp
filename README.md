@@ -1,12 +1,10 @@
 # Job Tracker
 
 [![CI](https://github.com/adamwardecki/job-tracker-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/adamwardecki/job-tracker-mcp/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/adamwardecki/job-tracker-mcp?sort=semver)](https://github.com/adamwardecki/job-tracker-mcp/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/adamwardecki/job-tracker-mcp)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.18-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://jobtrackermcp.com/docs.html)
 [![Hermes Agent](https://img.shields.io/badge/Hermes_Agent-supported-6E56CF)](docs/hermes.md)
-[![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.adamwardecki%2Fjob--tracker-0A0A0A)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.adamwardecki/job-tracker)
 [![Runtime deps: 0](https://img.shields.io/badge/runtime_deps-0-brightgreen)](package.json)
 
 A Claude Code (and Hermes Agent) plugin that runs a disciplined job search for one person.
@@ -64,10 +62,6 @@ plugin/scripts/hermes-install.sh
 
 Restart Hermes and type `/job-tracker:setup`. Details:
 [docs/hermes.md](docs/hermes.md).
-
-The tracker is also in the [MCP Registry](https://registry.modelcontextprotocol.io/) as
-`io.github.adamwardecki/job-tracker`, packaged as an MCPB bundle attached to each
-[GitHub release](https://github.com/adamwardecki/job-tracker-mcp/releases).
 
 ## Commands
 
