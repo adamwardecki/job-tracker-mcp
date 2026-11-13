@@ -1499,7 +1499,7 @@ h3 {
 }
 
 .garden-scene {
-  --scene-fade-bottom: linear-gradient(0deg, var(--paper) 0%, color-mix(in srgb, var(--paper) 96%, transparent) 3%, color-mix(in srgb, var(--paper) 78%, transparent) 7%, color-mix(in srgb, var(--paper) 44%, transparent) 12%, color-mix(in srgb, var(--paper) 14%, transparent) 18%, transparent 25%);
+  --scene-fade-bottom: linear-gradient(0deg, var(--paper) 0%, color-mix(in srgb, var(--paper) 96%, transparent) 1.5%, color-mix(in srgb, var(--paper) 78%, transparent) 3.5%, color-mix(in srgb, var(--paper) 44%, transparent) 6%, color-mix(in srgb, var(--paper) 14%, transparent) 9%, transparent 12.5%);
   position: relative;
   isolation: isolate;
   flex-shrink: 0;
