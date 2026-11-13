@@ -25,7 +25,7 @@ export interface RpcResponse {
 export type RpcReply = RpcResponse | RpcReply[];
 export type RpcHandler = (msg: unknown) => Promise<RpcReply | null>;
 
-export const SERVER_INFO = { name: 'job-hunt-tracker', version: '0.4.0' };
+export const SERVER_INFO = { name: 'job-hunt-tracker', version: '0.5.0' };
 const SUPPORTED = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 const INSTRUCTIONS = `Job-hunt tracker: the single source of truth for companies, roles, events, rules and config.
