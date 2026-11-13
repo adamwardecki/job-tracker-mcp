@@ -20,8 +20,6 @@ plugin/package.json
 plugin/plugin.yaml
 plugin/.claude-plugin/plugin.json
 plugin/servers/tracker/package.json
-server.json
-registry/**
 .claude-plugin/**
 
 # Dependencies

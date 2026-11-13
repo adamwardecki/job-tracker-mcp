@@ -19,7 +19,6 @@ node --no-warnings --test tests/tracker/tracker.test.ts   # one file
 npm run lint           # biome check (lint + import order); CI runs `biome ci`
 npm run lint:fix       # apply safe fixes
 npm run tracker -- --db /tmp/t.db   # run the MCP server on stdio against a scratch DB
-npm run build:mcpb     # build the MCPB bundle into dist/ and record its hash in server.json
 npm run dev:site       # serve site at http://127.0.0.1:8000 (the debug panel is an ES module, so file:// does not work)
 npm run dev            # Claude Code with this worktree's plugin/ on a fresh copy of the real DB (~/.job-tracker-dev)
 npm run prod           # back up the real DB, update the released plugin, start Claude Code on it
@@ -48,7 +47,6 @@ them on Ubuntu and macOS with Node 22.18 and 24.
 | `plugin.yaml`, `__init__.py` | the Hermes plugin manifest and wiring |
 | | **Repo root (not shipped):** |
 | `.claude-plugin/marketplace.json` | the marketplace; its plugin `source` is `./plugin` |
-| `server.json`, `registry/` | the MCP Registry entry, and the MCPB bundle manifest and packer (`npm run build:mcpb`, which compiles the tracker to JS for the bundle only); `release.yml` publishes both when the version changes on `main` |
 | `tests/` | repo-level tests (hooks, Hermes, installers, docs); `tests/tracker/` for the server |
 | `docs/tracker-api.md` | public reference for the tracker tools |
 | `site/` | static landing page, deployed as is by `pages.yml`; no build step; not linted |
@@ -130,8 +128,7 @@ The hooks enforce the promises in [README: What it won't do](README.md#what-it-w
 - `npm test` and `npm run lint` pass before every commit.
 - Bumping the version: `package.json`, `plugin/package.json`, `plugin/plugin.yaml` and
   `plugin/.claude-plugin/plugin.json` change together (a test checks), and `SERVER_INFO.version` in `mcp.ts`
-  and `plugin/servers/tracker/package.json` follow, as do `server.json` and `registry/manifest.json` (a test
-  checks those too).
+  and `plugin/servers/tracker/package.json` follow.
 
 ## Boundaries
 

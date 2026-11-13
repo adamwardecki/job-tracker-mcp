@@ -16,7 +16,6 @@
     "lint": "npm --prefix dev exec --no -- biome check .",
     "lint:fix": "npm --prefix dev exec --no -- biome check --write .",
     "tracker": "node --no-warnings plugin/servers/tracker/src/index.ts",
-    "build:mcpb": "node --no-warnings registry/pack.ts",
     "dev:site": "python3 -m http.server 8000 --bind 127.0.0.1 --directory site",
     "dev": "node --no-warnings dev/session.ts dev",
     "prod": "node --no-warnings dev/session.ts prod"

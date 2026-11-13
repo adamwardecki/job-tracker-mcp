@@ -3,9 +3,8 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "Development tools for the job-tracker plugin (type-checking, linting, and building and checking the MCPB bundle). Kept out of the plugin root so Claude Code does not install them for users.",
+  "description": "Development tools for the job-tracker plugin (type-checking and linting). Kept out of the plugin root so Claude Code does not install them for users.",
   "devDependencies": {
-    "@anthropic-ai/mcpb": "2.1.2",
     "@biomejs/biome": "2.5.15",
     "@types/node": "^22.18.0",
     "typescript": "^7.0.2"
