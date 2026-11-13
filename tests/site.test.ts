@@ -13,7 +13,7 @@ test("the water overlay shares the artwork's coordinates and sits under the scre
   const html = readFileSync(join(SITE, 'index.html'), 'utf8');
   const image = html.match(/src="assets\/zen-engawa\.webp"[\s\S]*?width="(\d+)"\s+height="(\d+)"/);
   assert.ok(image, 'the hero image keeps its intrinsic size');
-  assert.ok(html.includes(`<svg class="garden-water" viewBox="0 0 ${image[1]} ${image[2]}"`));
+  assert.match(html, new RegExp(`<svg\\s+class="garden-water"\\s+viewBox="0 0 ${image[1]} ${image[2]}"`));
   assert.ok(html.indexOf('class="garden-water"') < html.indexOf('class="laptop-screen"'));
 });
 

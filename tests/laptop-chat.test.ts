@@ -7,7 +7,7 @@ const script = readFileSync(new URL('../site/assets/laptop-chat.js', import.meta
 const html = readFileSync(new URL('../site/index.html', import.meta.url), 'utf8');
 
 function chat({ loaded = false, reduced = false } = {}) {
-  const steps = [...html.matchAll(/data-chat-at="(\d+)"(?: data-chat-until="(\d+)")?/g)].map((match) => {
+  const steps = [...html.matchAll(/data-chat-at="(\d+)"(?:\s+data-chat-until="(\d+)")?/g)].map((match) => {
     const classes = new Set<string>();
     return {
       dataset: { chatAt: match[1], chatUntil: match[2] },
