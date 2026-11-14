@@ -85,6 +85,25 @@ test('the page is static, carries no data and sends a strict CSP', async () => {
   }
 });
 
+test('the board serves bundled fonts under its same-origin font policy', async () => {
+  const b = await board();
+  try {
+    const page = await b.send('GET', '/');
+    assert.match(String(page.headers['content-security-policy']), /font-src 'self';/);
+    for (const family of ['geist', 'geist-mono', 'petrona', 'petrona-italic']) {
+      for (const subset of ['latin', 'latin-ext']) {
+        const font = await b.send('GET', `/fonts/${family}-${subset}.woff2`);
+        assert.equal(font.status, 200);
+        assert.equal(font.headers['content-type'], 'font/woff2');
+        assert.ok(font.body.startsWith('wOF2'), 'serves a WOFF2 font');
+      }
+    }
+    assert.equal((await b.send('GET', '/fonts/unknown.woff2')).status, 404);
+  } finally {
+    await b.close();
+  }
+});
+
 test('the board data and moves go through the tracker rules', async () => {
   const b = await board();
   try {

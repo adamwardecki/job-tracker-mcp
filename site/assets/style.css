@@ -158,8 +158,8 @@
 
 /* Paper, mineral pigments, and raked sand carry the garden through the site. */
 :root {
-  --serif: Georgia, "Times New Roman", serif;
-  --heading: "Petrona", Georgia, "Times New Roman", serif;
+  --serif: "Petrona", Georgia, "Times New Roman", serif;
+  --heading: var(--serif);
   --mono: "Geist Mono", monospace;
   --card-radius: 5px;
   --paper: #f6eee0;
@@ -333,6 +333,20 @@ h2 em {
   gap: 9px;
   font-size: 23px;
   letter-spacing: -0.8px;
+}
+.site-header .brand {
+  font-weight: 600;
+}
+.brand-tag {
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--brand-green);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  line-height: 1;
 }
 .brand-mark {
   display: inline-flex;
