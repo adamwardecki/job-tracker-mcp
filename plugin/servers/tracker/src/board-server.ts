@@ -16,10 +16,17 @@ const STATIC: Record<string, { type: string; body: Buffer }> = {
   '/board.css': { type: 'text/css; charset=utf-8', body: asset('board.css') },
   '/board.js': { type: 'text/javascript; charset=utf-8', body: asset('board.js') },
 };
+// Fonts ship with the board so it stays offline and only serves explicitly listed assets.
+for (const family of ['geist', 'geist-mono', 'petrona', 'petrona-italic']) {
+  for (const subset of ['latin', 'latin-ext']) {
+    const name = `fonts/${family}-${subset}.woff2`;
+    STATIC[`/${name}`] = { type: 'font/woff2', body: asset(name) };
+  }
+}
 const MAX_BODY = 64 * 1024;
 // No CORS headers are ever sent, so other origins can't read responses.
 const HEADERS = {
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   'Referrer-Policy': 'no-referrer',
   'X-Content-Type-Options': 'nosniff',
   'Cache-Control': 'no-store',
