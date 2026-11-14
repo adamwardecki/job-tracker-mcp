@@ -60,3 +60,34 @@ if (gardenScene && laptopScreen) {
   fitLaptopScreen();
   new ResizeObserver(fitLaptopScreen).observe(gardenScene);
 }
+
+// A shared field lets the original ripples cross slide backgrounds without
+// clipping at each section. Keep it below the hero as content changes height.
+const slideMain = document.querySelector("main:has(> .hero)");
+if (slideMain) {
+  const slides = [...slideMain.querySelectorAll(":scope > section:not(.hero)")];
+  const strip = slideMain.querySelector(".belief-strip");
+  const footer = document.querySelector("body > .site-footer");
+  const ripples = document.createElement("div");
+  ripples.className = "slide-ripples";
+  ripples.setAttribute("aria-hidden", "true");
+  slideMain.append(ripples);
+
+  const fitRipples = () => {
+    if (!slides.length) return;
+    const mainBox = slideMain.getBoundingClientRect();
+    const first = slides[0].getBoundingClientRect();
+    const start = (strip ?? slides[0]).getBoundingClientRect();
+    const end = (footer ?? slides.at(-1)).getBoundingClientRect();
+    ripples.style.top = `${start.top - mainBox.top}px`;
+    ripples.style.height = `${end.bottom - start.top}px`;
+    // Extend the existing field upward without shifting the approved slide pattern.
+    ripples.style.backgroundPositionY = `${-240 - (first.top - start.top)}px`;
+  };
+  const rippleObserver = new ResizeObserver(fitRipples);
+  rippleObserver.observe(slideMain);
+  slides.forEach((slide) => rippleObserver.observe(slide));
+  if (strip) rippleObserver.observe(strip);
+  if (footer) rippleObserver.observe(footer);
+  fitRipples();
+}

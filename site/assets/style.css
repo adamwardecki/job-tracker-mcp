@@ -398,7 +398,6 @@ h2 em {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   background: var(--sand);
-  background-image: repeating-linear-gradient(173deg, transparent 0 9px, color-mix(in srgb, var(--bark) 12%, transparent) 9px 10px);
 }
 .belief-strip .container {
   display: flex;
@@ -1814,62 +1813,33 @@ h3 {
   padding-top: 50px;
 }
 
-/* Ripple fields change direction as the reader moves through the garden.
-   Decorative layers stay behind the content and never intercept controls. */
-.workflow-section::before,
-#commands::before,
-.connectors-section::before,
-.control-section::before,
-.install-section::before,
-.site-footer::before {
-  content: "";
+/* The original ripple artwork spans the slides in one coordinate space.
+   Section backgrounds sit below it; text and controls remain above it. */
+main:has(> .hero) {
+  position: relative;
+}
+.slide-ripples {
   position: absolute;
-  inset: 0;
-  z-index: -1;
+  left: 0;
+  width: 100%;
+  z-index: 1;
   pointer-events: none;
-  background: var(--sand-lines) center / 1400px auto no-repeat;
-}
-
-.workflow-section::before {
-  background-position: right bottom;
-  transform: scaleX(-1);
+  background: var(--sand-lines) center -240px / max(1100px, 100%) auto repeat-y;
   opacity: 0.7;
 }
-
-#commands::before {
-  transform: rotate(180deg);
-  background-position: left center;
-  opacity: 0.7;
+body:has(main > .hero) > .site-footer,
+main:has(> .hero) > section:not(.hero) {
+  isolation: auto;
+  overflow: visible;
 }
-
-.workflow-section::before,
-#commands::before,
-.connectors-section::before,
-.site-footer::before {
-  mask-image: linear-gradient(90deg, transparent, #000 12% 88%, transparent);
+body:has(main > .hero) > .site-footer > *,
+main:has(> .hero) > .belief-strip > *,
+main:has(> .hero) > section:not(.hero) > * {
+  position: relative;
+  z-index: 2;
 }
-
-.connectors-section::before {
-  background-position: right bottom;
-  background-size: 1100px auto;
-  opacity: 0.7;
-}
-
-.control-section::before {
-  background-position: right center;
-  transform: scaleX(-1);
-  filter: brightness(2);
-  opacity: 0.45;
-}
-
-.install-section::before {
-  background-size: 1700px auto;
-  background-position: 55% bottom;
-  transform: rotate(180deg);
-}
-
-.site-footer::before {
-  background-position: center 45%;
+main:has(> .hero) > .detail-section {
+  background-image: none;
 }
 .day-row > span:not(.day-off),
 .filter-chip,

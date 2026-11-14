@@ -9,8 +9,8 @@
     <mask id="soft-edges"><path fill="url(#fade)" d="M0 0h1500v1100H0z"/></mask>
     <linearGradient id="side-fade">
       <stop stop-color="white" stop-opacity="0"/>
-      <stop offset=".12" stop-color="white"/>
-      <stop offset=".88" stop-color="white"/>
+      <stop offset=".03" stop-color="white"/>
+      <stop offset=".97" stop-color="white"/>
       <stop offset="1" stop-color="white" stop-opacity="0"/>
     </linearGradient>
     <mask id="soft-sides"><path fill="url(#side-fade)" d="M0 0h1500v1100H0z"/></mask>
