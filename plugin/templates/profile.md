@@ -8,7 +8,7 @@ inferred (not literally in your CV) with "(inferred)" until you confirm it.
 -->
 
 > **Scoring note:** the Summary and Skills lines below are a summary, **not an exhaustive list**.
-> Before calling any technology a gap, read the **Stack** line of every role in Experience.
+> Before calling any tool, technology or skill a gap, read the **Tools and skills** line of every role in Experience.
 
 ## Basics
 
@@ -17,7 +17,7 @@ inferred (not literally in your CV) with "(inferred)" until you confirm it.
 - **Phone (optional):** <+00 000 000 000>
 - **Based in:** <City, Country>
 - **Timezone:** <e.g. Europe/Berlin>
-- **Links (for forms, not email signatures):** <LinkedIn URL>, <GitHub URL>, <portfolio URL>
+- **Links (for forms, not email signatures):** <LinkedIn URL>, <portfolio, GitHub or publications URL>
 - **Availability:** <e.g. from <Month Year>, notice period N weeks>
 
 ## Summary
@@ -26,29 +26,30 @@ inferred (not literally in your CV) with "(inferred)" until you confirm it.
 
 ## Skills (summary, not exhaustive)
 
-- **Languages:** <...>
-- **Frontend:** <...>
-- **Backend:** <...>
-- **Data:** <...>
-- **Infrastructure and cloud:** <...>
-- **AI and tooling:** <...>
-- **Practices:** <testing, CI/CD, security certifications, etc.>
+<!-- Rename or replace these groups to fit your field. Examples: clinical (Specialties, Systems, Procedures),
+design (Disciplines, Tools, Methods), finance (Domains, Systems, Models), marketing (Channels, Tools, Analytics). -->
+
+- **Core skills:** <...>
+- **Tools and systems:** <...>
+- **Methods and practices:** <...>
+- **Credentials, licences and certifications:** <...>
+- **Engineering only:** <languages, frontend, backend, data, infrastructure and cloud, AI and tooling, testing, CI/CD>
 
 ## Experience
 
-<!-- One block per role, most recent first. The Stack line is required for every role. -->
+<!-- One block per role, most recent first. The Tools and skills line is required for every role. -->
 
 ### <Title>, <Company> (<Mon YYYY> to <Mon YYYY | present>)
 - **What the company does:** <one line>
 - **Scope:** <team size, ownership, who you reported to>
-- **Stack:** <every technology used in this role, comma-separated>
+- **Tools and skills:** <every tool, technology, system, method or credential used in this role, comma-separated>
 - <Achievement with a concrete result or number>
 - <Achievement>
 
 ### <Title>, <Company> (<Mon YYYY> to <Mon YYYY>)
 - **What the company does:** <one line>
 - **Scope:** <...>
-- **Stack:** <...>
+- **Tools and skills:** <...>
 - <Achievement>
 
 ## Education and certifications

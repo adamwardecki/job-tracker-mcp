@@ -12,7 +12,7 @@ Hard filters first (any miss drops). Then soft preferences (only move the score)
 - **Only score verified roles.** If `verified_at` is empty, run `verify-employer` first.
 - **Pay goes through `check_pay`.** Never eyeball it. Drop only if the band **maximum** is below the floor; straddling bands are kept and flagged with where in the band the user would need to land. Why: a range whose top cleared the floor was once dismissed as "under floor".
 - **Look up the exchange rate for today; never guess it.** Use a reliable source (e.g. the ECB reference rate or another central bank, via fetch or search). Pass it as `fx_rate` (units of the floor currency per 1 unit of the posting currency) and write the rate, its date and its source in `score_notes`.
-- **Read the per-role stack lines in `profile` before calling anything a gap.** The summary line at the top is not exhaustive. Why: a technology the user had used in two past roles was once scored as a gap from the summary line.
+- **Read the per-role **Tools and skills** lines in `profile` before calling anything a gap.** The summary line at the top is not exhaustive. Why: a technology the user had used in two past roles was once scored as a gap from the summary line. (`stack` in config fields and drop categories means this same thing for any profession: tools, systems, methods, credentials.)
 - **A required bullet with nothing honest to point at is a scoring signal**, usually a drop. Do not plan to write around it in the cover note.
 - **Apply every active rule** from the `scoring` rules plus the global ones. Rules: load `scoring` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). Cite the rule id in `evidence` (`rule:<id>`) when a rule decides a drop.
 
@@ -30,16 +30,16 @@ Hard filters first (any miss drops). Then soft preferences (only move the score)
      - `unknown` (no band): not a drop. Note it.
    - **Explicitly below-floor salary with equity attached is still a drop.** Tells: "austerity salary", "startup salary", "below market, offset by equity". Equity can justify a "negotiable" answer inside the band; it cannot replace the base.
    - **Excluded industries**: judge the business line the role sits in (see `verify-employer`, parent vs venture).
-   - **Excluded role shapes**: a role in an excluded category drops even with a perfect stack. Definitions:
+   - **Excluded role shapes**: a role in an excluded category drops even with a perfect tools-and-skills match. Definitions (examples; for a non-engineering profession, apply the same test to the shapes the user listed):
      - *Forward-deployed*: the main job is building inside customers' codebases or being embedded with customers (often sits in a Solutions, Customer or Growth department; titles like solutions, customer, implementation or sales engineer). A product engineer who joins some customer calls or demos is **not** forward-deployed. A JD listing FDE as an acceptable prior background is not a tell.
      - *Backend-only*: backend in the title, or "Full Stack (backend focused)" with no frontend or product surface. Borderline cases: flag with the quote.
      - *People manager*: the role is managing reports as the main job.
    - **Numeric language gates**: a required bullet in a language the user avoids, with a self-rating screening question attached (e.g. "your Java level, 1 to 5"), is a drop with both quotes.
    - **Culture red lines**: overtime as a screening question, or hustle/grind as the centre of the values page ("whatever it takes", "996", "we're not for everyone", "more than 40 hours"): drop with the quote. Strong but generic ambition copy ("all-in", "high standards") with no hours expectation is **not** a drop: surface the quote in `score_notes`. An on-call rotation alone is ordinary; framed as a required screening question on a product role, surface it.
    - **Other excluded work** from rules (e.g. AI-training review gigs): drop with the rule id.
-3. **Soft preferences** (score only): title and seniority match, company stage, stack want/avoid (weigh the core of the role, not nice-to-haves), domain and product the user would plausibly care about, contract type, posting age, and signs of a real seat.
+3. **Soft preferences** (score only): title and seniority match, company stage, tools-and-skills want/avoid, stored as `stack_want`/`stack_avoid` (weigh the core of the role, not nice-to-haves), domain and product the user would plausibly care about, contract type, posting age, and signs of a real seat.
 4. **Score** on 0 to 10:
-   - 8 to 10: clean on every hard filter, core stack and product shape match, domain the user likes.
+   - 8 to 10: clean on every hard filter, core tools and skills and role shape match, domain the user likes.
    - 5 to 7: clean on hard filters, partial match, or one flag for the user.
    - below 5: clean but weak; usually not prepared.
 5. **Record.**

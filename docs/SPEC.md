@@ -218,7 +218,7 @@ capabilities:                  # written by detection, not by the user
   connectors: {}, browser: null, local_folder: null
 ```
 
-User-owned documents (also stored via the tracker or project knowledge): `profile.md` (CV distilled, **per-role stack lines**), `stories.md` (STAR stories), `reusable-answers.md`.
+User-owned documents (also stored via the tracker or project knowledge): `profile.md` (CV distilled, **per-role Tools and skills lines**), `stories.md` (STAR stories), `reusable-answers.md`.
 
 ---
 
@@ -226,7 +226,7 @@ User-owned documents (also stored via the tracker or project knowledge): `profil
 
 A **skill** drives the conversation. MCP tools persist and validate. Use multiple-choice questions wherever possible. Every step is resumable, and `setup_status()` shows progress.
 
-1. **CV import.** The user uploads a CV. Draft `profile.md` including **each role's stack line**, then ask the user to confirm anything inferred. (Lesson: a summary line was once read as exhaustive, and AWS was wrongly scored as a gap.)
+1. **CV import.** The user uploads a CV. Draft `profile.md` including **each role's Tools and skills line**, then ask the user to confirm anything inferred. (Lesson: a summary line was once read as exhaustive, and AWS was wrongly scored as a gap.)
 2. **Hard filters.** Work mode; residence country; timezone and acceptable overlap; work authorisation; pay floor (amount, currency, period, contract type) and the equity rule; excluded industries; excluded role shapes. Echo them back as a one-screen summary before saving.
 3. **Soft preferences.** Titles, seniority, stage, stack want/avoid, domains, culture red lines, contract openness, availability date.
 4. **Writing rules.** Offer to learn the user's voice from samples. Humanizer on, word limit, no volunteered gaps. List the personal fields the plugin will never fill.

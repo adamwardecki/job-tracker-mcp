@@ -29,7 +29,7 @@ the common ones.
 - **Email for applications:** <...> (the plugin always reads this field back; browser autofill can insert another address)
 - **Phone:** <...>
 - **Location (city, country):** <...>
-- **LinkedIn / GitHub / portfolio:** <...>
+- **LinkedIn / portfolio / GitHub / publications:** <...>
 - **Work authorisation statement:** <e.g. "Authorised to work in <region> without sponsorship.">
 - **Requires sponsorship:** <Yes / No>
 - **Willing to relocate:** <Yes / No / Depends>

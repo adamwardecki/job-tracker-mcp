@@ -21,16 +21,16 @@ filters:                         # HARD filters: a miss drops the role
   pay_rule_with_equity: "floor unchanged; equity may justify 'negotiable' answer inside band"
   band_rule: "drop only if the band MAXIMUM is below floor; straddling bands are kept"
   excluded_industries: []        # e.g. [gambling, crypto, defense, tobacco]
-  excluded_role_shapes: []       # e.g. [backend_only, frontend_only, forward_deployed, people_manager]
+  excluded_role_shapes: []       # e.g. [people_manager]; engineers also [backend_only, frontend_only, forward_deployed]
   culture_red_lines: []          # e.g. [stated_overtime_expectation, overtime_screening_question]
 
 prefs:                           # SOFT preferences: affect the score only
-  titles: []                     # e.g. ["product engineer", "full stack engineer"]
+  titles: []                     # e.g. ["product engineer", "staff nurse", "brand designer"]
   seniority: []                  # e.g. [senior, staff, lead]
   stage: []                      # e.g. [seed, series_a, series_b, growth, public]
-  stack_want: []                 # e.g. [TypeScript, React, PostgreSQL]
-  stack_avoid: []                # e.g. [Java, C#]
-  domains_like: []               # e.g. [devtools, B2B SaaS, health]
+  stack_want: []                 # tools and skills you want, any field, e.g. [TypeScript, PostgreSQL] or [Epic, wound care] or [Figma, design systems]
+  stack_avoid: []                # tools and skills you avoid, e.g. [Java] or [night shifts] or [print layout]
+  domains_like: []               # e.g. [devtools, B2B SaaS, health, education]
   contract_ok: false             # open to contract / B2B work?
   availability: null             # e.g. "from <Month Year>" or "4 weeks notice"
 

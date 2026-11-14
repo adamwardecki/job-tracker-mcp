@@ -60,7 +60,7 @@ A `cv_file` item in `setup_status` that is not green resumes at this step.
 - For options 1 and 2, `save_cv` copies the file into `cv/` in the tracker's folder (`~/.job-tracker/cv/` by default) and records the copy. Tell the user the path it returns. Why: a dropped file or a download can be temporary or get moved, and every application and email needs the file. A copy does not follow edits to the original: to replace the CV, drop or give the new file again. Pass `copy: false` only if the user asks to keep using the file where it is.
 - `save_cv` errors say what is wrong (not found, not a PDF or Word file, over 25 MB). Relay them in plain words and ask again.
 - Read the CV's text from the file (or the paste) to draft the profile.
-- Draft the `profile` document using `templates/profile.md`. For **every role**, write a stack line listing the technologies used in that role, taken from the CV text for that role.
+- Draft the `profile` document using `templates/profile.md`. For **every role**, write a **Tools and skills** line listing the tools, technologies, systems, methods and credentials used in that role, taken from the CV text for that role.
 - Mark anything inferred (not literally in the CV) with `(inferred)` and ask the user to confirm or remove each one.
 - Add the note from the template that summary lines are not exhaustive. Why: a skills summary was once read as the whole record and a technology the user had used for years was scored as a gap.
 - Show the full draft in chat, as message text, before asking to save. Then ask: save, or edit first. Why: the question tool only shows the question, so a user asked to approve a profile they cannot see is approving it blind.
@@ -68,13 +68,13 @@ A `cv_file` item in `setup_status` that is not green resumes at this step.
 - When `setup_status` shows `cv_file` amber (the CV changed since it was saved), re-read the file, update the profile with the user, then call `save_cv` again with the path `get_cv` returns. Why: the profile is what scoring and writing trust, so it must describe the CV the forms receive.
 
 ### 2. Hard filters (`filters`)
-Ask, in order: work mode (remote, hybrid, onsite; multi-select); for hybrid, max days per week and acceptable cities; residence country; timezone and acceptable overlap window; work authorisation (where no sponsorship is needed); pay floor (amount, currency, period, gross or net, and contract type); the equity rule (default: floor unchanged, equity may justify a "negotiable" answer inside the band); excluded industries; excluded role shapes (e.g. backend-only, forward-deployed, people manager); culture red lines.
+Ask, in order: work mode (remote, hybrid, onsite; multi-select); for hybrid, max days per week and acceptable cities; residence country; timezone and acceptable overlap window; work authorisation (where no sponsorship is needed); pay floor (amount, currency, period, gross or net, and contract type); the equity rule (default: floor unchanged, equity may justify a "negotiable" answer inside the band); excluded industries; excluded role shapes (e.g. for engineers backend-only, forward-deployed or people manager; for other fields, ask which kinds of role they never want); culture red lines.
 - Explain the band rule: a role drops on pay only if the band **maximum** is below the floor; straddling bands are kept and flagged.
 - Echo all filters back on one screen, then `save_config` with `section: "filters"`.
 - Fields: `work_mode`, `hybrid`, `residence_country`, `timezone`, `overlap_window`, `work_authorisation`, `pay_floor`, `pay_rule_with_equity`, `band_rule`, `excluded_industries`, `excluded_role_shapes`, `culture_red_lines`.
 
 ### 3. Soft preferences (`prefs`)
-Titles, seniority, company stage, stack want and avoid, domains they like, contract openness, availability date. These only affect the score. `save_config` with `section: "prefs"`.
+Titles, seniority, company stage, tools and skills they want and avoid (saved as `stack_want` and `stack_avoid`; any profession, e.g. Epic and wound care, or Figma and design systems), domains they like, contract openness, availability date. These only affect the score. `save_config` with `section: "prefs"`.
 - Fields: `titles`, `seniority`, `stage`, `stack_want`, `stack_avoid`, `domains_like`, `contract_ok`, `availability`.
 
 ### 4. Writing rules (`writing`)
