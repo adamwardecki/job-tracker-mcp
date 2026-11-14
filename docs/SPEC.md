@@ -235,7 +235,7 @@ A **skill** drives the conversation. MCP tools persist and validate. Use multipl
 7. **Browser check.** Detect Claude in Chrome and the built-in browser. If neither is found, show install steps. If found, open a test page and check which job sites are logged in (Wellfound, LinkedIn, YC Work at a Startup, trackers). Record this as a capability; it does not block setup.
 8. **Sources.** Pick from a catalogue (§8.1) and record which need login.
 9. **Autonomy.** Confirm the defaults in `autonomy` (conservative).
-10. **Schedule.** Create the local daily task (`/job-tracker:sweep`) with the host's local scheduling (a Claude Desktop / Claude Code local scheduled task, or a Hermes cron job). Ask when the machine is usually on with Claude open and schedule inside that window. State plainly that it only runs while the machine is awake and the app is open.
+10. **Schedule.** Create the local daily task (`/job-tracker:sweep`) with the host's local scheduling (a Claude Desktop / Claude Code local scheduled task, or a Hermes cron job). In Claude Desktop, turn the task's "Require this computer" option on so it cannot run in the cloud. Ask when the machine is usually on with Claude open and schedule inside that window. State plainly that it only runs while the machine is awake and the app is open.
 11. **Calibration run.** Run `/job-tracker:sweep` limited to 5 results and show them. Each "no, because…" becomes a rule via `add_rule` with the reason and example.
 
 Exit criterion: `setup_status()` all green, or every amber item has a recorded user decision.
