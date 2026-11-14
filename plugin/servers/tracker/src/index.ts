@@ -6,6 +6,8 @@
 import { createInterface } from 'node:readline';
 import { defaultDbPath, openDb } from './db.ts';
 import { makeHandler } from './mcp.ts';
+import { logPostHog, shutdownPostHogLogs } from './posthog-logs.ts';
+import { shutdownPostHog } from './posthog.ts';
 import { Tracker } from './tracker.ts';
 import { errorMessage, isRecord } from './util.ts';
 
@@ -28,6 +30,8 @@ rl.on('line', (line) => {
 });
 rl.on('close', async () => {
   await Promise.allSettled([...pending]);
+  await shutdownPostHog();
+  await shutdownPostHogLogs();
   process.exit(0);
 });
 
@@ -37,6 +41,7 @@ async function onLine(line: string): Promise<void> {
   try {
     msg = JSON.parse(line);
   } catch {
+    logPostHog('WARN', 'tracker_mcp_invalid_json');
     process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } })}\n`);
     return;
   }
@@ -44,10 +49,12 @@ async function onLine(line: string): Promise<void> {
     const res = await handle(msg);
     if (res) process.stdout.write(`${JSON.stringify(res)}\n`);
   } catch (err) {
+    logPostHog('ERROR', 'tracker_mcp_request_failed');
     log('reply failed:', errorMessage(err));
     const id = isRecord(msg) ? msg.id : undefined;
     if (id !== undefined && id !== null) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message: 'Internal error' } })}\n`);
   }
 }
 
+logPostHog('INFO', 'tracker_mcp_stdio_started');
 log(`stdio ready, db ${dbPath}`);

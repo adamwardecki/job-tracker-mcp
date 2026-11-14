@@ -1,6 +1,7 @@
 // Minimal MCP (JSON-RPC 2.0) handler: initialize, ping, tools/list, tools/call.
 
 import { ToolError } from './errors.ts';
+import { posthog } from './posthog.ts';
 import { checkArgs, TOOL_MAP, TOOLS } from './tools.ts';
 import type { Tracker } from './tracker.ts';
 import { errorMessage, errorText, isRecord } from './util.ts';
@@ -33,6 +34,72 @@ Call setup_status first in every run. Dedupe every lead with find_company before
 Statuses move only through transition (found → verified → scored → queued → applied → interviewing → offer; dropped; closed).
 Every event needs a reason; drops need a verbatim employer quote or rule:<id>; applied needs confirmation text.
 Gmail drafts are claimed only after verify_artifact with the read-back.`;
+
+function captureToolOutcome(toolName: string, args: unknown, result: unknown): void {
+  const input = isRecord(args) ? args : {};
+  const output = isRecord(result) ? result : {};
+  let event: string | undefined;
+  let properties: Record<string, string | boolean> | undefined;
+
+  switch (toolName) {
+    case 'start_run':
+      event = 'tracker_run_started';
+      break;
+    case 'finish_run':
+      event = 'tracker_run_finished';
+      break;
+    case 'save_config':
+      event = 'tracker_config_saved';
+      properties = typeof input.section === 'string' ? { section: input.section } : undefined;
+      break;
+    case 'save_document':
+      event = 'tracker_document_saved';
+      properties = typeof input.name === 'string' ? { document: input.name } : undefined;
+      break;
+    case 'save_cv':
+      event = 'tracker_cv_saved';
+      break;
+    case 'upsert_role':
+      event = output.created === true ? 'tracker_role_created' : 'tracker_role_updated';
+      break;
+    case 'transition':
+      event = 'tracker_role_transitioned';
+      properties = typeof output.to === 'string' ? { to_status: output.to } : undefined;
+      break;
+    case 'add_artifact':
+      event = 'tracker_artifact_added';
+      properties = typeof input.kind === 'string' ? { artifact_kind: input.kind } : undefined;
+      break;
+    case 'verify_artifact':
+      event = 'tracker_artifact_verified';
+      break;
+    case 'add_interview':
+      event = 'tracker_interview_recorded';
+      properties = {
+        outcome: output.created === true ? 'created' : output.updated === true ? 'updated' : 'stale',
+        state: typeof output.state === 'string' ? output.state : 'unknown',
+      };
+      break;
+    case 'add_rule':
+      event = 'tracker_rule_added';
+      break;
+    case 'deactivate_rule':
+      event = 'tracker_rule_deactivated';
+      break;
+    case 'set_source_status':
+      event = 'tracker_source_status_recorded';
+      properties = {
+        status: typeof input.status === 'string' ? input.status : 'unknown',
+        coverage: typeof input.coverage === 'string' ? input.coverage : 'not_recorded',
+      };
+      break;
+  }
+
+  if (!event) return;
+  try {
+    posthog?.capture({ event, properties });
+  } catch {}
+}
 
 export function makeHandler(tracker: Tracker, { log = () => {} }: { log?: (msg: string) => void } = {}): RpcHandler {
   return async function handle(msg: unknown): Promise<RpcReply | null> {
@@ -72,6 +139,7 @@ export function makeHandler(tracker: Tracker, { log = () => {} }: { log?: (msg: 
           try {
             // checkArgs has matched args against this tool's inputSchema, which is what the handler's type says.
             const result = await tool.handler(tracker, args as never);
+            captureToolOutcome(tool.name, args, result);
             return reply(toolResult(result, false));
           } catch (err) {
             if (!(err instanceof ToolError)) log(`tool ${tool.name} failed: ${errorText(err)}`);
