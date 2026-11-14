@@ -43,7 +43,9 @@ async function runGuard(input: Record<string, unknown>, check: [string, string][
   const timeoutMs = 120000;
   // Chrome on macOS prints the DOM but may not exit; stop it once the document is out.
   const dom = await new Promise<string>((resolve, reject) => {
-    const p = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(dir, `profile-${Math.random().toString(36).slice(2)}`)}`, '--dump-dom', `file://${file}`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    // Chrome's own sandbox can't start inside another one (the agent factory runs tests under bubblewrap), and CI
+    // runners don't need it for a local synthetic page.
+    const p = spawn(CHROME, ['--headless=new', ...(process.env.CI ? ['--no-sandbox'] : []), '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(dir, `profile-${Math.random().toString(36).slice(2)}`)}`, '--dump-dom', `file://${file}`], { stdio: ['ignore', 'pipe', 'pipe'] });
     let buf = '';
     let err = '';
     const timer = setTimeout(() => {
