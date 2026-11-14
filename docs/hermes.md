@@ -1,5 +1,9 @@
 # Hermes Agent integration
 
+- [Install](#install)
+- [How it maps](#how-it-maps)
+- [Known differences](#known-differences)
+
 ## Install
 
 ```bash
