@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "roles": {
+    "queue": [
+      "adamwardecki"
+    ]
+  },
+  "toolchain": {
+    "node": "24.x"
+  },
+  "commands": {
+    "install": "npm ci --prefix dev --ignore-scripts",
+    "test": "npm test",
+    "lint": "npm run lint",
+    "testFile": "node --no-warnings --test"
+  },
+  "riskyPaths": [
+    "plugin/hooks/**",
+    "plugin/__init__.py",
+    "plugin/servers/tracker/src/db.ts",
+    "plugin/servers/tracker/src/tools.ts",
+    "plugin/servers/tracker/src/mcp.ts",
+    "tests/tracker/fixtures/tools-list.json",
+    "docs/tracker-api.md",
+    "plugin/plugin.yaml",
+    "plugin/.claude-plugin/plugin.json",
+    ".claude-plugin/**",
+    "CONTRIBUTING.md",
+    ".husky/**",
+    ".ripgreprc",
+    "biome.json",
+    "tsconfig.json"
+  ],
+  "prSkill": ".claude/skills/create-pr"
+}
