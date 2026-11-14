@@ -26,12 +26,12 @@ Help the user walk in with the right stories ready. Everything they will say mus
 
 ## Procedure
 
-1. **Pin the interview.** Company, role, stage, time in the user's timezone, people, format (video, take-home, live coding, system design).
+1. **Pin the interview.** Company, role, stage, time in the user's timezone, people, format (video, take-home, live coding, system design, case, portfolio review, work sample, panel, teaching demo).
 2. **Re-read what was sent.** The cover note and answers the employer has seen. The interview will probe them; the prep must be consistent with them.
 3. **Research the company** (10 to 15 minutes of reading, not more):
    - What the product does, for whom, and how it makes money.
    - Stage, size, funding, recent launches.
-   - Engineering: stack, how they ship, public incidents or write-ups.
+   - How the work is done there: for engineering, stack, how they ship and public incidents or write-ups; for other fields, the tools, methods, standards or regulators and public work that apply.
    - The interviewers' roles and what they have written or said publicly about the work.
 4. **Predict the questions.** From the posting's requirements and responsibilities, the stage, and the company's current problems. 8 to 12 questions, most likely first.
 5. **Map stories to questions** with STAR. For each predicted question pick the best story from `stories`, and write:

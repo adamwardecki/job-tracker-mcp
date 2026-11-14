@@ -3,8 +3,8 @@
 <!--
 Your interview and application stories, in your own words. Saved with save_document(name: "stories").
 The plugin only uses what is written here (and in profile.md). It never invents a story.
-Aim for 6 to 12 stories that between them cover: a hard technical problem, something you owned end
-to end, a failure or incident, a disagreement, working with non-engineers, a time you changed how a
+Aim for 6 to 12 stories that between them cover: a hard technical or professional problem, something you owned end
+to end, a failure or incident, a disagreement, working with people outside your field, a time you changed how a
 team worked, and why you are looking now.
 -->
 
