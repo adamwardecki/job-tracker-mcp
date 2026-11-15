@@ -74,7 +74,10 @@ export function makeHandler(tracker: Tracker, { log = () => {} }: { log?: (msg: 
             const result = await tool.handler(tracker, args as never);
             return reply(toolResult(result, false));
           } catch (err) {
-            if (!(err instanceof ToolError)) log(`tool ${tool.name} failed: ${errorText(err)}`);
+            if (!(err instanceof ToolError)) {
+              log(`tool ${tool.name} failed: ${errorText(err)}`);
+              tracker.reportCrash(err, { where: 'tool', tool: tool.name });
+            }
             return reply(toolResult({ error: errorMessage(err) }, true));
           }
         }

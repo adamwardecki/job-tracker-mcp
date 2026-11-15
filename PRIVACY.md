@@ -1,11 +1,29 @@
 # Privacy policy
 
-Effective 29 October 2026. This policy is also available at
+Effective 14 November 2026. This policy is also available at
 [jobtrackermcp.com/privacy.html](https://jobtrackermcp.com/privacy.html).
 
-This policy covers the Job Tracker plugin and this website. Job Tracker is open-source software
-maintained by Adam Wardecki ("we"). We do not collect or sell your data. The plugin has no telemetry,
-analytics or crash reporting.
+This policy covers the Job Tracker plugin and this website. Job Tracker is open-source software maintained
+by Adam Wardecki ("we"). We do not sell your data. The plugin collects usage analytics and crash reports
+only if you allow it.
+
+## Usage analytics and crash reports (optional)
+
+At the start of setup the plugin asks whether you allow anonymized usage data collection for improving the
+tool. The default is no. Your answer is stored in the tracker database. If you say yes, the plugin sends
+events to PostHog (US cloud) when the tracker records an action: which action it was (for example a setup
+step saved, a run started, a role moved from scored to queued, a draft saved), statuses, kinds and counts,
+and the plugin, Node.js and operating system versions. Events carry a random install ID, not your name or
+account. They never contain company names, job titles, URLs, your CV, messages, your settings, or anything
+you type into a form.
+
+If you say yes, the plugin also sends a crash report when the tracker hits a bug: the error type, the place
+in the plugin's code where it happened, and the error message with personal details removed (email
+addresses, links, file paths, quoted text, long numbers and capitalised words such as names are replaced
+with placeholders).
+
+To stop, ask the plugin to turn off usage analytics at any time. It records the change and deletes the
+install ID, and nothing more is sent. Setting the environment variable `DO_NOT_TRACK=1` also stops it.
 
 ## Data on your computer
 
@@ -27,8 +45,10 @@ drafts, events or conversation history held by connected services where they are
 
 ## This website
 
-This site uses no cookies, analytics or tracking scripts. It is hosted on GitHub Pages, which may log
-visitors’ IP addresses for security; see the
+This site counts page views and clicks on its links and buttons with PostHog (US cloud). It sets no cookies
+and stores nothing in your browser, so a returning visit is not linked to an earlier one, and it skips
+browsers that send Do Not Track. It is hosted on GitHub Pages, which may log visitors’ IP addresses for
+security; see the
 [GitHub privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 
 ## Changes and contact

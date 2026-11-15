@@ -72,6 +72,7 @@ export function createBoardServer({ tracker, token, idleMs, onIdle, log = () => 
   const server = createServer((req, res) => {
     handle(req, res).catch((err) => {
       log(`request failed: ${errorText(err)}`);
+      tracker.reportCrash(err, { where: 'board' });
       if (!res.headersSent) send(res, 500, { error: 'Internal error.' });
     });
   });

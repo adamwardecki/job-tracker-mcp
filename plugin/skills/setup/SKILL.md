@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Drives the job-hunt plugin's setup conversation (CV import, hard filters, preferences, writing rules, accounts, connectors, browser check, sources, autonomy, schedule, calibration run). Use when the user runs /job-tracker:setup, says they want to start or reconfigure the job hunt, or when setup_status shows red items before a run.
+description: Drives the job-hunt plugin's setup conversation (CV import, hard filters, preferences, writing rules, accounts, connectors, browser check, sources, autonomy, schedule, calibration run), after asking first about anonymized usage analytics. Use when the user runs /job-tracker:setup, says they want to start or reconfigure the job hunt, or when setup_status shows red items before a run.
 ---
 
 # Setup
@@ -20,7 +20,7 @@ The skill drives the conversation. The tracker tools validate and persist. Every
 
 ## Steps
 
-Start with step 0 (Runtime), then `setup_status`. Resume at the first step that is not green.
+Start with step 0 (Runtime), then `setup_status`. If its `usage_analytics` item is not answered, ask step 1 next, before any other question. Then resume at the first step that is not green.
 
 ### 0. Runtime
 The tracker and the safety hooks run on Node.js 22.18 or newer (23.x needs 23.4 or newer). Without it there are no tracker tools, and the hooks block mail, LinkedIn and browser tools. This step comes before `setup_status`, which is itself a tracker tool.
@@ -51,7 +51,13 @@ Scripts live in `${CLAUDE_PLUGIN_ROOT}/scripts/` (Hermes: `${HERMES_SKILL_DIR}/.
 8. **Not now**: say that nothing else in the plugin works until Node.js is installed, and stop setup.
 9. After an install, run the check again. When it passes (exit 0), say: "Node.js is installed. Quit Claude completely and reopen it, then type /job-tracker:setup to carry on." Stop here: the tracker only starts when the app starts. If it still fails, show its message and stop; do not offer the installer again in this setup run.
 
-### 1. CV import
+### 1. Usage analytics (`usage_analytics`)
+Asked once, as the first question, right after step 0 and before `start_run`. Skip it when `setup_status` shows `usage_analytics` green (already answered). Why: with the answer in first, the rest of setup can be counted; Node.js comes first only because the answer cannot be saved without the tracker.
+- Ask one multiple-choice question: "Allow anonymized usage data collection for improving the tool?" Options: **No** (first) and **Yes**. Before asking, say in the message what it would send: which setup steps and tracker actions happen (e.g. a setup step saved, a run started, a role moved from scored to queued, a draft saved), counts, and the plugin, Node.js and OS versions, under a random install id. Never names, companies, URLs, CV or message text, setting values, or anything typed into a form. Say that a yes also sends crash reports when the tracker hits a bug: the error type, where in the plugin's code it happened, and the message with personal details replaced by placeholders. Say that the answer does not change anything else in the plugin.
+- Call `set_usage_analytics` with `allow: true` only if the user picks Yes, and `allow: false` if they pick No or skip. Never decide for them, and never ask again in a later run. Why: the user agreed to share usage data only after being asked explicitly; an assumed yes would break that promise.
+- Tell them they can turn it off at any time by asking (e.g. "turn off usage analytics"), and do that with `set_usage_analytics` and `allow: false`. Why: revoking must be as easy as agreeing.
+
+### 2. CV import
 A `cv_file` item in `setup_status` that is not green resumes at this step.
 - Ask how they want to give the CV, offering these in order:
   1. **Give the file's full path.** Before asking, tell the user in the chat message (not inside the question tool, which only shows the question) how to copy it:
@@ -70,17 +76,17 @@ A `cv_file` item in `setup_status` that is not green resumes at this step.
 - `save_document` with `name: "profile"`.
 - When `setup_status` shows `cv_file` amber (the CV changed since it was saved), re-read the file, update the profile with the user, then call `save_cv` again with the path `get_cv` returns. Why: the profile is what scoring and writing trust, so it must describe the CV the forms receive.
 
-### 2. Hard filters (`filters`)
+### 3. Hard filters (`filters`)
 Ask, in order: work mode (remote, hybrid, onsite; multi-select); for hybrid, max days per week and acceptable cities; residence country; timezone and acceptable overlap window; work authorisation (where no sponsorship is needed); pay floor (amount, currency, period, gross or net, and contract type); the equity rule (default: floor unchanged, equity may justify a "negotiable" answer inside the band); excluded industries; excluded role shapes (e.g. for engineers backend-only, forward-deployed or people manager; for other fields, ask which kinds of role they never want); culture red lines.
 - Explain the band rule: a role drops on pay only if the band **maximum** is below the floor; straddling bands are kept and flagged.
 - Echo all filters back on one screen, then `save_config` with `section: "filters"`.
 - Fields: `work_mode`, `hybrid`, `residence_country`, `timezone`, `overlap_window`, `work_authorisation`, `pay_floor`, `pay_rule_with_equity`, `band_rule`, `excluded_industries`, `excluded_role_shapes`, `culture_red_lines`.
 
-### 3. Soft preferences (`prefs`)
+### 4. Soft preferences (`prefs`)
 Titles, seniority, company stage, tools and skills they want and avoid (saved as `stack_want` and `stack_avoid`; any profession, e.g. Epic and wound care, or Figma and design systems), domains they like, contract openness, availability date. These only affect the score. `save_config` with `section: "prefs"`.
 - Fields: `titles`, `seniority`, `stage`, `stack_want`, `stack_avoid`, `domains_like`, `contract_ok`, `availability`.
 
-### 4. Writing rules (`writing`)
+### 5. Writing rules (`writing`)
 - Offer to learn the user's voice from 2 to 5 samples they wrote (emails, cover letters, posts). If they agree, summarise the voice (sentence length, register, words they use and avoid) and `save_document` with `name: "voice"`.
 - Confirm defaults: humanizer on, cover note word limit (default 200), never volunteer gaps, signature style name-only (no bare URLs in email signatures, Gmail rewrites them into redirect links).
 - Show the list of **personal fields the plugin will never fill**: passport, nationality or citizenship, age or date of birth, marital status, gender, ethnicity, disability, veteran status, religion, sexual orientation, national ID, tax or social security numbers, photos, passwords. Also: consent boxes stay on the privacy-preserving option unless the user allows them per role.
@@ -88,34 +94,34 @@ Titles, seniority, company stage, tools and skills they want and avoid (saved as
 - `save_config` with `section: "writing"`.
 - Fields: `voice_profile`, `humanizer`, `max_words_cover_note`, `never_volunteer_gaps`, `signature_style`.
 
-### 5. Accounts (`accounts`)
+### 6. Accounts (`accounts`)
 - Ask which of the user's own inboxes recruiters actually write to (`job_inbox_email`), and **which calendar interview invites land on** (`invite_calendar`). Both are required. Store the address or a label such as `personal` or `work`.
 - Compare with the connected Google account(s) and record the connected one as `connected_calendar`. If the connected calendar is a different account, warn plainly: invites will not be visible to the pipeline, and colleagues may book over interviews. Offer to connect the right account. Why: interviews once sat on a personal calendar the pipeline could not see.
 - Ask whether the browser autofills a different (e.g. work) email into forms; record it as `chrome_autofill_risk`.
-- `save_config` with `section: "accounts"`. Job-site logins are not accounts: they go in `sources.need_login` in step 8.
+- `save_config` with `section: "accounts"`. Job-site logins are not accounts: they go in `sources.need_login` in step 9.
 - Fields: `job_inbox_email`, `invite_calendar`, `connected_calendar`, `chrome_autofill_risk`.
 
-### 6. Connectors
+### 7. Connectors
 - Search the connector registry (or the host's connector suggestion tool) and suggest: Gmail, Google Calendar, and LinkedIn (read-only use: job search and inbox). The tracker is already connected: it ships with the plugin.
 - Explain what each one is used for and that send tools are blocked by a hook: the plugin only creates drafts.
 - Do a cheap read call on each connected one to confirm it works.
 - A connector the user declines (e.g. LinkedIn): `record_setup_decision` with their words.
 
-### 7. Browser check
+### 8. Browser check
 - Detect Claude in Chrome, the built-in browser, or Hermes `browser_*` tools (check the tool list; use tool search if tools are deferred). If neither is present, show install steps and move on. The browser is optional.
 - If one is present: open a harmless page, then check which job sites are logged in (Wellfound, LinkedIn, YC Work at a Startup, Welcome to the Jungle, Glassdoor if `filters.work_authorisation` includes the US, any tracker boards). Use the start URLs in the `source-roles` reference for those sites, and URLs from the user or from emails for anything else. A login redirect on a **guessed** URL is not proof of being logged out.
-- Capabilities are recorded by `start_run`; no `save_config` needed. Note logged-in sites for step 8. No browser at all: `record_setup_decision` (key from `setup_status`) with the user's choice, e.g. "no browser, connectors only".
+- Capabilities are recorded by `start_run`; no `save_config` needed. Note logged-in sites for step 9. No browser at all: `record_setup_decision` (key from `setup_status`) with the user's choice, e.g. "no browser, connectors only".
 
-### 8. Sources
+### 9. Sources
 1. Show the catalogue from the `source-roles` skill in the message as one table: ID, source, mode, whether it needs a browser, whether it needs a login, and the one-line quirk. Include the retired sources at the bottom, marked retired.
 2. Let the user pick with **multi-select** questions, one per catalogue group (General; Startup and remote boards; US job boards; Brokers and trackers). A question holds at most 4 options, so split a larger group into two questions (e.g. US job boards 1 and 2), and use a second question call if there are more questions than one call allows. Each option's label is the source name and its description is the mode plus the login note. Say in the question text that a retired source can be typed under "Other".
 3. US job boards: if `filters.work_authorisation` includes the US or `filters.residence_country` is `US`, put that group first and mark it recommended. Otherwise still offer it, and say in the question that most of its roles need US work authorisation.
-4. Echo the picks back on one screen (enabled, which of them need a login, which need a browser) before saving. A picked browser source with no browser from step 7 stays enabled; say it will be skipped until a browser is connected. A picked source that needs a login the user is not logged in to goes in `need_login`; tell them which site to log in to.
+4. Echo the picks back on one screen (enabled, which of them need a login, which need a browser) before saving. A picked browser source with no browser from step 8 stays enabled; say it will be skipped until a browser is connected. A picked source that needs a login the user is not logged in to goes in `need_login`; tell them which site to log in to.
 5. If they enable `ats_boards`, ask for the job board URLs of companies they want to watch (e.g. `https://jobs.ashbyhq.com/<company>`, a Greenhouse or Lever board); without at least one, leave `ats_boards` disabled. The other sources start from fixed URLs in the `source-roles` reference: do not ask for those.
 6. Save with `save_config` (`section: "sources"`) using the catalogue IDs: `enabled` is the picks, `disabled` is every other catalogue ID. Call `set_source_status` with `disabled` for each disabled source.
 - Fields: `enabled`, `need_login`, `disabled`, `boards`.
 
-### 9. Autonomy (`autonomy`)
+### 10. Autonomy (`autonomy`)
 Ask whether to review each application or apply automatically to matching roles. Default to review first. Echo the choice and save only after the user confirms, using `save_config` with `section: "autonomy"` and `data.auto_apply: false` (review first) or `true` (automatic). Read `get_profile` back to confirm the saved value. Why: a durable, explicit choice must control future runs; silence and older settings must never opt someone in.
 - unattended: search, verify, score, draft note, draft email, record
 - submission: automatic only when `autonomy.auto_apply` is exactly `true`; otherwise the user approves each submit
@@ -123,14 +129,14 @@ Ask whether to review each application or apply automatically to matching roles.
 Explain that automatic applications still require a verified, scored, queued role, no live application at the company, and no unresolved question. Forms needing consent, personal data, login, or a visible CAPTCHA come back to the user. Hooks enforce those limits in either mode. The legacy `unattended` and `needs_user` lists do not grant submit permission; keep their defaults and use `auto_apply` for this choice.
 Tell the user they can turn automatic applications off by asking to update this setting; save `auto_apply: false` and read it back. Why: the submit hook reads the current preference before every attempt, including in running sessions.
 
-### 10. Schedule (`schedule`)
+### 11. Schedule (`schedule`)
 - Ask when the computer is usually on with Claude open. Create a weekday **local** scheduled task inside that window that runs `/job-tracker:sweep`, using the host's local scheduling (a Claude Desktop or Claude Code local scheduled task, or a Hermes cron job created with the `cronjob` tool with skill `job-tracker:sweep` attached and the prompt "Run today's job-hunt sweep.", or on DeepSeek Harness a launchd or cron job that runs `dsh headless "/job-tracker:sweep"`). In Claude Desktop, turn the task's **Require this computer** option on. Why: without it the task can run in the cloud, which cannot reach the browser or the local tracker. Do not schedule it in the cloud for the same reason. If no scheduling tool is available, give the user the exact steps and the prompt text.
 - Say plainly that the task only runs while the machine is awake and the app is open, and save the window as `desktop_usually_on`.
 - Ask how the daily report should arrive: as the run's output (`artifact`), a file in the local folder (`file`, desktop runs only), or a Gmail draft to themselves (`email_draft`). Save it as `report_delivery`.
 - `save_config` with `section: "schedule"`.
 - Fields: `daily` (`days`, `time`, `tz`), `desktop_usually_on`, `report_delivery`.
 
-### 11. Calibration run
+### 12. Calibration run
 - Run the sweep procedure from `/job-tracker:sweep` with `--limit 5 --calibration`.
 - Show the 5 results with the verdict and the one-line reason for each. For queued ones, add the ready-to-type command with the real id, e.g. `/job-tracker:apply 42`, never a `<id>` placeholder.
 - Before adding rules, Rules: load all types (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). A new rule must not repeat or contradict one. For each "no, because..." from the user, call `add_rule` with the text, the user's reason, the example and the `types` of the consumers it affects (omit for global). For each "yes, but you dropped it", follow `/job-tracker:correct`, which also governs deactivation and free-text preferences.
