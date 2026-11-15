@@ -40,6 +40,7 @@ const roleFields = {
 export const SCHEMAS = {
   setup_status: obj({}),
   record_setup_decision: obj({ key: str('setup_status item key'), decision: str("The user's decision, in their words") }, ['key', 'decision']),
+  set_usage_analytics: obj({ allow: bool("true only on the user's explicit yes; false to decline or revoke") }, ['allow']),
   start_run: obj({
     kind: str('sweep | apply | triage | setup | calibration'),
     capabilities: typed<CapabilitiesConfig>('object', '{connectors: {gmail, calendar, linkedin}, browser: "claude-in-chrome" | "built-in" | null, local_folder: bool}'),
@@ -194,6 +195,7 @@ const defineTool = <N extends ToolName>(name: N, description: string, handler: (
 export const TOOLS: Tool[] = [
   defineTool('setup_status', 'Checklist of what is configured, missing or degraded. Call at the start of every run.', (t) => t.setupStatus()),
   defineTool('record_setup_decision', 'Record the user decision for an amber setup item (e.g. "no browser, accepted"), so setup can complete.', (t, a) => t.recordDecision(a)),
+  defineTool('set_usage_analytics', 'Record the user\'s answer on anonymized usage data collection for improving the tool. Only on the user\'s own words, never assumed. Asked first in setup, so the setup steps are counted too; the user can revoke any time.', (t, a) => t.setUsageAnalytics(a)),
   defineTool('start_run', 'Start a run and record detected capabilities (connectors, browser, local folder). Returns run_id.', (t, a) => t.startRun(a)),
   defineTool('finish_run', 'Close a run with a one-paragraph summary.', (t, a) => t.finishRun(a)),
   defineTool('get_profile', 'All config sections: filters, prefs, writing, accounts, autonomy, schedule, sources, capabilities.', (t) => t.getProfile()),

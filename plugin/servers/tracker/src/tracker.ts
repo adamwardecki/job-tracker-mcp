@@ -1,7 +1,9 @@
 // Domain logic behind the tracker tools. Every write goes through here; nothing else touches the DB.
 
+import { randomUUID } from 'node:crypto';
 import { basename, resolve } from 'node:path';
 import type { DatabaseSync, SQLInputValue, StatementResultingChanges } from 'node:sqlite';
+import type { Analytics, Prop } from './analytics.ts';
 import type { ConfigSections, Profile, SectionName } from './config.ts';
 import { DEFAULTS, describeSection, SECTION_NAMES, validateSection } from './config.ts';
 import type { CvRecord } from './cv.ts';
@@ -55,6 +57,16 @@ export type Outcome = (typeof OUTCOMES)[number];
 const PROSE_KINDS = ['cover_note', 'form_answers', 'gmail_draft'];
 const DOCUMENTS = ['profile', 'stories', 'reusable-answers', 'voice'];
 const ROLE_FIELDS = ['title', 'url', 'ats', 'location_line', 'location_type', 'comp_min', 'comp_max', 'comp_currency', 'comp_period', 'equity', 'stack', 'industry', 'source', 'posted_at'] as const;
+
+// Usage events name these kinds; any other value is sent as 'other' (it may be free text from the model).
+const RUN_KINDS = ['sweep', 'apply', 'triage', 'setup', 'calibration'];
+const ARTIFACT_KINDS = ['cover_note', 'cover_letter_pdf', 'gmail_draft', 'form_answers', 'confirmation', 'note'];
+// setup_status item keys, the only values setup_decision_recorded sends as is.
+const SETUP_ITEMS = ['usage_analytics', 'profile_document', 'cv_file', 'filters', 'prefs', 'writing', 'accounts', 'connectors', 'browser', 'sources', 'autonomy', 'schedule', 'stories', 'calibration'];
+const known = (list: readonly string[], value: string | null | undefined) => (value && list.includes(value) ? value : 'other');
+
+// The user's answer to anonymized usage analytics (profile key usage_analytics). install_id exists only while allowed.
+export type UsageAnalytics = { allowed: boolean; decided_at: string; install_id?: string };
 
 // A company with its aliases parsed.
 export type Company = Omit<CompanyRow, 'aliases'> & { aliases: string[] };
@@ -318,10 +330,12 @@ function typeFilterSql(matched: readonly RuleType[]): string {
 export class Tracker {
   db: DatabaseSync;
   dbPath: string | null;
+  analytics: Analytics | null;
 
-  constructor(db: DatabaseSync, { dbPath = null }: { dbPath?: string | null } = {}) {
+  constructor(db: DatabaseSync, { dbPath = null, analytics = null }: { dbPath?: string | null; analytics?: Analytics | null } = {}) {
     this.db = db;
     this.dbPath = dbPath;
+    this.analytics = analytics;
   }
 
   // Row types are declared by the caller; node:sqlite returns untyped records.
@@ -402,6 +416,7 @@ export class Tracker {
       throw new ToolError(`Invalid config:\n- ${errors.join('\n- ')}${shape}`);
     }
     this.run('INSERT INTO profile(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', section, JSON.stringify(merged));
+    this.track('config_saved', { section: known(SECTION_NAMES, section) });
     return { saved: section, value: merged };
   }
 
@@ -415,6 +430,7 @@ export class Tracker {
     req(DOCUMENTS.includes(name), `Unknown document "${name}". Known: ${DOCUMENTS.join(', ')}`);
     req(typeof content === 'string' && content.trim(), 'content is required');
     this.run('INSERT INTO documents(name, content, updated_at) VALUES(?, ?, ?) ON CONFLICT(name) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at', name, content, now());
+    this.track('document_saved', { document: known(DOCUMENTS, name) });
     return { saved: name, chars: content.length };
   }
 
@@ -426,6 +442,7 @@ export class Tracker {
     const stored = copy ? copyCv(path, this.dbPath) : resolve(path);
     const cv: CvRecord = { path: stored, mode: copy ? 'copied' : 'linked', sha256: hashCvFile(stored), bytes, saved_at: now() };
     this.run("INSERT INTO profile(key, value) VALUES('cv', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(cv));
+    this.track('cv_saved', { mode: cv.mode });
     return { path: cv.path, mode: cv.mode, bytes };
   }
 
@@ -444,6 +461,9 @@ export class Tracker {
     const decisions = parseJson<Record<string, string>>(this.one<{ value: string }>("SELECT value FROM profile WHERE key = '_decisions'")?.value, {});
     const items: { key: string; state: 'green' | 'amber' | 'red'; detail: string; decision: string | undefined }[] = [];
     const add = (key: string, state: 'green' | 'amber' | 'red', detail: string) => items.push({ key, state: decisions[key] && state !== 'green' ? 'amber' : state, detail, decision: decisions[key] || undefined });
+    // First: setup asks it before anything else, so the steps after it can be counted.
+    const usage = this.usageAnalytics();
+    add('usage_analytics', usage ? 'green' : 'amber', usage ? `Anonymized usage analytics ${usage.allowed ? 'on' : 'off'} (chosen ${usage.decided_at.slice(0, 10)})` : 'Not asked yet: may the tracker send anonymized usage data to improve the tool?');
     add('profile_document', docs.has('profile') ? 'green' : 'red', docs.has('profile') ? 'profile.md saved' : 'Import a CV and save the profile document (with a Tools and skills line per role).');
     const cv = this.getCv();
     if ('missing' in cv) add('cv_file', 'red', 'Save the CV file: give its full path (Finder: Option+Command+C; File Explorer: Ctrl+Shift+C or Shift+right-click > Copy as path).');
@@ -474,6 +494,11 @@ export class Tracker {
     const rules = this.one<{ n: number }>('SELECT COUNT(*) AS n FROM rules WHERE active = 1')?.n ?? 0;
     add('calibration', rules > 0 || decisions.calibration ? 'green' : 'amber', rules > 0 ? `${rules} active rules` : 'Calibration run not done yet.');
     const all_green = items.every((i) => i.state === 'green' || i.decision);
+    // One property per item state lets setup progress be counted without any of the details.
+    const states: Record<string, Prop> = {};
+    for (const i of items) states[`state_${i.key}`] = i.decision && i.state !== 'green' ? 'decided' : i.state;
+    const count = (state: string) => items.filter((i) => i.state === state).length;
+    this.track('setup_status_checked', { ...states, green_count: count('green'), amber_count: count('amber'), red_count: count('red'), all_green });
     return { db_path: this.dbPath, items, all_green };
   }
 
@@ -481,7 +506,36 @@ export class Tracker {
     const cur = parseJson<Record<string, string>>(this.one<{ value: string }>("SELECT value FROM profile WHERE key = '_decisions'")?.value, {});
     cur[key] = decision;
     this.run("INSERT INTO profile(key, value) VALUES('_decisions', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(cur));
+    this.track('setup_decision_recorded', { item: known(SETUP_ITEMS, key) });
     return { recorded: key };
+  }
+
+  // ---------- usage analytics ----------
+
+  usageAnalytics(): UsageAnalytics | null {
+    return parseJson<UsageAnalytics | null>(this.one<{ value: string }>("SELECT value FROM profile WHERE key = 'usage_analytics'")?.value, null);
+  }
+
+  // Only on the user's own answer. A new opt-in gets a fresh random id; a revoke deletes it, so later events
+  // cannot be joined to earlier ones.
+  setUsageAnalytics({ allow }: ArgsFor<'set_usage_analytics'>) {
+    const cur = this.usageAnalytics();
+    const decided_at = now();
+    const value: UsageAnalytics = allow ? { allowed: true, decided_at, install_id: (cur?.allowed && cur.install_id) || randomUUID() } : { allowed: false, decided_at };
+    this.run("INSERT INTO profile(key, value) VALUES('usage_analytics', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(value));
+    if (allow) this.track('usage_analytics_enabled');
+    return { allowed: allow, decided_at };
+  }
+
+  // Reads the opt-in at every event: the board runs in another process, and a revoke must stop it too.
+  track(event: string, props: Record<string, Prop> = {}): void {
+    if (!this.analytics) return;
+    try {
+      const consent = this.usageAnalytics();
+      this.analytics.capture(consent?.allowed ? consent.install_id : null, event, props);
+    } catch {
+      // Analytics never breaks a tracker call.
+    }
   }
 
   startRun({ kind, capabilities }: ArgsFor<'start_run'>) {
@@ -491,12 +545,15 @@ export class Tracker {
     if (capabilities) {
       this.run("INSERT INTO profile(key, value) VALUES('capabilities', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(caps));
     }
-    return { run_id: Number(r.lastInsertRowid), capabilities: caps };
+    const run_id = Number(r.lastInsertRowid);
+    this.track('run_started', { run_kind: known(RUN_KINDS, kind) });
+    return { run_id, capabilities: caps };
   }
 
   finishRun({ run_id, summary }: ArgsFor<'finish_run'>) {
     const r = this.run('UPDATE runs SET finished_at = ?, summary = ? WHERE id = ?', now(), summary || null, run_id);
     req(r.changes, `No run ${run_id}`);
+    this.track('run_finished');
     return { finished: run_id };
   }
 
@@ -734,6 +791,7 @@ export class Tracker {
       const evidence = f.identity_evidence ?? undefined;
       this.indexRoleUrls(roleId, f.url_aliases ?? [], evidence);
       if (f.url) this.indexRoleUrls(roleId, [f.url], target.role ? evidence : undefined);
+      this.track(created ? 'role_created' : 'role_updated', { has_posting_url: !!f.url, has_ats_posting: claims.some((claim) => !!claim.posting) });
       return { role: this.mustRole(roleId), company, created, dedupe, possible_role_ids };
     });
   }
@@ -808,6 +866,7 @@ export class Tracker {
       }
       if (a.asked_salary != null) this.run('UPDATE roles SET asked_salary = ? WHERE id = ?', a.asked_salary.trim(), a.role_id);
       this.insertEvent(ev);
+      this.track('role_transitioned', { from_status: from, to_status: a.to, actor });
       return { role: this.roleRow(a.role_id), from, to: a.to };
     });
   }
@@ -1015,6 +1074,7 @@ export class Tracker {
     const maxWords = kind === 'cover_note' ? this.section('writing').max_words_cover_note : undefined;
     const lint = content && PROSE_KINDS.includes(kind) ? lintProse(content, { max_words: maxWords }) : null;
     const r = this.run('INSERT INTO artifacts(role_id, kind, path_or_ref, content, lint, created_at) VALUES(?, ?, ?, ?, ?, ?)', role_id ?? null, kind, ref || null, content || null, lint ? JSON.stringify(lint) : null, now());
+    this.track('artifact_saved', { artifact_kind: known(ARTIFACT_KINDS, kind), linked_to_role: role_id != null });
     return { artifact_id: Number(r.lastInsertRowid), lint, verified: false, note: kind === 'gmail_draft' ? 'Unverified until read back with get_draft/list_drafts and verify_artifact.' : undefined };
   }
 
@@ -1045,6 +1105,7 @@ export class Tracker {
     req(readback && String(readback).trim(), 'readback is required: the text returned when reading the artifact back.');
     if (a.kind === 'gmail_draft') req(String(readback).includes(String(a.path_or_ref)), `Read-back does not contain draft id ${a.path_or_ref}. Read the draft back with get_draft/list_drafts first.`);
     this.run('UPDATE artifacts SET verified_at = ?, readback = ? WHERE id = ?', now(), String(readback).slice(0, 4000), artifact_id);
+    this.track('artifact_verified', { artifact_kind: known(ARTIFACT_KINDS, a.kind) });
     return { artifact_id, verified: true };
   }
 
@@ -1059,6 +1120,7 @@ export class Tracker {
       const rule_id = Number(r.lastInsertRowid);
       this.storeRuleTypes(rule_id, kinds);
       this.bumpRulesRevision();
+      this.track('rule_added', { added_by: known(['user', 'pipeline'], added_by), type_count: kinds.length });
       return { rule_id };
     });
   }
@@ -1126,6 +1188,7 @@ export class Tracker {
       if (rule.active) {
         this.run('UPDATE rules SET active = 0 WHERE id = ?', id);
         this.bumpRulesRevision();
+        this.track('rule_deactivated');
       }
       return { deactivated: id };
     });
@@ -1187,6 +1250,7 @@ export class Tracker {
         name, now(), effective, now(), failures, found || 0, applied || 0, error || null,
       );
       const source = this.one<SourceRow>('SELECT * FROM sources WHERE name = ?', name);
+      this.track('source_status_recorded', { source_status: effective, coverage: report?.coverage ?? 'not_reported', status_changed: changed });
       if (!report) return { source, changed };
       return { source, changed, checkpoint: this.writeCheckpoint(report) };
     });
@@ -1250,8 +1314,14 @@ export class Tracker {
       }
       const next = this.interviewValues(a, known);
       const key: InterviewKey = external ? { source: external.source, source_account: external.account, source_id: external.id } : { source: known?.source ?? null, source_account: known?.source_account ?? null, source_id: known?.source_id ?? null };
-      if (!known) return interviewResult(this.insertInterview(role, next, key, occurred, when), next.state, { created: true });
-      return this.updateInterview(role, known, next, key, occurred != null, when);
+      if (!known) {
+        const result = interviewResult(this.insertInterview(role, next, key, occurred, when), next.state, { created: true });
+        this.track('interview_recorded', { change_kind: 'created', interview_state: next.state });
+        return result;
+      }
+      const result = this.updateInterview(role, known, next, key, occurred != null, when);
+      if (result.updated) this.track('interview_recorded', { change_kind: 'updated', interview_state: result.state });
+      return result;
     });
   }
 

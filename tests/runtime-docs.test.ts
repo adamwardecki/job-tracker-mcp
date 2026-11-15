@@ -8,13 +8,13 @@ import { test } from 'node:test';
 const read = (p: string) => readFileSync(new URL(`../plugin/${p}`, import.meta.url), 'utf8');
 const step0 = () => {
   const skill = read('skills/setup/SKILL.md');
-  return skill.slice(skill.indexOf('### 0. Runtime'), skill.indexOf('### 1. CV import'));
+  return skill.slice(skill.indexOf('### 0. Runtime'), skill.indexOf('### 1. Usage analytics'));
 };
 
 test('setup runs the runtime step before setup_status', () => {
   const skill = read('skills/setup/SKILL.md');
   const step0 = skill.indexOf('### 0. Runtime');
-  assert.ok(step0 > -1 && step0 < skill.indexOf('### 1. CV import'), 'step 0 comes before CV import');
+  assert.ok(step0 > -1 && step0 < skill.indexOf('### 1. Usage analytics'), 'step 0 comes before CV import');
   assert.match(skill, /scripts\/install-node\.sh" --check/);
   // Windows uses winget instead of a shipped PowerShell script, which held the directory submission.
   assert.doesNotMatch(skill, /\.ps1/);
@@ -22,6 +22,19 @@ test('setup runs the runtime step before setup_status', () => {
   assert.match(skill, /Windows, say: open Terminal or PowerShell and run `winget install OpenJS\.NodeJS\.LTS`/);
   assert.match(skill, /never work around a checksum or signature failure/i);
   assert.match(read('commands/setup.md'), /1\. Run step 0 \(Runtime\) of the skill first\. If step 0 stops, stop here too\./);
+});
+
+test('setup asks about usage analytics first, before start_run, so the rest of setup can be counted', () => {
+  const skill = read('skills/setup/SKILL.md');
+  const step1 = skill.slice(skill.indexOf('### 1. Usage analytics'), skill.indexOf('### 2. CV import'));
+  assert.ok(skill.indexOf('### 0. Runtime') < skill.indexOf('### 1. Usage analytics'), 'runtime first: without Node the answer cannot be saved');
+  assert.match(step1, /"Allow anonymized usage data collection for improving the tool\?"/);
+  assert.match(step1, /`allow: true` only if the user picks Yes/);
+  assert.match(step1, /Why:/);
+  const cmd = read('commands/setup.md');
+  const ask = cmd.indexOf('ask step 1 (Usage analytics)');
+  assert.ok(ask > -1 && ask < cmd.indexOf('Call `start_run`'), 'asked before start_run');
+  assert.ok(cmd.indexOf('Run step 0 (Runtime)') < ask, 'after step 0');
 });
 
 test('setup step 0 never loops on restarts and never reinstalls over a shadowed Node', () => {
@@ -315,7 +328,7 @@ test('drafts that need the CV attach the saved file, and the claim is checked', 
 
 test('setup copies the CV and asks for its path, with how to copy one, instead of a chat upload', () => {
   const skill = read('skills/setup/SKILL.md');
-  const s = skill.slice(skill.indexOf('### 1. CV import'), skill.indexOf('### 2.'));
+  const s = skill.slice(skill.indexOf('### 2. CV import'), skill.indexOf('### 3.'));
   // In a cloud chat session a file dropped into the chat is uploaded to the cloud machine, so the tracker on the
   // user's computer cannot open it, and a shell search runs on the cloud machine too. A path they gave was once only linked.
   assert.match(s, /1\. \*\*Give the file's full path\.\*\*/);

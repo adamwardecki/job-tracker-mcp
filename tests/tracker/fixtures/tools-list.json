@@ -32,6 +32,23 @@
     }
   },
   {
+    "name": "set_usage_analytics",
+    "description": "Record the user's answer on anonymized usage data collection for improving the tool. Only on the user's own words, never assumed. Asked first in setup, so the setup steps are counted too; the user can revoke any time.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "boolean",
+          "description": "true only on the user's explicit yes; false to decline or revoke"
+        }
+      },
+      "required": [
+        "allow"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "start_run",
     "description": "Start a run and record detected capabilities (connectors, browser, local folder). Returns run_id.",
     "inputSchema": {

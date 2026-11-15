@@ -66,7 +66,8 @@ async function dev(passthrough: string[]): Promise<void> {
   claudeCli(['plugin', 'marketplace', 'update', MARKETPLACE]);
   // Without the override both copies load as job-tracker and every hook runs twice, against different folders.
   const settings = JSON.stringify({ enabledPlugins: { [PLUGIN_ID]: false } });
-  startClaude(['--plugin-dir', join(REPO, 'plugin'), '--settings', settings, ...passthrough], { ...cleanEnv(), JOB_TRACKER_HOME: DEV_HOME });
+  // The copy carries the real database's usage-analytics opt-in; dev sessions stay out of the production project.
+  startClaude(['--plugin-dir', join(REPO, 'plugin'), '--settings', settings, ...passthrough], { ...cleanEnv(), JOB_TRACKER_HOME: DEV_HOME, JOB_TRACKER_ANALYTICS: 'off' });
 }
 
 async function prod(passthrough: string[]): Promise<void> {
