@@ -33,7 +33,7 @@
   },
   {
     "name": "set_usage_analytics",
-    "description": "Record the user's answer on anonymized usage data collection for improving the tool. Only on the user's own words, never assumed. Asked first in setup, so the setup steps are counted too; the user can revoke any time.",
+    "description": "Record the user's answer on anonymized usage data collection for improving the tool (usage events and crash reports). Only on the user's own words, never assumed. Asked first in setup, so the setup steps are counted too; the user can revoke any time.",
     "inputSchema": {
       "type": "object",
       "properties": {

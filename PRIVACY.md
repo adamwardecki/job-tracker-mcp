@@ -3,11 +3,11 @@
 Effective 14 November 2026. This policy is also available at
 [jobtrackermcp.com/privacy.html](https://jobtrackermcp.com/privacy.html).
 
-This policy covers the Job Tracker plugin and this website. Job Tracker is open-source software
-maintained by Adam Wardecki ("we"). We do not sell your data. The plugin has no crash reporting, and it
-collects usage analytics only if you allow it.
+This policy covers the Job Tracker plugin and this website. Job Tracker is open-source software maintained
+by Adam Wardecki ("we"). We do not sell your data. The plugin collects usage analytics and crash reports
+only if you allow it.
 
-## Usage analytics (optional)
+## Usage analytics and crash reports (optional)
 
 At the start of setup the plugin asks whether you allow anonymized usage data collection for improving the
 tool. The default is no. Your answer is stored in the tracker database. If you say yes, the plugin sends
@@ -16,6 +16,11 @@ step saved, a run started, a role moved from scored to queued, a draft saved), s
 and the plugin, Node.js and operating system versions. Events carry a random install ID, not your name or
 account. They never contain company names, job titles, URLs, your CV, messages, your settings, or anything
 you type into a form.
+
+If you say yes, the plugin also sends a crash report when the tracker hits a bug: the error type, the place
+in the plugin's code where it happened, and the error message with personal details removed (email
+addresses, links, file paths, quoted text, long numbers and capitalised words such as names are replaced
+with placeholders).
 
 To stop, ask the plugin to turn off usage analytics at any time. It records the change and deletes the
 install ID, and nothing more is sent. Setting the environment variable `DO_NOT_TRACK=1` also stops it.

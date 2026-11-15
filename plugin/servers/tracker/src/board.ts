@@ -12,6 +12,7 @@ import { boardStatePath, removeBoardState, writeBoardState } from './board-state
 import { defaultDbPath, openDb } from './db.ts';
 import { SERVER_INFO } from './mcp.ts';
 import { Tracker } from './tracker.ts';
+import { errorText } from './util.ts';
 
 // A closed pipe (the launcher is gone) must not crash a board that is meant to outlive it.
 process.stderr.on('error', () => {});
@@ -39,7 +40,8 @@ const token = randomBytes(32).toString('hex');
 const file = boardStatePath(dbPath);
 // Board moves send usage events too, but only while the user's opt-in in the database says so.
 const analytics = new Analytics({ version: SERVER_INFO.version });
-const server = createBoardServer({ tracker: new Tracker(openDb(dbPath), { dbPath, analytics }), token, idleMs, onIdle: stop, log });
+const tracker = new Tracker(openDb(dbPath), { dbPath, analytics });
+const server = createBoardServer({ tracker, token, idleMs, onIdle: stop, log });
 
 // Every exit path, including an uncaught exception, removes our state file (only if it names this pid).
 process.on('exit', () => removeBoardState(file, process.pid));
@@ -59,5 +61,13 @@ server.listen(0, '127.0.0.1', () => {
   writeBoardState(file, { port: addr.port, token, pid: process.pid, db: dbPath });
   log(`listening on 127.0.0.1:${addr.port}`);
 });
+// A crash that ends the board is reported (only if the user opted in), then the process exits as Node would.
+for (const event of ['uncaughtException', 'unhandledRejection'] as const) {
+  process.on(event, (err) => {
+    log(`${event}: ${errorText(err)}`);
+    tracker.reportCrash(err, { where: event === 'uncaughtException' ? 'board_uncaught' : 'board_unhandled_rejection', handled: false });
+    void analytics.flush(1500).finally(() => process.exit(1));
+  });
+}
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);

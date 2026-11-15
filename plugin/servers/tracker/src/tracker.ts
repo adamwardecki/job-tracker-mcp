@@ -538,6 +538,17 @@ export class Tracker {
     }
   }
 
+  // A bug in the tracker, scrubbed of personal data (analytics.ts), under the same opt-in as usage events.
+  reportCrash(err: unknown, props: Record<string, Prop> & { handled?: boolean } = {}): void {
+    if (!this.analytics) return;
+    try {
+      const consent = this.usageAnalytics();
+      this.analytics.captureException(consent?.allowed ? consent.install_id : null, err, props);
+    } catch {
+      // A crash report never adds a crash.
+    }
+  }
+
   startRun({ kind, capabilities }: ArgsFor<'start_run'>) {
     req(kind, 'kind is required');
     const caps = { ...(capabilities || {}), detected_at: now() };
