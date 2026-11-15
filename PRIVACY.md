@@ -40,10 +40,10 @@ drafts, events or conversation history held by connected services where they are
 
 ## This website
 
-This site counts page views and clicks on its links and buttons with PostHog (US cloud). It never records
-what you type. It sets no cookies and stores nothing in your browser, so a returning visit is not linked to
-an earlier one, and it skips browsers that send Do Not Track. It is hosted on GitHub Pages, which may log
-visitors’ IP addresses for security; see the
+This site counts page views and clicks on its links and buttons with PostHog (US cloud). It sets no cookies
+and stores nothing in your browser, so a returning visit is not linked to an earlier one, and it skips
+browsers that send Do Not Track. It is hosted on GitHub Pages, which may log visitors’ IP addresses for
+security; see the
 [GitHub privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 
 ## Changes and contact
