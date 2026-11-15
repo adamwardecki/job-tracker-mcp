@@ -313,13 +313,18 @@ test('drafts that need the CV attach the saved file, and the claim is checked', 
   assert.match(read('agents/auditor.md'), /reported "with CV"/);
 });
 
-test('setup copies the CV and looks for a dropped file before asking for its path', () => {
+test('setup copies the CV and asks for its path, with how to copy one, instead of a chat upload', () => {
   const skill = read('skills/setup/SKILL.md');
   const s = skill.slice(skill.indexOf('### 1. CV import'), skill.indexOf('### 2.'));
-  // A user who dropped their CV into the chat was asked for a path, and a path they gave was only linked.
-  assert.match(s, /look for it by name before asking: on macOS `mdfind -name "<file name>"`/);
-  assert.match(s, /Ask for the path \(option 2\) only when the search finds nothing or there is no shell\./);
-  assert.match(s, /For options 1 and 2, `save_cv` copies the file into `cv\/` in the tracker's folder/);
+  // In a cloud chat session a file dropped into the chat is uploaded to the cloud machine, so the tracker on the
+  // user's computer cannot open it, and a shell search runs on the cloud machine too. A path they gave was once only linked.
+  assert.match(s, /1\. \*\*Give the file's full path\.\*\*/);
+  assert.match(s, /Option\+Command\+C/);
+  assert.match(s, /Copy as path/);
+  assert.match(s, /strip the quotes/);
+  assert.doesNotMatch(s, /mdfind/);
+  assert.doesNotMatch(s, /Drop the file into the chat/);
+  assert.match(s, /`save_cv` copies the file into `cv\/` in the tracker's folder/);
   assert.match(s, /Pass `copy: false` only if the user asks/);
   assert.doesNotMatch(s, /`copy: true`/);
 });

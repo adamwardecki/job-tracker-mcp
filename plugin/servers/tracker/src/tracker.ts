@@ -446,7 +446,7 @@ export class Tracker {
     const add = (key: string, state: 'green' | 'amber' | 'red', detail: string) => items.push({ key, state: decisions[key] && state !== 'green' ? 'amber' : state, detail, decision: decisions[key] || undefined });
     add('profile_document', docs.has('profile') ? 'green' : 'red', docs.has('profile') ? 'profile.md saved' : 'Import a CV and save the profile document (with a Tools and skills line per role).');
     const cv = this.getCv();
-    if ('missing' in cv) add('cv_file', 'red', 'Save the CV file: drop it into the chat, or give its path.');
+    if ('missing' in cv) add('cv_file', 'red', 'Save the CV file: give its full path (Finder: Option+Command+C; File Explorer: Ctrl+Shift+C or Shift+right-click > Copy as path).');
     else if (!cv.exists) add('cv_file', 'red', `The CV at ${cv.path} is gone. Save it again.`);
     else if (!cv.readable) add('cv_file', 'red', `The CV at ${cv.path} cannot be read (${cv.error}). Fix its permissions or save it again.`);
     else if (cv.changed_since_saved) add('cv_file', 'amber', 'The CV changed since it was saved. Re-import the profile, then save the CV again.');

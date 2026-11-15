@@ -52,7 +52,7 @@ export function checkCvFile(path: string): number {
     if (code) throw new ToolError(`Cannot read ${basename(path)} (${code}). Ask the user to check the file's permissions or choose another location.`);
     throw e;
   }
-  if (!st) throw new ToolError(`No file at ${path}. Check the path with the user, or ask them to drop the CV file into the chat.`);
+  if (!st) throw new ToolError(`No file at ${path}. Check the path with the user: in Finder, Option+Command+C copies a file's path; in Windows File Explorer, Ctrl+Shift+C or Shift+right-click > Copy as path (strip the quotes).`);
   if (!st.isFile()) throw new ToolError(`${path} is not a file. Pass the CV file itself, not its folder.`);
   const ext = extname(path).toLowerCase();
   if (!oneOf(CV_EXTENSIONS, ext)) throw new ToolError(`The CV must be a PDF or Word file (${CV_EXTENSIONS.join(', ')}); ${basename(path)} is not.`);

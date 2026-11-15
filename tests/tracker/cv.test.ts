@@ -262,6 +262,7 @@ test('save_cv and get_cv are callable over tools/call, and bad files come back a
   const bad = await callTool('save_cv', { path: join(dir, 'nope.pdf') });
   assert.equal(bad.isError, true);
   assert.match(bad.content[0].text, /No file at/);
+  assert.doesNotMatch(bad.content[0].text, /drop/i);
   const ok = await callTool('save_cv', { path: file('cv.pdf'), copy: false });
   assert.equal(ok.isError ?? false, false);
   assert.match((await callTool('get_cv', {})).content[0].text, /"exists": ?true/);
@@ -273,7 +274,8 @@ test('setup_status cv_file: red until saved, red when gone, amber when changed, 
   const keys = t.setupStatus().items.map((i) => i.key);
   assert.equal(keys.indexOf('cv_file'), keys.indexOf('profile_document') + 1);
   assert.equal(item()?.state, 'red');
-  assert.match(item()?.detail || '', /drop it into the chat/);
+  assert.match(item()?.detail || '', /give its full path/);
+  assert.doesNotMatch(item()?.detail || '', /drop/i);
   const p = file('cv.pdf', 'v1');
   t.saveCv({ path: p, copy: false });
   assert.equal(item()?.state, 'green');
