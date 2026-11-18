@@ -42,8 +42,10 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
   });
 });
 // The setup video opens as a modal dialog. showModal() traps focus, handles Esc
-// and returns focus to the opener; a click on the backdrop lands on the dialog
-// element itself, so that is the only click we treat as "outside".
+// and returns focus to the opener. A backdrop click and a click on the dialog's
+// own padding both target the dialog element, so we compare the pointer to the
+// dialog's box to tell them apart. The close handler refocuses the button
+// explicitly because a dialog closed via script is not guaranteed to restore it.
 const setupDialog = document.getElementById("setup-dialog");
 const setupButton = document.querySelector("[data-setup-video]");
 if (setupDialog && setupButton) {
@@ -52,7 +54,10 @@ if (setupDialog && setupButton) {
     close.addEventListener("click", () => setupDialog.close());
   });
   setupDialog.addEventListener("click", (e) => {
-    if (e.target === setupDialog) setupDialog.close();
+    if (e.target !== setupDialog) return;
+    const r = setupDialog.getBoundingClientRect();
+    const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    if (!inside) setupDialog.close();
   });
   setupDialog.addEventListener("close", () => {
     setupDialog.querySelector("video").pause();

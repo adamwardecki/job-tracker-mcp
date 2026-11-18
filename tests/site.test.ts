@@ -84,7 +84,7 @@ test('the setup video button lives only in the desktop panel and opens a dialog'
 
 test('every video on the page is a committed local file', () => {
   const html = readFileSync(join(SITE, 'index.html'), 'utf8');
-  const srcs = [...html.matchAll(/<(?:video|source)[^>]*?\ssrc="([^"]+)"/g)].map((m) => m[1]!);
+  const srcs = [...html.matchAll(/<(?:video|source)[^>]*?\ssrc="([^"]+)"/g)].map((m) => m[1]!); // group 1 is not optional in the regex
   assert.ok(srcs.length >= 2);
   for (const src of srcs) {
     assert.doesNotMatch(src, /^(?:[a-z]+:)?\/\//i, src);
