@@ -48,3 +48,47 @@ test('every color in style.css comes from a :root variable', () => {
   const rest = css.replace(root, '').replace(/mask-image:[^;]*;/g, '');
   assert.deepEqual(rest.match(/#[0-9a-fA-F]{3,8}\b|(?<!-)\b(?:white|black)\b(?!-)|rgba?\(|hsla?\(/g), null);
 });
+
+test('the demo section follows the belief strip and plays a local video with an accessible name', () => {
+  const html = readFileSync(join(SITE, 'index.html'), 'utf8');
+  const strip = html.indexOf('class="belief-strip"');
+  const demo = html.indexOf('id="demo"');
+  assert.ok(strip > 0 && demo > strip, 'demo comes after the belief strip');
+  assert.ok(demo < html.indexOf('id="commands"'), 'demo comes before the shortlist');
+  const section = html.slice(demo, html.indexOf('</section>', demo));
+  assert.match(section, /aria-labelledby="demo-heading"/);
+  assert.match(section, /<h2 id="demo-heading">See how it works<\/h2>/);
+  const video = section.match(/<video[^>]*>/)?.[0] ?? '';
+  assert.match(video, /\scontrols\b/);
+  assert.match(video, /\splaysinline\b/);
+  assert.match(video, /preload="metadata"/);
+  assert.match(video, /aria-label="[^"]+"/);
+  assert.match(video, /width="\d+"/);
+  assert.match(video, /height="\d+"/);
+  assert.doesNotMatch(video, /autoplay/);
+});
+
+test('the setup video button lives only in the desktop panel and opens a dialog', () => {
+  const html = readFileSync(join(SITE, 'index.html'), 'utf8');
+  const panels = [...html.matchAll(/<section\s+role="tabpanel"\s+id="(panel-[a-z]+)"[\s\S]*?<\/section>\s*(?=<section\s+role="tabpanel"|<\/div>)/g)];
+  assert.equal(panels.length, 3);
+  for (const [panel, id] of panels) assert.equal(panel.includes('data-setup-video'), id === 'panel-desktop', id);
+  assert.match(html, /<dialog[^>]*id="setup-dialog"[^>]*aria-label="[^"]+"/);
+  const dialog = html.match(/<dialog[\s\S]*?<\/dialog>/)?.[0] ?? '';
+  assert.match(dialog, /<video[^>]*\scontrols\b/);
+  assert.match(dialog, /data-dialog-close/);
+  const js = readFileSync(join(SITE, 'assets', 'main.js'), 'utf8');
+  assert.match(js, /showModal\(\)/);
+  assert.match(js, /\.pause\(\)/);
+});
+
+test('every video on the page is a committed local file', () => {
+  const html = readFileSync(join(SITE, 'index.html'), 'utf8');
+  const srcs = [...html.matchAll(/<(?:video|source)[^>]*?\ssrc="([^"]+)"/g)].map((m) => m[1]!); // group 1 is not optional in the regex
+  assert.ok(srcs.length >= 2);
+  for (const src of srcs) {
+    assert.doesNotMatch(src, /^(?:[a-z]+:)?\/\//i, src);
+    assert.ok(existsSync(join(SITE, src)), src);
+  }
+  assert.doesNotMatch(html, /<iframe/);
+});
