@@ -41,6 +41,24 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
     setTimeout(() => (button.textContent = label), 2000);
   });
 });
+// The setup video opens as a modal dialog. showModal() traps focus, handles Esc
+// and returns focus to the opener; a click on the backdrop lands on the dialog
+// element itself, so that is the only click we treat as "outside".
+const setupDialog = document.getElementById("setup-dialog");
+const setupButton = document.querySelector("[data-setup-video]");
+if (setupDialog && setupButton) {
+  setupButton.addEventListener("click", () => setupDialog.showModal());
+  setupDialog.querySelectorAll("[data-dialog-close]").forEach((close) => {
+    close.addEventListener("click", () => setupDialog.close());
+  });
+  setupDialog.addEventListener("click", (e) => {
+    if (e.target === setupDialog) setupDialog.close();
+  });
+  setupDialog.addEventListener("close", () => {
+    setupDialog.querySelector("video").pause();
+    setupButton.focus();
+  });
+}
 // The screen's four corners in the 1774 x 887 artwork are (1204, 374),
 // (1517, 390), (1494, 597), (1181, 563). A projective transform keeps future
 // HTML content on that plane, including when the mobile scene is cropped.
