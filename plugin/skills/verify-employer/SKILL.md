@@ -11,8 +11,8 @@ Load the employer's own posting, quote it, and decide. This step is the only way
 
 - **Load the rules first.** Rules: load `scoring` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). Do it before recording any `rule:<id>` drop.
 - **Aggregator tags are leads, never verdicts.** Location, industry, seniority, salary and "Remote" from LinkedIn, boards, brokers or recruiters are unverified. Before writing any drop reason, open the employer's page and **quote it**. Why: wrong drops happened on stale tags, and wrong approvals happened four times on "Remote" tags that the ATS contradicted (e.g. "Hybrid (8 days/month)").
-- **The live employer ATS is the authority.** A careers page, ATS posting or the apply form itself. Not a recruiter's rewrite, not a cached aggregator copy.
-- **Every `verified` needs** `evidence` (the ATS URL plus the verbatim location line), `location_line` (verbatim) and `location_type` (`remote` | `hybrid` | `onsite` | `unknown`).
+- **The live employer ATS is the authority.** A careers page, ATS posting or the apply form itself. Not a recruiter's rewrite, not a cached aggregator copy. When the employer posted the role only on a job board, its own text on that listing stands in (see Board-only postings).
+- **Every `verified` needs** `evidence` (the ATS URL, or the board listing URL for a board-only role, plus the verbatim location line), `location_line` (verbatim) and `location_type` (`remote` | `hybrid` | `onsite` | `unknown`).
 - **Every `dropped` needs** `evidence`: a verbatim employer quote, a URL plus quote, or `rule:<id>`.
 - **Conflicting employer sources → flag, never pick the optimistic reading.** If the employer's own sources disagree on a hard filter (e.g. "remote" in their HN post, "Hybrid" on their ATS), do not drop and do not approve. `transition` to `verified` (you did read the employer's page) with **both quotes** in `evidence`, and hand the single question to `score-role`, which queues the role with that `question` for the user.
 - **Forms are evidence too.** A screening question like "Can you work onsite 3 days a week?" or "Do you have the right to work in <country>?" overrides "Remote" in the posting.
@@ -20,10 +20,10 @@ Load the employer's own posting, quote it, and decide. This step is the only way
 
 ## Procedure
 
-1. **Get the employer URL.** From the lead's URL, a "View job post"/apply link, or the employer's careers page. If the lead came via a recruiter or broker, find the employer's own page anyway; a recruiter's rewrite can drop the whole tech stack.
+1. **Get the employer URL.** From the lead's URL, a "View job post"/apply link, or the employer's careers page. If the lead came via a recruiter or broker, find the employer's own page anyway; a recruiter's rewrite can drop the whole tech stack. If the employer has no page for this role, follow Board-only postings below.
 2. **Bind the employer URL to the role.** If the role's `url` is not this employer page, `upsert_role` with its `id` and `url` = the employer page (pass `identity_evidence` if the tool asks for it, saying how the lead links to this page). If the tool answers that the URL belongs to another role, this lead is that posting: do not verify it as new. `link_duplicate_role` with that role as `canonical_role_id`, this one as `duplicate_role_id` and the shared URL as `evidence` (if it refuses because this role moved last, swap them as its error says), and return `duplicate of <id>`. Why: the employer URL is the posting's identity; verifying a second row for it would let one job be prepared, and applied to, twice.
 3. **Load it.** Prefer the ATS posting API or a plain fetch (works without a browser; see `source-roles/reference.md`). Use the browser only if fetch cannot render it.
-   - Posting gone (404, "no longer active", redirect to the board root): `transition` to `dropped`, reason "posting closed", evidence = URL plus the message seen.
+   - Posting gone (404, "no longer active", redirect to the board root, or a board-only listing marked "No longer accepting applications"): `transition` to `dropped`, reason "posting closed", evidence = URL plus the message seen.
 4. **Read, in this order, and copy verbatim:**
    1. Location line and workplace/location type. Secondary locations. Any country list.
    2. The employer's identity: the About block, who actually employs the hire. Recruiting agency or staffing firm presenting a client is a different employer.
@@ -33,6 +33,17 @@ Load the employer's own posting, quote it, and decide. This step is the only way
    6. If the apply form is reachable without login: its screening questions (Greenhouse `?questions=true` works by fetch).
 5. **Check the tells below.** Each produces a drop (with quote) or a question for the user (passed to `score-role`).
 6. **Record.** If the role passes: `transition` to `verified` with `evidence`, `location_line`, `location_type`, and update the role with any comp, stack, industry and ATS details via `upsert_role` (with `id`). Otherwise `transition` to `dropped` with the quote and a `category` (`location`, `pay`, `industry`, `role_shape`, `stack`, `culture`, `duplicate`, `gated`, `other`). Pass the `run_id` when you have one.
+
+## Board-only postings
+
+Some employers post a role only on a job board (LinkedIn, Indeed, Wellfound, often with the board's own apply form). That is not a blocker: verify on the board listing. Why: requiring an employer ATS page left these roles stuck in `found`, never scored or applied to.
+
+1. **Search first.** Check the employer's careers page and ATS board (API or page) for the role. Use the board listing only if the role is not there, or the employer has neither. Why: the employer's own page wins whenever it exists; a board copy can be stale or rewritten.
+2. **The employer posted it.** The listing sits under the employer's own company page or account. A recruiter, agency or staffing firm posting for a client does not count; treat it as a recruiter lead (step 1).
+3. **Bind the listing.** Set the role's `url` to the listing that hosts the apply button or form (e.g. `https://www.linkedin.com/jobs/view/<id>/`, not a search page with `currentJobId`). Why: the submit gate only allows a submit on the page at the role's URL.
+4. **Quote the employer's words, not the board's tags.** The description the employer wrote and the screening questions on the board's apply form are the employer's posting. The board's own fields (a "Remote" chip, a workplace-type filter, a salary estimate, an industry) are still unverified tags.
+5. **Location only in a tag.** If the description and form say nothing about location and the only signal is the board's tag: `transition` to `verified` with `location_line` = the tag verbatim followed by "(board tag, not employer text)", `location_type: unknown`, and pass `score-role` the question "The listing only has the board's '<tag>' tag. Is it open to <the user's location and work mode>?". Do not drop and do not pass it on the tag. Why: "Remote" tags were wrong four times when the employer's text was checked.
+6. **Evidence.** Start `evidence` with `board-only:`, then what you checked and found missing (the careers or ATS URL, or "no careers page"), the listing URL and the verbatim location quote.
 
 ## Tells and what they mean
 

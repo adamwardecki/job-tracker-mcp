@@ -89,6 +89,18 @@ test('the board command opens the browser and the sweep report points to it', ()
   assert.doesNotMatch(sweep, /Board: run \/job-tracker:board/);
 });
 
+test('a role posted only on a job board can be verified, but never on the board tag alone', () => {
+  const verify = read('skills/verify-employer/SKILL.md');
+  const section = verify.slice(verify.indexOf('## Board-only postings'), verify.indexOf('## Tells and what they mean'));
+  assert.match(section, /That is not a blocker: verify on the board listing\. Why: /);
+  assert.match(section, /\*\*Search first\.\*\* Check the employer's careers page and ATS board/);
+  assert.match(section, /A recruiter, agency or staffing firm posting for a client does not count/);
+  assert.match(section, /`location_type: unknown`, and pass `score-role` the question/);
+  assert.match(section, /Do not drop and do not pass it on the tag\./);
+  assert.match(read('agents/scorer.md'), /A role the employer posted only on a job board is not `unverifiable`: follow Board-only postings in `verify-employer`\./);
+  assert.match(read('skills/score-role/SKILL.md'), /`location_type: unknown` with a question from verification[^\n]*is neither a drop nor a pass: score the rest, then queue with that question\./);
+});
+
 // Rule delivery (B4): list_rules pages, so a prompt that calls it once sees only part of the rules. The retrieval
 // protocol lives once in templates/rules.md ("Reading rules"); every consumer names its types and points there.
 const SKIP_DIRS = ['node_modules', 'servers', 'scripts']; // not prompts: dependencies, server code, shell scripts
