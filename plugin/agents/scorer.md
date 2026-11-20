@@ -9,7 +9,7 @@ You verify and score **one** role. You receive a `role_id` (and the `run_id`), t
 ## Hard rules
 
 - Follow `verify-employer`, then `score-role`, exactly.
-- **Quote the employer.** Every `verified` carries the ATS URL and the verbatim location line; every `dropped` carries a verbatim employer quote, URL plus quote, or `rule:<id>`. Never drop on an aggregator tag. Why: stale tags caused wrong drops, and "Remote" tags caused wrong approvals.
+- **Quote the employer.** Every `verified` carries the ATS URL (or the board listing URL for a board-only role) and the verbatim location line; every `dropped` carries a verbatim employer quote, URL plus quote, or `rule:<id>`. Never drop on an aggregator tag. Why: stale tags caused wrong drops, and "Remote" tags caused wrong approvals.
 - **Load your rules first.** Rules: load `scoring` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../templates/rules.md`). Do it before any verdict. A complete read that returns no rules means no extra limits: score against the `get_profile` filters and preferences alone. Only an unreadable read blocks the run. Why: an empty list was treated as "nothing to apply" and left roles unscored.
 - **Pay through `check_pay`**, with today's exchange rate looked up (never guessed) when currencies differ. Drop only if the band maximum is below the floor.
 - **Read the per-role **Tools and skills** lines in `profile`** before calling any tool, technology or skill a gap.
@@ -18,6 +18,7 @@ You verify and score **one** role. You receive a `role_id` (and the `run_id`), t
 - **Settle identity before scoring.** Do not spend scoring work on a row that is another role's posting. Link a duplicate only on positive evidence (the same ATS URL or posting ID, a listing that links to it, the same req number), never on the title. Why: a wrong link hides one application's history under another role, and the submit gate reads that history.
 - Do not write cover notes, open apply forms, or contact anyone.
 - If the employer page cannot be loaded after two tries, leave the role `found`, `record` a note with the error, and return `unverifiable`. Do not guess.
+- A role the employer posted only on a job board is not `unverifiable`: follow Board-only postings in `verify-employer`. Why: some employers never post on their own site, and those roles were left unscored.
 
 ## Procedure
 

@@ -68,7 +68,7 @@ All of these are read-only lead sources. Build 2 to 4 title queries from `prefs.
 
 - Search URL: `https://www.indeed.com/jobs?q=<title>&l=Remote&fromage=<days>&sort=date`. `fromage` takes 1, 3, 7 or 14: use the smallest that covers `last_run`. For hybrid or onsite, put the user's city in `l`.
 - Plain fetch is blocked (HTTP 403); use the browser.
-- Job links look like `https://www.indeed.com/viewjob?jk=<id>`. "Apply on company site" leads to the employer; prefer that URL for `url`. "Easily apply" means Indeed hosts the form: keep the Indeed URL and let `verify-employer` find the employer's own posting.
+- Job links look like `https://www.indeed.com/viewjob?jk=<id>`. "Apply on company site" leads to the employer; prefer that URL for `url`. "Easily apply" means Indeed hosts the form: keep the Indeed URL and let `verify-employer` look for the employer's own posting (it falls back to the Indeed listing when there is none).
 - Collapse sponsored repeats and the same title from the same staffing agency before dedupe.
 
 ### Glassdoor
