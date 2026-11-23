@@ -20,7 +20,7 @@ Hard filters first (any miss drops). Then soft preferences (only move the score)
 
 1. `get_profile` (filters, prefs), `get_document("profile")`, and the rules loaded above. Read the role and the verify evidence.
 2. **Hard filters**, each against the employer's text:
-   - **Work mode and location**: from the verified `location_line` and `location_type`. Hybrid only if the user allows it, within `max_days_per_week` and listed cities.
+   - **Work mode and location**: from the verified `location_line` and `location_type`. Hybrid only if the user allows it, within `max_days_per_week` and listed cities. `location_type: unknown` with a question from verification (e.g. a board-only listing whose only location signal is the board's tag) is neither a drop nor a pass: score the rest, then queue with that question. Why: guessing from a board tag caused wrong approvals.
    - **Timezone overlap**: required hours or "must overlap with <zone>" vs `overlap_window`.
    - **Work authorisation**: sponsorship needed where the user has none: drop.
    - **Pay**: call `check_pay` with `comp_min`, `comp_max`, `currency`, `period` (`year` | `month` | `week` | `day` | `hour`), `fx_rate` when the currency differs from the floor's, and `equity` if mentioned. Hourly, daily and monthly bands are converted from the **top** of the band. Verdicts:

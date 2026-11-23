@@ -56,7 +56,7 @@ Most roles here are open only to people who can work in the US. Recommend this g
 
 | ID | Source | Mode | Reliability and quirks | Retry limit |
 |---|---|---|---|---|
-| `indeed` | Indeed | browser | Largest US board. Bot checks are common. Sponsored cards repeat across pages and keywords, and staffing agencies repost the same req. "Easily apply" cards have no employer link: the employer's own posting must be found in `verify-employer`. | 1 |
+| `indeed` | Indeed | browser | Largest US board. Bot checks are common. Sponsored cards repeat across pages and keywords, and staffing agencies repost the same req. "Easily apply" cards have no employer link: `verify-employer` looks for the employer's own posting and falls back to the Indeed listing when there is none. | 1 |
 | `glassdoor` | Glassdoor | browser (logged in) | A sign-in wall appears after a page or two when logged out. Overlaps heavily with Indeed. "Glassdoor est." pay is the site's estimate. | 1 |
 | `ziprecruiter` | ZipRecruiter | browser | Syndicates postings from other boards, so many leads are duplicates. Pay ranges are often its own estimates. | 1 |
 | `dice` | Dice | browser | Tech roles only. Many listings come from staffing agencies and are contract (C2C, W2): the agency is not the end client, and the end client is often unnamed. | 1 |
