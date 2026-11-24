@@ -74,6 +74,19 @@ test('AC3: a role applied to under an alias is deduped (alias and fuzzy)', () =>
   assert.equal(t.findCompany({ name: 'Acme Robotics' }).verdict, 'new');
 });
 
+test('find_company role summaries carry each card\'s outcome (null when none)', () => {
+  const t = fresh();
+  const { role: old } = t.upsertRole({ company: 'Rejecto', title: 'Senior Backend Engineer', url: 'https://jobs.ashbyhq.com/rejecto/old', source: 'ashby' });
+  t.record({ role_id: old.id, status: 'closed', outcome: 'rejected', reason: 'Rejection email', evidence: 'We decided to move forward with other candidates', actor: 'employer' });
+  const { role: fresher } = t.upsertRole({ company: 'Rejecto', title: 'Senior Backend Engineer', url: 'https://jobs.ashbyhq.com/rejecto/new', source: 'ashby' });
+
+  for (const q of [{ name: 'Rejecto' }, { name: 'Rejecto', url: 'https://jobs.ashbyhq.com/rejecto/new' }]) {
+    const roles = t.findCompany(q).matches[0]?.roles ?? [];
+    assert.equal(roles.find((r) => r.id === old.id)?.outcome, 'rejected');
+    assert.equal(roles.find((r) => r.id === fresher.id)?.outcome, null);
+  }
+});
+
 test('AC4: a "Remote" tag contradicted by the ATS is dropped with the ATS quote as evidence', () => {
   const t = fresh();
   const { role } = t.upsertRole({ company: 'Wolverton', title: 'Senior Frontend Engineer', url: 'https://www.linkedin.com/jobs/view/1', source: 'linkedin', location_type: 'remote' });

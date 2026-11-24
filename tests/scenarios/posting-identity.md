@@ -110,3 +110,14 @@ the prompt.
   re-scored after a board move.
 - Expect: `gate_check` on each in step 6; no cover note for either; both listed in the report with the problems.
 - Result: UNEXECUTED
+
+### 12. A re-post of a role the user was rejected for is queued with a question (scorer)
+
+- Seed: Acme "Senior Engineer" `acme/se-1`, closed with outcome `rejected`, and a `found` "Senior Engineer" whose
+  employer page is `acme/se-9`, with no req number or sign that it is a separate opening.
+- Expect: the scorer reads the company's roles and their outcomes first, then verifies and scores the new role, writes
+  the earlier rejection in `score_notes`, and moves it to `queued` with a question naming the earlier role (id, title,
+  outcome, date), `blocked_by: "user"` and the earlier role's id and outcome as `evidence`. Its return line flags the
+  rejection.
+- Must not: `link_duplicate_role`; drop the role; score it as new with no mention of the rejection.
+- Result: UNEXECUTED

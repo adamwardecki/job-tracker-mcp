@@ -179,7 +179,8 @@ export interface Scope {
   rows: (alias: string, tsCol: string) => [string, SQLInputValue[]];
 }
 
-type RoleSummary = Pick<RoleRow, 'id' | 'title' | 'url' | 'status' | 'updated_at'>;
+// outcome is only set on a closed card: it comes from the group's latest closed event (roles has no such column).
+type RoleSummary = Pick<RoleRow, 'id' | 'title' | 'url' | 'status' | 'updated_at'> & { outcome: (typeof OUTCOMES)[number] | null };
 
 // Allowed moves (spec §5.4). Self-transitions are allowed so a step can be re-run with new evidence.
 export const MACHINE: Record<Status, readonly Status[]> = {
@@ -605,7 +606,9 @@ export class Tracker {
       score: Math.round(score * 100) / 100,
       certain: score >= 1,
       // One card per linked group, so a duplicate's stale status is never read as a process of its own.
-      roles: this.q<RoleSummary>(`SELECT id, title, url, status, updated_at FROM roles r WHERE company_id = ? AND ${isCard('r.id')} ORDER BY updated_at DESC`, c.id),
+      roles: this.q<RoleSummary>(`SELECT id, title, url, status, updated_at,
+        CASE WHEN status = 'closed' THEN (SELECT outcome FROM events WHERE role_id IN ${groupOf('r.id')} AND status = 'closed' ORDER BY ts DESC, id DESC LIMIT 1) END AS outcome
+        FROM roles r WHERE company_id = ? AND ${isCard('r.id')} ORDER BY updated_at DESC`, c.id),
     }));
     const certain = out.filter((m) => m.certain);
     const pool = certain.length ? certain : out;
