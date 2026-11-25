@@ -1097,11 +1097,14 @@ mark {
 .video-dialog-close {
   display: block;
   margin-left: auto;
-  padding: 6px 14px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border: 1px solid var(--paper);
   background: transparent;
   color: var(--paper);
-  font-size: 13px;
+  font-size: 20px;
+  line-height: 1;
   cursor: pointer;
 }
 .video-dialog-close:hover {
