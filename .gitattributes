@@ -1,0 +1,3 @@
+# Vendored impeccable skill files keep upstream whitespace and line endings.
+.claude/skills/impeccable/** -whitespace
+.github/skills/impeccable/** -whitespace
