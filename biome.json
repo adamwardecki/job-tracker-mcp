@@ -12,7 +12,9 @@
       "!tests/fixtures",
       "!tests/tracker/fixtures",
       "!dev/package-lock.json",
-      "!.mcp.json"
+      "!.mcp.json",
+      "!.claude/skills/impeccable",
+      "!.github/skills/impeccable"
     ]
   },
   "formatter": {
