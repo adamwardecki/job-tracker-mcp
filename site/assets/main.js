@@ -41,6 +41,36 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
     setTimeout(() => (button.textContent = label), 2000);
   });
 });
+// Each [data-video-dialog] button opens the modal <dialog> it names and plays
+// that dialog's video: the click is the user's own gesture, so the browser
+// allows sound. showModal() traps focus and handles Esc. A backdrop click and a
+// click on the dialog's own padding both target the dialog element, so we
+// compare the pointer to the dialog's box to tell them apart. The close handler
+// pauses the video and refocuses the opener explicitly because a dialog closed
+// via script is not guaranteed to restore it.
+document.querySelectorAll("[data-video-dialog]").forEach((opener) => {
+  const dialog = document.getElementById(opener.dataset.videoDialog);
+  if (!dialog) return;
+  const video = dialog.querySelector("video");
+  opener.addEventListener("click", () => {
+    dialog.showModal();
+    // play() rejects if the browser refuses; the visible controls still work.
+    video.play().catch(() => {});
+  });
+  dialog.querySelectorAll("[data-dialog-close]").forEach((close) => {
+    close.addEventListener("click", () => dialog.close());
+  });
+  dialog.addEventListener("click", (e) => {
+    if (e.target !== dialog) return;
+    const r = dialog.getBoundingClientRect();
+    const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    if (!inside) dialog.close();
+  });
+  dialog.addEventListener("close", () => {
+    video.pause();
+    opener.focus();
+  });
+});
 // The screen's four corners in the 1774 x 887 artwork are (1204, 374),
 // (1517, 390), (1494, 597), (1181, 563). A projective transform keeps future
 // HTML content on that plane, including when the mobile scene is cropped.

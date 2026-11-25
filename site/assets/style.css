@@ -393,6 +393,7 @@ h2 em {
 .hero-actions {
   display: flex;
   align-items: center;
+  gap: 16px;
 }
 .belief-strip {
   border-top: 1px solid var(--line);
@@ -1055,6 +1056,59 @@ mark {
 }
 [hidden] {
   display: none !important;
+}
+.setup-source-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+.setup-source-row .setup-source {
+  margin-top: 0;
+}
+.button-secondary {
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+.button-secondary:hover {
+  background: var(--hover);
+}
+.video-dialog {
+  width: min(960px, 92vw);
+  padding: 16px;
+  border: 0;
+  background: var(--forest);
+  color: var(--paper);
+}
+.video-dialog::backdrop {
+  background: var(--ink);
+  opacity: 0.7;
+}
+.video-dialog video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  margin-top: 12px;
+}
+.video-dialog-close {
+  display: block;
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--paper);
+  background: transparent;
+  color: var(--paper);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.video-dialog-close:hover {
+  background: var(--green-deep);
 }
 @media (max-width: 900px) {
   .setup-layout {

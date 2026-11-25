@@ -98,7 +98,37 @@
           </p>
           <div class="hero-actions">
             <a class="button" href="#install">Get Job Tracker </a>
+            <button
+              type="button"
+              class="button button-secondary"
+              data-video-dialog="demo-dialog"
+            >
+              How it works
+            </button>
           </div>
+          <dialog
+            class="video-dialog"
+            id="demo-dialog"
+            aria-label="How Job Tracker works"
+          >
+            <button
+              type="button"
+              class="video-dialog-close"
+              data-dialog-close
+              aria-label="Close"
+            >
+              ×
+            </button>
+            <video
+              src="assets/job-tracker-reel.mp4"
+              aria-label="Job Tracker finding roles, scoring them against a CV and preparing applications for approval"
+              width="1280"
+              height="720"
+              controls
+              playsinline
+              preload="metadata"
+            ></video>
+          </dialog>
         </div>
         <figure class="garden-art">
           <div class="garden-scene">
@@ -748,13 +778,45 @@
                       </div>
                     </div>
                   </div>
-                  <a
-                    class="setup-source"
-                    href="https://code.claude.com/docs/en/desktop#install-plugins"
-                    target="_blank"
-                    rel="noopener"
-                    >Claude’s guide to desktop plugins ↗</a
+                  <div class="setup-source-row">
+                    <a
+                      class="setup-source"
+                      href="https://code.claude.com/docs/en/desktop#install-plugins"
+                      target="_blank"
+                      rel="noopener"
+                      >Claude’s guide to desktop plugins ↗</a
+                    >
+                    <button
+                      type="button"
+                      class="button button-small button-secondary"
+                      data-video-dialog="setup-dialog"
+                    >
+                      See setup video
+                    </button>
+                  </div>
+                  <dialog
+                    class="video-dialog"
+                    id="setup-dialog"
+                    aria-label="Claude desktop setup video"
                   >
+                    <button
+                      type="button"
+                      class="video-dialog-close"
+                      data-dialog-close
+                      aria-label="Close"
+                    >
+                      ×
+                    </button>
+                    <video
+                      src="assets/setup-desktop.mp4"
+                      aria-label="Installing Job Tracker in the Claude desktop app"
+                      width="1280"
+                      height="720"
+                      controls
+                      playsinline
+                      preload="metadata"
+                    ></video>
+                  </dialog>
                 </section>
                 <section
                   role="tabpanel"
