@@ -41,29 +41,36 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
     setTimeout(() => (button.textContent = label), 2000);
   });
 });
-// The setup video opens as a modal dialog. showModal() traps focus, handles Esc
-// and returns focus to the opener. A backdrop click and a click on the dialog's
-// own padding both target the dialog element, so we compare the pointer to the
-// dialog's box to tell them apart. The close handler refocuses the button
-// explicitly because a dialog closed via script is not guaranteed to restore it.
-const setupDialog = document.getElementById("setup-dialog");
-const setupButton = document.querySelector("[data-setup-video]");
-if (setupDialog && setupButton) {
-  setupButton.addEventListener("click", () => setupDialog.showModal());
-  setupDialog.querySelectorAll("[data-dialog-close]").forEach((close) => {
-    close.addEventListener("click", () => setupDialog.close());
+// Each [data-video-dialog] button opens the modal <dialog> it names and plays
+// that dialog's video: the click is the user's own gesture, so the browser
+// allows sound. showModal() traps focus and handles Esc. A backdrop click and a
+// click on the dialog's own padding both target the dialog element, so we
+// compare the pointer to the dialog's box to tell them apart. The close handler
+// pauses the video and refocuses the opener explicitly because a dialog closed
+// via script is not guaranteed to restore it.
+document.querySelectorAll("[data-video-dialog]").forEach((opener) => {
+  const dialog = document.getElementById(opener.dataset.videoDialog);
+  if (!dialog) return;
+  const video = dialog.querySelector("video");
+  opener.addEventListener("click", () => {
+    dialog.showModal();
+    // play() rejects if the browser refuses; the visible controls still work.
+    video.play().catch(() => {});
   });
-  setupDialog.addEventListener("click", (e) => {
-    if (e.target !== setupDialog) return;
-    const r = setupDialog.getBoundingClientRect();
+  dialog.querySelectorAll("[data-dialog-close]").forEach((close) => {
+    close.addEventListener("click", () => dialog.close());
+  });
+  dialog.addEventListener("click", (e) => {
+    if (e.target !== dialog) return;
+    const r = dialog.getBoundingClientRect();
     const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-    if (!inside) setupDialog.close();
+    if (!inside) dialog.close();
   });
-  setupDialog.addEventListener("close", () => {
-    setupDialog.querySelector("video").pause();
-    setupButton.focus();
+  dialog.addEventListener("close", () => {
+    video.pause();
+    opener.focus();
   });
-}
+});
 // The screen's four corners in the 1774 x 887 artwork are (1204, 374),
 // (1517, 390), (1494, 597), (1181, 563). A projective transform keeps future
 // HTML content on that plane, including when the mobile scene is cropped.

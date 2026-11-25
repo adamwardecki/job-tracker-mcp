@@ -98,7 +98,36 @@
           </p>
           <div class="hero-actions">
             <a class="button" href="#install">Get Job Tracker </a>
+            <button
+              type="button"
+              class="button button-secondary"
+              data-video-dialog="demo-dialog"
+            >
+              How it works
+            </button>
           </div>
+          <dialog
+            class="video-dialog"
+            id="demo-dialog"
+            aria-label="How Job Tracker works"
+          >
+            <button
+              type="button"
+              class="video-dialog-close"
+              data-dialog-close
+            >
+              Close
+            </button>
+            <video
+              src="assets/job-tracker-reel.mp4"
+              aria-label="Job Tracker finding roles, scoring them against a CV and preparing applications for approval"
+              width="1280"
+              height="720"
+              controls
+              playsinline
+              preload="metadata"
+            ></video>
+          </dialog>
         </div>
         <figure class="garden-art">
           <div class="garden-scene">
@@ -213,29 +242,6 @@
           ><span>Fewer, better applications.</span>
         </div>
       </div>
-
-      <section class="section demo-section" id="demo" aria-labelledby="demo-heading">
-        <div class="container demo-grid">
-          <video
-            class="demo-video"
-            src="assets/job-tracker-reel.mp4"
-            aria-label="Job Tracker finding roles, scoring them against a CV and preparing applications for approval"
-            width="1280"
-            height="720"
-            controls
-            playsinline
-            preload="metadata"
-          ></video>
-          <div class="demo-copy">
-            <h2 id="demo-heading">See how it works</h2>
-            <p>
-              Watch Job Tracker find roles, score them against your CV and
-              prepare applications. You approve each one before anything is
-              sent.
-            </p>
-          </div>
-        </div>
-      </section>
 
       <section
         class="section container shortlist-section"
@@ -782,7 +788,7 @@
                     <button
                       type="button"
                       class="button button-small button-secondary"
-                      data-setup-video
+                      data-video-dialog="setup-dialog"
                     >
                       See setup video
                     </button>
