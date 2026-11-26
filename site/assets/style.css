@@ -343,7 +343,7 @@ h2 em {
   border-radius: 4px;
   color: var(--brand-green);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.04em;
   line-height: 1;
@@ -415,8 +415,10 @@ h2 em {
   color: var(--accent);
 }
 .belief-strip .container > span:last-child {
-  font-size: 11px;
-  color: var(--muted);
+  font-family: var(--serif);
+  font-size: 20px;
+  letter-spacing: -0.3px;
+  color: var(--ink);
 }
 .section-heading {
   display: grid;
@@ -485,7 +487,7 @@ h2 em {
 }
 .listing-source p {
   font: 23px var(--serif);
-  color: var(--stone);
+  color: var(--muted);
   margin-top: 12px;
 }
 .employer-source blockquote {
@@ -588,7 +590,7 @@ mark {
   justify-content: space-between;
   gap: 20px;
   padding-top: 22px;
-  font-size: 9px;
+  font-size: 12px;
   color: var(--muted);
 }
 .footer-bottom > div {
@@ -611,6 +613,10 @@ mark {
   font-size: 26px;
   letter-spacing: -0.03em;
   margin: 44px 0 14px;
+}
+.legal p,
+.legal li {
+  max-width: 52ch;
 }
 .legal p {
   margin: 0 0 14px;
@@ -722,8 +728,8 @@ mark {
   }
   .belief-strip .container > span:last-child {
     display: block;
-    font-size: 10px;
-    margin-top: 6px;
+    font-size: 18px;
+    margin-top: 4px;
   }
     .section {
     padding-block: 64px;
@@ -794,7 +800,7 @@ mark {
   .footer-bottom {
     flex-wrap: wrap;
     gap: 13px;
-    font-size: 9px;
+    font-size: 12px;
   }
   .footer-bottom > div {
     gap: 16px;
@@ -811,7 +817,7 @@ mark {
     gap: 12px;
   }
   .site-header nav a {
-    font-size: 10px;
+    font-size: 12px;
   }
   .button-small {
     gap: 8px;
@@ -1016,13 +1022,9 @@ mark {
   padding: 30px 0;
   padding-top: 18px;
 }
-.before-start > .eyebrow {
-  color: var(--accent);
-}
 .before-start h3 {
   line-height: 1.2;
   letter-spacing: -1px;
-  margin-top: 16px;
   font-size: 34px;
 }
 .before-start > p {
@@ -1063,7 +1065,7 @@ mark {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  margin-top: 20px;
+  padding-top: 16px;
 }
 .setup-source-row .setup-source {
   margin-top: 0;
@@ -1097,8 +1099,8 @@ mark {
 .video-dialog-close {
   display: block;
   margin-left: auto;
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 1px solid var(--paper);
   background: transparent;
@@ -1225,7 +1227,7 @@ mark {
   color: var(--accent);
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 10px;
   background: transparent;
   border: 0;
@@ -1838,6 +1840,55 @@ h3 {
 .safety-footer {
   border-color: color-mix(in srgb, var(--sage) 85%, var(--ink));
 }
+.wont-do {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px 50px;
+  border-top: 1px solid color-mix(in srgb, var(--sage) 85%, var(--ink));
+  margin-top: 35px;
+  padding-top: 28px;
+}
+.wont-do h3 {
+  font-size: 18px;
+}
+.wont-do ul {
+  display: grid;
+  grid-column: 2 / 4;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 50px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--mist);
+  font-size: 14px;
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+.connectors-section .section-heading > p,
+.setup-step p {
+  max-width: 54ch;
+}
+.detail-copy > p,
+.before-start dd {
+  text-wrap: pretty;
+}
+.section-heading h2 {
+  text-wrap: balance;
+}
+.employer-source blockquote {
+  text-wrap: balance;
+}
+.mobile-note {
+  display: none;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 
 .safety-section .control-grid p {
   max-width: 34ch;
@@ -1845,7 +1896,22 @@ h3 {
   text-wrap: pretty;
 }
 
+@media (max-width: 1000px) {
+  .wont-do {
+    grid-template-columns: 1fr;
+  }
+  .wont-do ul {
+    grid-column: auto;
+  }
+}
 @media (max-width: 760px) {
+  .wont-do ul {
+    grid-template-columns: 1fr;
+  }
+  .mobile-note {
+    display: block;
+    margin-top: 10px;
+  }
   .safety-section .control-grid article {
     grid-template-columns: 1fr;
     column-gap: 20px;
@@ -2020,8 +2086,35 @@ main:has(> .hero) > .detail-section {
     font-size: 16px;
   }
 
+  /* The veranda stays on phones as a crop that keeps the laptop in view. The
+     scene moves as one unit, so the chat stays on the screen; only the left,
+     right and top fades change, because the copy no longer sits over the art. */
+  .hero-copy {
+    grid-area: 1 / 1;
+  }
+
   .garden-art {
-    display: none;
+    display: block;
+    grid-area: 2 / 1;
+    position: relative;
+    height: 290px;
+    overflow: hidden;
+  }
+
+  .garden-scene {
+    position: absolute;
+    top: -155px;
+    left: 50%;
+    width: 1240px;
+    min-width: 1240px;
+    margin-left: -943px;
+  }
+
+  .garden-scene::after {
+    background:
+      linear-gradient(90deg, var(--paper) 0%, transparent 18%, transparent 82%, var(--paper) 100%),
+      linear-gradient(180deg, var(--paper) 0%, transparent 22%),
+      var(--scene-fade-bottom);
   }
 
   .section-heading h2,
@@ -2033,6 +2126,10 @@ main:has(> .hero) > .detail-section {
 
 @media (max-width: 520px) {
   .site-header nav {
+    gap: 0;
+  }
+
+  .header-center a:not([href="docs.html"]) {
     display: none;
   }
 
@@ -2100,7 +2197,7 @@ main:has(> .hero) > .detail-section {
 .report-entry h4 span {
   margin-left: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 .report-entry p {
@@ -2155,7 +2252,7 @@ main:has(> .hero) > .detail-section {
   padding: 14px 32px;
   border-top: 1px solid var(--line);
   color: var(--muted);
-  font: 10px/1.6 var(--mono);
+  font: 11px/1.6 var(--mono);
 }
 .report-explainer {
   padding: 28px 0 24px clamp(28px, 4.5vw, 64px);
@@ -2171,22 +2268,11 @@ main:has(> .hero) > .detail-section {
 }
 .report-explanations {
   list-style: none;
-  counter-reset: report-note;
   padding: 0;
   margin: 0;
 }
 .report-explanations li {
-  counter-increment: report-note;
-  position: relative;
-  padding: 0 0 26px 36px;
-}
-.report-explanations li::before {
-  content: counter(report-note, decimal-leading-zero);
-  position: absolute;
-  left: 0;
-  top: 3px;
-  font: 11px/1.6 var(--mono);
-  color: var(--bronze);
+  padding: 0 0 26px;
 }
 .report-explanations h4 {
   margin: 0 0 8px;
@@ -2199,7 +2285,7 @@ main:has(> .hero) > .detail-section {
   font-size: 14px;
 }
 .report-explainer-note {
-  margin: 4px 0 0 36px;
+  margin: 4px 0 0;
   padding-top: 20px;
   border-top: 1px solid var(--line);
   font-size: 13px;
@@ -2253,7 +2339,7 @@ main:has(> .hero) > .detail-section {
   align-self: start;
 }
 .toc-label {
-  font-size: 10px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.8px;
   color: var(--muted);
@@ -2318,6 +2404,10 @@ main:has(> .hero) > .detail-section {
 .docs-content ul,
 .docs-content ol {
   padding-left: 20px;
+}
+.docs-content p,
+.docs-content li {
+  max-width: 52ch;
 }
 .docs-content li {
   margin-top: 8px;
@@ -2405,9 +2495,14 @@ main:has(> .hero) > .detail-section {
 }
 @media (max-width: 800px) {
   .docs-page {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 0;
-    padding: 40px 20px 60px;
+    width: calc(100% - 40px);
+    padding: 40px 0 60px;
+  }
+  .docs-table td:first-child {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .docs-toc {
     position: static;
