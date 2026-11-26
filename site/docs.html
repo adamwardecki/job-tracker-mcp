@@ -9,11 +9,18 @@
       content="Install, configure, and use Job Tracker for a disciplined job search."
     />
     <link rel="canonical" href="https://jobtrackermcp.com/docs.html" />
-    <meta name="theme-color" content="#f6f3eb" />
+    <meta name="theme-color" content="#f6eee0" />
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
     <link
       rel="preload"
       href="assets/fonts/geist-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="assets/fonts/petrona-latin.woff2"
       as="font"
       type="font/woff2"
       crossorigin
@@ -47,6 +54,7 @@
             <li><a href="#install">Install</a></li>
             <li><a href="#setup">Setup walkthrough</a></li>
             <li><a href="#commands">Commands</a></li>
+            <li><a href="#limits">What it won't do</a></li>
             <li><a href="#data">Your data</a></li>
             <li><a href="#dev">Developer docs</a></li>
           </ul>
@@ -58,7 +66,7 @@
             job search. It finds roles that fit your hard filters,
             verifies each one on the employer's own posting, and prepares tailored
             applications. It submits only through the employer's official apply flow,
-            and only after you approve.
+            using your saved auto-apply choice or your approval for each application.
           </p>
 
           <section id="requirements">
@@ -101,9 +109,11 @@
                 <strong>Local</strong>, then choose a folder for your job search.
               </li>
               <li>
-                Next to the message box, open <strong>+ → Plugins → Add plugin</strong>.
-                Add the repository as a marketplace, then install <strong>job-tracker</strong>
-                for your user account.
+                Next to the message box, open
+                <strong>+ → Plugins → Manage plugins</strong>. Click <strong>Add</strong>,
+                choose <strong>Add marketplace</strong>, paste this link and select
+                <strong>Sync</strong>. Then open <strong>job-tracker</strong> and select
+                <strong>Add</strong>.
                 <div class="copy-row">
                   <code>https://github.com/adamwardecki/job-tracker-mcp</code
                   ><button type="button" data-copy="https://github.com/adamwardecki/job-tracker-mcp">
@@ -203,7 +213,8 @@
                   <td><code>/job-tracker:sweep [--limit N]</code></td>
                   <td>
                     The daily run. Inbox, sourcing, verify, score, prepare,
-                    report, audit. Never submits.
+                    report, audit. Applies only when you enabled auto-apply;
+                    otherwise it never submits.
                   </td>
                 </tr>
                 <tr>
@@ -261,6 +272,24 @@
             </table>
           </section>
 
+          <section id="limits">
+            <h2>What it won't do</h2>
+            <ul>
+              <li>Send email or LinkedIn messages. It writes drafts only, and a hook blocks every send tool.</li>
+              <li>
+                Submit an application unless you enabled <code>autonomy.auto_apply</code>
+                during setup or typed <code>/job-tracker:approve &lt;role_id&gt;</code> in the
+                same session. Review first is the default.
+              </li>
+              <li>
+                Create accounts, enter passwords, solve visible CAPTCHAs, tick consent boxes,
+                or fill personal-data fields (passport, nationality, age, gender, marital
+                status, ID numbers).
+              </li>
+              <li>Auto-apply at volume.</li>
+            </ul>
+          </section>
+
           <section id="data">
             <h2>Your data</h2>
             <p>
@@ -286,7 +315,7 @@
               crash reports, with personal details removed from the error.
             </p>
             <p>
-              <a href="privacy.html">Privacy policy ↗</a>: what is stored, what
+              <a href="privacy.html">Privacy policy →</a>: what is stored, what
               leaves your machine and how to delete it.
             </p>
           </section>

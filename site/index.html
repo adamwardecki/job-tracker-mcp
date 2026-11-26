@@ -76,7 +76,7 @@
           ><span class="brand-ink">Job Tracker</span><span class="brand-tag">MCP</span></a
         >
         <nav class="header-center" aria-label="Main navigation">
-          <a href="#how">The idea</a><a href="#commands">Take a look</a
+          <a href="#commands">Sample report</a><a href="#how">Your controls</a
           ><a href="docs.html">Docs</a
           ><a
             class="nav-github"
@@ -92,9 +92,11 @@
         <div class="hero-copy">
           <h1>Good work<br />is out there.<br /><em>Let’s find yours.</em></h1>
           <p class="hero-description">
-            Job Tracker is a privacy-first, local mcp server that helps you
-            automate the process of finding new roles that fit your criteria,
-            preparing applications and tracking your interview progress.
+            A free, open-source plugin for Claude Desktop, Claude Code and
+            Hermes Agent. Job Tracker finds roles that fit your criteria, checks
+            each one on the employer’s own posting, prepares your applications
+            and tracks your interviews. Your tracker and history stay on your
+            computer.
           </p>
           <div class="hero-actions">
             <a class="button" href="#install">Get Job Tracker </a>
@@ -358,7 +360,6 @@
             class="report-explainer"
             aria-labelledby="report-explainer-title"
           >
-            <p class="eyebrow">Behind the report</p>
             <h3 id="report-explainer-title">
               Your search,<br />
               <em>with the context.</em>
@@ -379,10 +380,11 @@
                 </p>
               </li>
               <li>
-                <h4>Three applications, your call.</h4>
+                <h4>Skip the forms, keep the decision.</h4>
                 <p>
-                  Three drafts are waiting for your review. Check each
-                  application before deciding what to submit.
+                  Applications arrive tailored and ready to read, so your time
+                  goes on choosing the few worth sending. Review first is the
+                  default.
                 </p>
               </li>
               <li>
@@ -510,9 +512,11 @@
             <h3>Fills the forms. You set the rules.</h3>
             <p>
               For matching roles, Job Tracker fills out application forms using
-              your CV and saved answers. Choose to review each application
-              before it’s sent, or enable automatic submission during setup.
-              Anything it can’t complete comes back to you.
+              your CV and saved answers. Review first is the default: you check
+              each application before it’s sent. If you enable automatic
+              submission during setup, it covers matching roles with no open
+              questions, through the employer’s own application form. Anything
+              it can’t complete comes back to you.
             </p>
           </li>
           <li>
@@ -596,13 +600,6 @@
                 width="38"
                 height="38"
               />
-              <img src="assets/outlook.svg" alt="" width="38" height="38" />
-              <img
-                src="assets/apple-calendar.svg"
-                alt=""
-                width="38"
-                height="38"
-              />
             </div>
             <h3>Calendar</h3>
             <p>
@@ -614,7 +611,6 @@
             <div class="connector-icons" aria-hidden="true">
               <img src="assets/gmail.svg" alt="" width="38" height="38" />
               <img src="assets/outlook.svg" alt="" width="38" height="38" />
-              <img src="assets/yahoo.svg" alt="" width="38" height="38" />
             </div>
             <h3>Email</h3>
             <p>
@@ -648,6 +644,10 @@
               <p class="setup-compatibility">
                 Works with Claude Desktop’s Code tab, Claude Code, and Hermes
                 Agent. Choose your setup below.
+                <span class="mobile-note"
+                  >On a phone? Setup happens on your computer, so open this page
+                  there when you’re ready.</span
+                >
               </p>
             </div>
           </div>
@@ -704,7 +704,7 @@
                   <div class="setup-step">
                     <span class="step-badge">1</span>
                     <div>
-                      <h3>Add Job Tracker</h3>
+                      <h3>Open the Code tab</h3>
                       <p>
                         Open the
                         <a
@@ -713,13 +713,24 @@
                           rel="noopener"
                           >Claude desktop app ↗</a
                         >
-                        and sign in. Next to the message box, open
+                        and sign in. Choose <strong>Code</strong>, select
+                        <strong>Local</strong>, then choose a folder for your job
+                        search.
+                      </p>
+                    </div>
+                  </div>
+                  <div class="setup-step">
+                    <span class="step-badge">2</span>
+                    <div>
+                      <h3>Add Job Tracker</h3>
+                      <p>
+                        Next to the message box, open
                         <strong>+ → Plugins → Manage plugins</strong>. Click
-                        the <strong>Add</strong> dropdown, choose
-                        <strong>Add marketplace</strong>, and add the Job
-                        Tracker repository. Then select
-                        <strong>job-tracker</strong> and install it for your user
-                        account.
+                        <strong>Add</strong>, choose
+                        <strong>Add marketplace</strong>, paste this link and
+                        select <strong>Sync</strong>. Then open
+                        <strong>job-tracker</strong> and select
+                        <strong>Add</strong>.
                       </p>
                       <div class="copy-row">
                         <code
@@ -737,7 +748,7 @@
                     </div>
                   </div>
                   <div class="setup-step">
-                    <span class="step-badge">2</span>
+                    <span class="step-badge">3</span>
                     <div>
                       <h3>Let Job Tracker get to know you</h3>
                       <p>
@@ -759,7 +770,7 @@
                     </div>
                   </div>
                   <div class="setup-step">
-                    <span class="step-badge">3</span>
+                    <span class="step-badge">4</span>
                     <div>
                       <h3>Choose when to look</h3>
                       <p>
@@ -956,7 +967,6 @@
               </div>
             </div>
             <aside class="before-start">
-              <span class="eyebrow">Good to know</span>
               <h3>Bring your CV.<br />We’ll start there.</h3>
               <p>You can pause setup and come back whenever you like.</p>
               <dl>
@@ -966,9 +976,10 @@
                 </dd>
                 <dt>Will it send applications?</dt>
                 <dd>
-                  You choose during setup: review each application before
-                  submission, or enable automatic applications for matching
-                  roles. Emails stay as drafts for you to send.
+                  Review first is the default. During setup you can switch on
+                  automatic applications for matching roles with no open
+                  questions; they go through the employer’s own application
+                  form. Emails stay as drafts for you to send.
                 </dd>
                 <dt>Where is my data stored?</dt>
                 <dd>

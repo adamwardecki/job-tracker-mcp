@@ -24,21 +24,32 @@ tabs.forEach((tab, index) => {
     }
   });
 });
+// The button's own text changes, which screen readers do not reliably announce,
+// so a polite live region repeats the result.
+const copyStatus = document.createElement("div");
+copyStatus.className = "visually-hidden";
+copyStatus.setAttribute("role", "status");
+document.body.append(copyStatus);
 document.querySelectorAll("[data-copy]").forEach((button) => {
   button.addEventListener("click", async () => {
     const label = button.textContent;
     try {
       await navigator.clipboard.writeText(button.dataset.copy);
       button.textContent = "Copied!";
+      copyStatus.textContent = "Copied to clipboard";
     } catch {
       button.textContent = "Select to copy";
+      copyStatus.textContent = "Select the text, then copy it";
       const range = document.createRange();
       range.selectNodeContents(button.previousElementSibling);
       const sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(range);
     }
-    setTimeout(() => (button.textContent = label), 2000);
+    setTimeout(() => {
+      button.textContent = label;
+      copyStatus.textContent = "";
+    }, 2000);
   });
 });
 // Each [data-video-dialog] button opens the modal <dialog> it names and plays
