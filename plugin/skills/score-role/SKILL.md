@@ -16,9 +16,11 @@ Hard filters first (any miss drops). Then soft preferences (only move the score)
 - **A required bullet with nothing honest to point at is a scoring signal**, usually a drop. Do not plan to write around it in the cover note.
 - **Apply every active rule** from the `scoring` rules plus the global ones. Rules: load `scoring` (Reading rules: `${CLAUDE_PLUGIN_ROOT}/templates/rules.md`; Hermes: `${HERMES_SKILL_DIR}/../../templates/rules.md`). Cite the rule id in `evidence` (`rule:<id>`) when a rule decides a drop.
 
+- **Read the company's past roles and their outcomes before verifying or scoring** (`find_company` shows each card's `outcome`). A past role with the same or an equivalent title (the same job, allowing for small wording changes) that ended `closed` with outcome `rejected` or `withdrawn`, and is neither confirmed as this posting nor confirmed as a different req, means this role is not fresh: still score it, note the earlier outcome in `score_notes`, then queue it with a question naming the earlier role (id, title, outcome, date) rather than scoring it as new. Never drop it for that: a drop needs an employer quote or `rule:<id>`, and there is no company ban. A clearly different req is scored as normal, with the earlier outcome noted. Why: a re-posted role the user had been rejected for was scored as new.
+
 ## Procedure
 
-1. `get_profile` (filters, prefs), `get_document("profile")`, and the rules loaded above. Read the role and the verify evidence.
+1. `get_profile` (filters, prefs), `get_document("profile")`, and the rules loaded above. Read the role and the verify evidence. Check the company's past roles and outcomes with `find_company`.
 2. **Hard filters**, each against the employer's text:
    - **Work mode and location**: from the verified `location_line` and `location_type`. Hybrid only if the user allows it, within `max_days_per_week` and listed cities. `location_type: unknown` with a question from verification (e.g. a board-only listing whose only location signal is the board's tag) is neither a drop nor a pass: score the rest, then queue with that question. Why: guessing from a board tag caused wrong approvals.
    - **Timezone overlap**: required hours or "must overlap with <zone>" vs `overlap_window`.
@@ -45,6 +47,7 @@ Hard filters first (any miss drops). Then soft preferences (only move the score)
 5. **Record.**
    - Pass: `transition` to `scored` with `score`, `score_notes` (filters checked, pay verdict with fx rate and source, flags with quotes, internal reservations and gaps), `reason` (one line), and `evidence` (the decisive quote).
    - Fail: `transition` to `dropped` with `reason` naming the filter, `category` (`location`, `pay`, `industry`, `role_shape`, `stack`, `culture`, `gated`, `other`) and `evidence` = quote or `rule:<id>`.
+   - Earlier rejection or withdrawal of the same-or-equivalent job: `transition` to `scored`, then to `queued` with `question` naming the earlier role and asking whether this is the same job re-posted and whether to apply again, `blocked_by: "user"`, and the earlier role's id and outcome as `evidence`.
    - Blocking question (from verification or scoring): `transition` to `scored`, then `transition` to `queued` with `question` = the single question, `blocked_by: "user"`, and the quote(s) as `evidence`. It appears under Needs you.
 
 Gaps and reservations go in `score_notes` only. They never travel into anything written to the employer.

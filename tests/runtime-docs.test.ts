@@ -97,6 +97,8 @@ test('a role posted only on a job board can be verified, but never on the board 
   assert.match(section, /A recruiter, agency or staffing firm posting for a client does not count/);
   assert.match(section, /`location_type: unknown`, and pass `score-role` the question/);
   assert.match(section, /Do not drop and do not pass it on the tag\./);
+  assert.match(read('agents/scorer.md'), /\*\*Read the company's past roles and their outcomes before verifying or scoring\.\*\*[^\n]*`rejected` or `withdrawn`[^\n]*`transition` to `queued` with `question` = one question naming the earlier role[^\n]*Why: a re-posted role the user had been rejected for was scored as new\./);
+  assert.match(read('skills/score-role/SKILL.md'), /\*\*Read the company's past roles and their outcomes before verifying or scoring\*\*[^\n]*`rejected` or `withdrawn`[^\n]*queue it with a question naming the earlier role[^\n]*Why: a re-posted role the user had been rejected for was scored as new\./);
   assert.match(read('agents/scorer.md'), /A role the employer posted only on a job board is not `unverifiable`: follow Board-only postings in `verify-employer`\./);
   assert.match(read('skills/score-role/SKILL.md'), /`location_type: unknown` with a question from verification[^\n]*is neither a drop nor a pass: score the rest, then queue with that question\./);
 });
