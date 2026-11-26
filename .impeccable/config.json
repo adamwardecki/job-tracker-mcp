@@ -1,0 +1,24 @@
+{
+  "hook": {
+    "enabled": true,
+    "limits": {
+      "maxFindings": 5,
+      "maxChars": 8000
+    }
+  },
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "site/index.html"
+        ],
+        "createdAt": "2026-11-25T21:18:25.877Z",
+        "reason": "Agent: source-scan false positive. Each flagged element has padding in style.css (.section 80px, .detail-section 82px, .install-section 90px, .belief-strip .container 22px, .listing-source 22px, .laptop-chat-header 11px side inset); URL scans at 1440 and 390 do not reproduce it."
+      }
+    ]
+  }
+}
