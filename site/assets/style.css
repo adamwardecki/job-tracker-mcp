@@ -1840,30 +1840,6 @@ h3 {
 .safety-footer {
   border-color: color-mix(in srgb, var(--sage) 85%, var(--ink));
 }
-.wont-do {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 24px 50px;
-  border-top: 1px solid color-mix(in srgb, var(--sage) 85%, var(--ink));
-  margin-top: 35px;
-  padding-top: 28px;
-}
-.wont-do h3 {
-  font-size: 18px;
-}
-.wont-do ul {
-  display: grid;
-  grid-column: 2 / 4;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px 50px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  color: var(--mist);
-  font-size: 14px;
-  line-height: 1.7;
-  text-wrap: pretty;
-}
 .connectors-section .section-heading > p,
 .setup-step p {
   max-width: 54ch;
@@ -1896,18 +1872,7 @@ h3 {
   text-wrap: pretty;
 }
 
-@media (max-width: 1000px) {
-  .wont-do {
-    grid-template-columns: 1fr;
-  }
-  .wont-do ul {
-    grid-column: auto;
-  }
-}
 @media (max-width: 760px) {
-  .wont-do ul {
-    grid-template-columns: 1fr;
-  }
   .mobile-note {
     display: block;
     margin-top: 10px;
